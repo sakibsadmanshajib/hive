@@ -314,12 +314,27 @@ def _sanitiser_calls(node) -> int:
 
 
 def unsanitised_outbound_functions(source: str):
-    """Functions that send a body and never call the boundary.
+    """Functions that send more bodies than they hand to the boundary.
 
     Counting sanitiser call sites globally has the same blind spot from the
     other side: five call sites and five requests can still be five guards on
     four requests plus one unguarded one somewhere else. Pairing them per
     function is what closes that, and it is what actually names the offender.
+
+    The comparison is `sends > guards`, not `guards == 0`. A boolean per
+    function let a send MOVE without being noticed: review demonstrated it by
+    deleting `proxy`'s send and adding a second one inside
+    `generate_chat_completion`, which already calls the boundary once. The total
+    stayed at five, `proxy` had a guard and no send so it was not an offender,
+    and `generate_chat_completion` had two sends and one guard so it was not one
+    either. The unguarded send shipped. Comparing the two numbers costs nothing
+    and subsumes the boolean.
+
+    It stays deliberately arithmetic rather than trying to match each send to
+    the guard that covers it. Real dataflow here would be a small analyser with
+    its own bugs, and the pair of "every function balances" plus "the total is
+    still five" is what the boundary needs: neither a moved send nor an added
+    one gets through both.
     """
     tree = ast.parse(source)
     offenders = []
@@ -334,7 +349,7 @@ def unsanitised_outbound_functions(source: str):
             and child.func.attr in SESSION_METHODS
             and any(keyword.arg in BODY_KEYWORDS for keyword in child.keywords)
         ]
-        if sends and _sanitiser_calls(node) == 0:
+        if len(sends) > _sanitiser_calls(node):
             offenders.append(node.name)
     return sorted(offenders)
 
@@ -414,8 +429,8 @@ def main():
     # plus one unguarded request elsewhere is caught and named.
     offenders = unsanitised_outbound_functions(final_router)
     assert not offenders, (
-        f'{ROUTER}: {offenders} send a request body without calling the boundary; '
-        'every body that leaves this module must pass through it'
+        f'{ROUTER}: {offenders} send more request bodies than they hand to the '
+        'boundary; every body that leaves this module must pass through it'
     )
     assert len(outbound_body_calls(final_router)) == EXPECTED_BODY_CALLS, (
         'the patch changed how many requests carry a body, which it must not'

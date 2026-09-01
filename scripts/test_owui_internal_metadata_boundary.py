@@ -258,20 +258,30 @@ async def hive_sixth_route(request: Request, form_data: dict, user=Depends(get_v
 """
 
 
-SIBLING_PATCH = "apply_task_nonstreaming_response_1600_patch.py"
-SIBLING_MARKER = "# hive (#1600)"
-SIBLING_EXPECTED_MARKERS = 2
+# The other two patches that rewrite the same two files, and their marker
+# counts. #1600 splices routers/openai.py above the chat-completions route and
+# inside its SSE branch. #1567 splices utils/chat.py, and anchors on the very
+# same import line this patch does, which is the reason it needs asserting
+# rather than describing: it preserves that line in its own replacement, so
+# both orders work, and nothing checked that.
+STREAM_PATCH = "apply_task_nonstreaming_response_1600_patch.py"
+STREAM_MARKER = "# hive (#1600)"
+STREAM_MARKERS = 2
+UPSTREAM_AUTH_PATCH = "apply_task_upstream_auth_patch.py"
+UPSTREAM_AUTH_MARKER = "# hive (#1567)"
+UPSTREAM_AUTH_MARKERS = 2
+
+# Dockerfile order: #1567 at the top, then #1578, then #1600.
+DOCKERFILE_PATCH_ORDER = (UPSTREAM_AUTH_PATCH, PATCH, STREAM_PATCH)
 
 
-def both_patches_applied() -> str:
-    """routers/openai.py with BOTH patches on it, in Dockerfile order.
+def patches_applied(order) -> tuple[str, str]:
+    """The two shared files with every named patch on them, in the given order.
 
-    #1600 splices the same file, immediately above the chat-completions route
-    and inside its SSE branch. Neither of its anchors is one of this patch's,
-    and this patch's `RUN` comes first in the Dockerfile, but "neither breaks
-    the other" is a claim about two files that are edited independently, so it
-    is asserted rather than asserted-in-prose. A drift on either side fails the
-    image build; this fails the pull request instead.
+    "Neither breaks the other" is a claim about files that are edited
+    independently by three scripts, so it is asserted rather than asserted in
+    prose. A drift on any side fails the image build; this fails the pull
+    request instead.
     """
     with tempfile.TemporaryDirectory(prefix="owui-both-patches-") as tmpdir:
         tmp = Path(tmpdir)
@@ -280,7 +290,7 @@ def both_patches_applied() -> str:
         env = dict(os.environ)
         env["HIVE_OWUI_BACKEND_DIR"] = str(tmp)
         env["HIVE_OWUI_OPENAI_PY"] = str(target)
-        for patch in (PATCH, SIBLING_PATCH):
+        for patch in order:
             result = subprocess.run(
                 [sys.executable, str(PATCHES / patch)],
                 env=env,
@@ -289,10 +299,13 @@ def both_patches_applied() -> str:
             )
             if result.returncode != 0:
                 raise SystemExit(
-                    f"FAIL: {patch} failed when applied alongside its sibling:\n"
-                    f"{result.stdout}{result.stderr}"
+                    f"FAIL: {patch} failed when applied alongside its siblings "
+                    f"(order {list(order)}):\n{result.stdout}{result.stderr}"
                 )
-        return target.read_text(encoding="utf-8")
+        return (
+            target.read_text(encoding="utf-8"),
+            (tmp / "utils/chat.py").read_text(encoding="utf-8"),
+        )
 
 
 # --- the stubs -------------------------------------------------------------
@@ -863,6 +876,33 @@ def main() -> int:
         "half-patched file behind",
     )
 
+    # A send that MOVES rather than appears keeps the total at five, so the
+    # count alone cannot see it. Review demonstrated the shape; this is it,
+    # against the counter rather than through the patch, because the patch would
+    # reject this source for the placement assertion first and prove nothing
+    # about the pairing.
+    moved_send = patched.replace(
+        "        r = await session.request(\n"
+        "            method='POST',\n"
+        "            url=request_url,\n"
+        "            data=payload,\n",
+        "        r = await session.request(\n"
+        "            method='POST',\n"
+        "            url=request_url,\n"
+        "            data=payload,\n"
+        "        )\n"
+        "        r = await session.post(\n"
+        "            url=request_url,\n"
+        "            data=payload,\n",
+        1,
+    )
+    check(
+        patch_module.unsanitised_outbound_functions(moved_send) == ["generate_chat_completion"],
+        "a second send inside an already-guarded function is named as an offender, "
+        "because the pairing compares sends against guards rather than asking "
+        "whether a guard exists at all",
+    )
+
     print("\nthe two seams in utils/chat.py that are not connections")
     unpatched_chat = (VENDORED_BACKEND / "utils/chat.py").read_text(encoding="utf-8")
     check(
@@ -944,21 +984,38 @@ def main() -> int:
         "and neither of them carries the credential",
     )
 
-    print("\ncoexistence with the other patch that rewrites this same file")
-    both = both_patches_applied()
+    print("\ncoexistence with the other patches that rewrite these same files")
+    both_router, both_chat = patches_applied(DOCKERFILE_PATCH_ORDER)
     check(
-        both.count(MARKER) == EXPECTED_MARKERS
-        and both.count(SIBLING_MARKER) == SIBLING_EXPECTED_MARKERS,
-        "applying this patch and the #1600 non-streaming patch in Dockerfile "
-        "order leaves both sets of markers, so neither one's anchors are moved "
-        "by the other",
+        both_router.count(MARKER) == EXPECTED_MARKERS
+        and both_router.count(STREAM_MARKER) == STREAM_MARKERS,
+        "in Dockerfile order, routers/openai.py carries this patch's markers and "
+        "the #1600 non-streaming patch's, so neither one's anchors are moved by "
+        "the other",
     )
-    try:
-        ast.parse(both)
-        parses = True
-    except SyntaxError:
-        parses = False
-    check(parses, "and the doubly patched routers/openai.py is still valid Python")
+    check(
+        both_chat.count(MARKER) == 3
+        and both_chat.count(UPSTREAM_AUTH_MARKER) == UPSTREAM_AUTH_MARKERS,
+        "and utils/chat.py carries this patch's three and the #1567 credential "
+        "patch's two, which matters because both anchor on the same import line",
+    )
+    # The Dockerfile fixes one order, so the reverse is not something that can
+    # ship. It is checked anyway because it is the cheap way to establish that
+    # the two are genuinely independent rather than accidentally ordered.
+    reverse_router, reverse_chat = patches_applied((PATCH, UPSTREAM_AUTH_PATCH, STREAM_PATCH))
+    check(
+        reverse_chat.count(MARKER) == 3
+        and reverse_chat.count(UPSTREAM_AUTH_MARKER) == UPSTREAM_AUTH_MARKERS,
+        "and the reverse order on utils/chat.py gives the same counts, so the two "
+        "patches are order independent rather than accidentally compatible",
+    )
+    parses = True
+    for source in (both_router, both_chat, reverse_router, reverse_chat):
+        try:
+            ast.parse(source)
+        except SyntaxError:
+            parses = False
+    check(parses, "and every multiply patched file is still valid Python")
 
     print("\nthe fix reaches the running container")
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
