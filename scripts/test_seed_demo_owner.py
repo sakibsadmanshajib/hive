@@ -12,6 +12,12 @@ import os
 import sys
 from pathlib import Path
 
+# The canned-PostgREST-answer harness, reused rather than rewritten: the grant
+# path below needs exactly what the billing mapping's own self-check already
+# drives its seeder with.
+sys.path.insert(0, str(Path(__file__).parent))
+from test_shared_billing_mapping import recorder  # noqa: E402
+
 spec = importlib.util.spec_from_file_location(
     "seed_demo_owner", Path(__file__).parent / "seed-demo-owner.py"
 )
@@ -253,5 +259,72 @@ def main() -> None:
     )
 
 
+# provision_credit_grant: the only money write in this script. The unique index
+# is what actually prevents a second grant, so these cases pin the three
+# outcomes an operator reads and the one thing the code must never do, which is
+# turn a refusal into a second post.
+ACCOUNT = "22222222-2222-2222-2222-222222222222"
+REST = "https://project.supabase.co/rest/v1"
+HEADERS = {"Authorization": "Bearer service-role"}
+
+
+def test_grant_posts_when_the_account_has_none() -> None:
+    request, calls = recorder([(200, []), (201, [{"id": "ledger-row"}])])
+    seed_demo_owner.provision_credit_grant(request, REST, HEADERS, ACCOUNT, 5_000_000_000)
+    assert [c[0] for c in calls] == ["GET", "POST"], calls
+    method, path, body, params = calls[1]
+    assert path == "/credit_ledger_entries"
+    assert body == seed_demo_owner.grant_ledger_row(ACCOUNT, 5_000_000_000)
+    # The insert never trusts the read above it: it carries the conflict target
+    # and ignore-duplicates, so a stale read cannot become a second grant.
+    assert params["on_conflict"] == "account_id,entry_type,idempotency_key"
+    print("ok: provision_credit_grant posts one row when the account carries no seeded grant")
+
+
+def test_grant_refuses_when_one_already_exists() -> None:
+    """The stacking case, from the operator's side: a second run at a different
+    amount must write nothing at all, not merely be deduplicated later."""
+    request, calls = recorder([(200, [{"credits_delta": 10_000_000_000}])])
+    seed_demo_owner.provision_credit_grant(request, REST, HEADERS, ACCOUNT, 20_000_000_000)
+    assert [c[0] for c in calls] == ["GET"], calls
+
+    # The read is filtered to exactly the triple the unique index enforces, so
+    # it can never answer about a row the index would not have collided with.
+    _, path, _, params = calls[0]
+    assert path == "/credit_ledger_entries"
+    assert params["account_id"] == f"eq.{ACCOUNT}"
+    assert params["entry_type"] == "eq.grant"
+    assert params["idempotency_key"] == f"eq.{seed_demo_owner.grant_idempotency_key(ACCOUNT)}"
+    print("ok: provision_credit_grant writes nothing when a seeded grant already exists")
+
+
+def test_lost_race_returns_an_empty_representation_and_still_writes_once() -> None:
+    """Two runs both read empty and both post. The loser's insert is swallowed
+    by the index and comes back as 201 with an empty representation, which must
+    read as "somebody else granted it", never as a successful second grant."""
+    request, calls = recorder([(200, []), (201, [])])
+    seed_demo_owner.provision_credit_grant(request, REST, HEADERS, ACCOUNT, 5_000_000_000)
+    assert [c[0] for c in calls] == ["GET", "POST"], calls
+    print("ok: provision_credit_grant treats an empty representation as a lost race, not a grant")
+
+
+def test_a_failed_lookup_never_becomes_a_grant() -> None:
+    """A read that failed is not a read that returned nothing. Treating the two
+    alike is how a second grant would post on an account that already had one."""
+    request, calls = recorder([(500, None)])
+    try:
+        seed_demo_owner.provision_credit_grant(request, REST, HEADERS, ACCOUNT, 5_000_000_000)
+    except SystemExit as e:
+        assert e.code == 1
+    else:
+        raise AssertionError("expected a non-zero exit, not a write on an unknown state")
+    assert [c[0] for c in calls] == ["GET"], calls
+    print("ok: provision_credit_grant exits on a failed lookup instead of writing")
+
+
 if __name__ == "__main__":
     main()
+    test_grant_posts_when_the_account_has_none()
+    test_grant_refuses_when_one_already_exists()
+    test_lost_race_returns_an_empty_representation_and_still_writes_once()
+    test_a_failed_lookup_never_becomes_a_grant()

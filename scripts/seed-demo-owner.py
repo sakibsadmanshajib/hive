@@ -405,6 +405,79 @@ def grant_ledger_row(account_id: str, credits: int) -> dict:
     }
 
 
+def provision_credit_grant(request, rest, headers, account_id: str, credits: int) -> None:
+    """Post this account's one seeded grant, or say why it did not.
+
+    A function rather than inline in main so the only money write in this
+    script has a self-check behind it (scripts/test_seed_demo_owner.py).
+
+    The layering is deliberate and is the part worth preserving if this is ever
+    edited. The unique index on (account_id, entry_type, idempotency_key) is
+    what ENFORCES one seeded grant per account; the read below is only
+    LEGIBILITY, so that a refusal names what the account already holds instead
+    of looking like a silent no-op. The insert never trusts that read: it
+    carries the conflict target and ignore-duplicates, and the outcome is
+    decided by the returned representation, so a read that was stale, racing or
+    simply wrong produces a misleading sentence and never a second grant.
+
+    Exits non-zero only when the state is UNKNOWN (a failed lookup, a failed
+    write). A refusal is exit zero on purpose: three workflows re-run this
+    script as their recovery procedure, and turning a correct no-op into a red
+    job would train operators to ignore it.
+    """
+    status, existing = request(
+        rest, headers, "GET", "/credit_ledger_entries",
+        params={
+            "account_id": f"eq.{account_id}",
+            "entry_type": "eq.grant",
+            "idempotency_key": f"eq.{grant_idempotency_key(account_id)}",
+            "select": "credits_delta",
+        },
+    )
+    if status != 200 or existing is None:
+        # A read that failed is not a read that returned nothing.
+        print(f"error: existing grant lookup failed: {status} {existing}", file=sys.stderr)
+        sys.exit(1)
+
+    if existing:
+        held = existing[0]["credits_delta"]
+        print(
+            f"credit grant: skipped, this account already carries a seeded grant of {held} "
+            f"credits ({format_usd_from_credits(held)}). The seeder posts at most one grant "
+            f"per account, so the {credits} in HIVE_DEMO_CREDITS was NOT added and the "
+            "balance is unchanged. To change the funding, use the platform admin credit "
+            "grants surface, which records who granted it and why.",
+            file=sys.stderr,
+        )
+        return
+
+    # Inserted with ignore-duplicates and never merged: the ledger is
+    # append-only, so a replay must leave the existing row byte for byte as it
+    # was written rather than update it. The key carries no amount, so a second
+    # grant of any size collides here and is dropped rather than stacking on
+    # the first.
+    status, body = request(
+        rest, headers, "POST", "/credit_ledger_entries",
+        body=grant_ledger_row(account_id, credits),
+        params={"on_conflict": "account_id,entry_type,idempotency_key"},
+        prefer="resolution=ignore-duplicates,return=representation",
+    )
+    if status not in (200, 201, 204):
+        print(f"error: credit grant failed: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+    if body:
+        print(
+            f"credit grant: ok ({credits} credits, {format_usd_from_credits(credits)}, posted)",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "credit grant: skipped, a concurrent run posted this account's seeded grant "
+            f"first. The {credits} in HIVE_DEMO_CREDITS was NOT added.",
+            file=sys.stderr,
+        )
+
+
 def find_by_slug(rest, headers, table, slug):
     """Returns the row for slug in table, or None. Used by the tenant/account
     collision guards below -- both tables are upserted by slug with the
@@ -755,60 +828,7 @@ def main() -> None:
             file=sys.stderr,
         )
     else:
-        # Read before writing, so a run that grants nothing says what is
-        # already there rather than reporting a silent no-op. The unique index
-        # is what actually enforces one seeded grant per account; this read
-        # only makes the outcome legible, and losing a race to it is handled
-        # below by the same ignore-duplicates insert.
-        status, existing = request(
-            rest, headers, "GET", "/credit_ledger_entries",
-            params={
-                "account_id": f"eq.{account_id}",
-                "entry_type": "eq.grant",
-                "idempotency_key": f"eq.{grant_idempotency_key(account_id)}",
-                "select": "credits_delta",
-            },
-        )
-        if status != 200 or existing is None:
-            print(f"error: existing grant lookup failed: {status} {existing}", file=sys.stderr)
-            sys.exit(1)
-        if existing:
-            held = existing[0]["credits_delta"]
-            print(
-                f"credit grant: skipped, this account already carries a seeded grant of {held} "
-                f"credits ({format_usd_from_credits(held)}). The seeder posts at most one grant "
-                f"per account, so the {credits} in HIVE_DEMO_CREDITS was NOT added and the "
-                "balance is unchanged. To change the funding, use the platform admin credit "
-                "grants surface, which records who granted it and why.",
-                file=sys.stderr,
-            )
-        else:
-            # Inserted with ignore-duplicates and never merged: the ledger is
-            # append-only, so a replay must leave the existing row byte for
-            # byte as it was written rather than update it. The key carries no
-            # amount, so a second grant of any size collides here and is
-            # dropped rather than stacking on the first.
-            status, body = request(
-                rest, headers, "POST", "/credit_ledger_entries",
-                body=grant_ledger_row(account_id, credits),
-                params={"on_conflict": "account_id,entry_type,idempotency_key"},
-                prefer="resolution=ignore-duplicates,return=representation",
-            )
-            if status not in (200, 201, 204):
-                print(f"error: credit grant failed: {status} {body}", file=sys.stderr)
-                sys.exit(1)
-            if body:
-                print(
-                    f"credit grant: ok ({credits} credits, "
-                    f"{format_usd_from_credits(credits)}, posted)",
-                    file=sys.stderr,
-                )
-            else:
-                print(
-                    "credit grant: skipped, a concurrent run posted this account's seeded grant "
-                    f"first. The {credits} in HIVE_DEMO_CREDITS was NOT added.",
-                    file=sys.stderr,
-                )
+        provision_credit_grant(request, rest, headers, account_id, credits)
 
 
 if __name__ == "__main__":
