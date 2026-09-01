@@ -59,9 +59,16 @@ At the unit level, on the helper itself:
 
 Structurally:
 
+  * the vendored `routers/openai.py` is byte-identical to the pinned backend
+    image's copy (`pinned-openai-digest.json`), which is what makes every
+    assertion here a statement about the source the container runs rather than
+    about a tree the image only builds the frontend from;
   * `routers/openai.py` makes exactly five requests carrying a body and has
     exactly five sanitiser call sites, so `speech` and `proxy`, which this file
     does not drive end to end, cannot be the hole;
+  * applying this patch and the #1600 non-streaming patch to the same file, in
+    Dockerfile order, leaves both sets of markers and valid Python, so neither
+    one's anchors are moved by the other;
   * the Dockerfile installs the helper, applies the patch and pins its marker
     count, so the fix reaches the running container rather than only the
     vendored tree, which the image does not run for the backend;
@@ -74,6 +81,7 @@ Run: python3 scripts/test_owui_internal_metadata_boundary.py
 
 import ast
 import asyncio
+import hashlib
 import importlib.util
 import io
 import json
@@ -94,6 +102,7 @@ VENDORED_BACKEND = REPO_ROOT / "vendor/open-webui/backend/open_webui"
 PATCHES = REPO_ROOT / "deploy/docker/owui-patches"
 DOCKERFILE = REPO_ROOT / "deploy/docker/Dockerfile.open-webui"
 MAKEFILE = REPO_ROOT / "Makefile"
+PINNED_OPENAI_DIGEST = REPO_ROOT / "deploy/docker/owui-patches/pinned-openai-digest.json"
 
 PATCH = "apply_internal_metadata_boundary_1578_patch.py"
 HELPER_MODULE = "hive_internal_metadata.py"
@@ -170,6 +179,46 @@ def router_source(apply_patch: bool) -> str:
             if result.returncode != 0:
                 raise SystemExit(f"FAIL: {PATCH} failed:\n{result.stdout}{result.stderr}")
         return (routers / "openai.py").read_text(encoding="utf-8")
+
+
+SIBLING_PATCH = "apply_task_nonstreaming_response_1600_patch.py"
+SIBLING_MARKER = "# hive (#1600)"
+SIBLING_EXPECTED_MARKERS = 2
+
+
+def both_patches_applied() -> str:
+    """routers/openai.py with BOTH patches on it, in Dockerfile order.
+
+    #1600 splices the same file, immediately above the chat-completions route
+    and inside its SSE branch. Neither of its anchors is one of this patch's,
+    and this patch's `RUN` comes first in the Dockerfile, but "neither breaks
+    the other" is a claim about two files that are edited independently, so it
+    is asserted rather than asserted-in-prose. A drift on either side fails the
+    image build; this fails the pull request instead.
+    """
+    with tempfile.TemporaryDirectory(prefix="owui-both-patches-") as tmpdir:
+        tmp = Path(tmpdir)
+        routers = tmp / "routers"
+        routers.mkdir()
+        target = routers / "openai.py"
+        shutil.copy(VENDORED_BACKEND / "routers/openai.py", target)
+
+        env = dict(os.environ)
+        env["HIVE_OWUI_BACKEND_DIR"] = str(tmp)
+        env["HIVE_OWUI_OPENAI_PY"] = str(target)
+        for patch in (PATCH, SIBLING_PATCH):
+            result = subprocess.run(
+                [sys.executable, str(PATCHES / patch)],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise SystemExit(
+                    f"FAIL: {patch} failed when applied alongside its sibling:\n"
+                    f"{result.stdout}{result.stderr}"
+                )
+        return target.read_text(encoding="utf-8")
 
 
 # --- the stubs -------------------------------------------------------------
@@ -448,6 +497,26 @@ def main() -> int:
         "so patching the vendored tree describes the source the image runs",
     )
 
+    # A version match is a weaker claim than it reads as: it compares
+    # package.json against a Dockerfile tag and says nothing about the one file
+    # this patch rewrites. PR CI never builds Dockerfile.open-webui, so without
+    # this the first sign of a drifted anchor is a failed deploy image build.
+    # pinned-openai-digest.json was taken from the pinned image itself (#1600),
+    # and reusing it here makes every assertion below a statement about the
+    # source the container runs, at the cost of one hash rather than a
+    # multi-gigabyte image pull on every pull request.
+    fixture = json.loads(PINNED_OPENAI_DIGEST.read_text(encoding="utf-8"))
+    check(
+        fixture["image"] in DOCKERFILE.read_text(encoding="utf-8"),
+        "the fixture pins the same image digest Dockerfile.open-webui builds from",
+    )
+    check(
+        hashlib.sha256((VENDORED_BACKEND / "routers/openai.py").read_bytes()).hexdigest()
+        == fixture["files"]["/app/backend/open_webui/routers/openai.py"]["sha256"],
+        "the vendored routers/openai.py is byte-identical to the pinned image's "
+        "copy, so the patch is exercised against the source the container runs",
+    )
+
     helper = load_helper()
     # The helper's own warnings are asserted on further down, with a handler
     # attached for that block only. Everywhere else they are just noise on a
@@ -679,6 +748,22 @@ def main() -> int:
         "neither body is serialised before its connection is resolved any more, so "
         "no sanitiser is comparing against a destination it does not know",
     )
+
+    print("\ncoexistence with the other patch that rewrites this same file")
+    both = both_patches_applied()
+    check(
+        both.count(MARKER) == EXPECTED_MARKERS
+        and both.count(SIBLING_MARKER) == SIBLING_EXPECTED_MARKERS,
+        "applying this patch and the #1600 non-streaming patch in Dockerfile "
+        "order leaves both sets of markers, so neither one's anchors are moved "
+        "by the other",
+    )
+    try:
+        ast.parse(both)
+        parses = True
+    except SyntaxError:
+        parses = False
+    check(parses, "and the doubly patched routers/openai.py is still valid Python")
 
     print("\nthe fix reaches the running container")
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
