@@ -73,7 +73,19 @@ assert_not_shared_demo_account(
     variable="USER_EMAIL",
     doing="creates a tenant, uploads a document and sends a real RAG query",
 )
-MEMBER_ROLE = "MEMBER"
+# OWNER, not MEMBER, and the reason is issue #1646 rather than anything this
+# script needs. This fixture's user is the sole member of its own tenant AND
+# the owner of the only account public.tenant_billing_accounts maps to it,
+# because a console visit auto provisions that account with them as owner. A
+# 'MEMBER' here therefore manufactures exactly the divergence between
+# public.tenant_users and public.account_memberships that
+# supabase/migrations/20260901_01_tenant_users_role_promote_backfill.sql
+# exists to clear, and the upsert below runs with resolution=merge-duplicates,
+# so it re-manufactures it on every run and would keep tripping
+# scripts/check-tenant-role-divergence.sh on the next deploy. Nothing this
+# script verifies reads the tenant role: RAG ingest and query authorize on
+# tenant membership and the ENABLE_RAG gate, not on OWNER.
+TENANT_ROLE = "OWNER"
 MEMBER_STATUS = "ACTIVE"
 RAG_GATE = "ENABLE_RAG"
 
@@ -179,7 +191,7 @@ def provision(supabase_url: str, service_key: str) -> str:
     status, body = request(
         rest, headers, "POST", "/tenant_users",
         body={"tenant_id": tenant_id, "user_id": user_id,
-              "role": MEMBER_ROLE, "status": MEMBER_STATUS},
+              "role": TENANT_ROLE, "status": MEMBER_STATUS},
         params={"on_conflict": "tenant_id,user_id"},
         prefer="resolution=merge-duplicates",
     )

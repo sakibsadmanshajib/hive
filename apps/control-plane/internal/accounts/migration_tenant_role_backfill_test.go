@@ -21,6 +21,14 @@ package accounts_test
 // the throwaway database is built by the whole chain in order. Re running its
 // DO block is therefore also the re runnability assertion the file's header
 // claims, at no extra cost.
+//
+// Each run below decides about every row in the test database, not only this
+// test's fixture, because that is what the migration does. That is safe here
+// and stated rather than left to be discovered: Go runs a package's tests
+// sequentially unless they call t.Parallel (none here or in
+// service_tenant_role_sync_test.go do), CI's live suite adds -p 1 across
+// packages, and every fixture cleans its own rows up on t.Cleanup, so no other
+// suite has rows in flight while this one runs.
 
 import (
 	"context"
