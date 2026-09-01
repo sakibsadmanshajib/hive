@@ -2,8 +2,8 @@
 
 Captured on 2026-09-01 against the forked chat front end running in Docker,
 twice: once from an image built at `origin/main`, once from an image built with
-this pull request's head commit, rebuilt and recaptured after the review
-findings landed. Same harness, same synthetic room, same account
+this pull request's head commit, rebuilt and recaptured after every review
+finding landed, including the calibration one. Same harness, same synthetic room, same account
 flow, two builds. The screenshots are attached to the pull request through
 `scripts/post-pr-visual-proof.sh`; the logs are here because
 `npm run lint:proof-tokens` scans this directory and nothing else.
@@ -12,9 +12,9 @@ flow, two builds. The screenshots are attached to the pull request through
 
 | | Before, `origin/main` | After, this branch |
 | --- | --- | --- |
-| Recorder started | +0.31s, on room noise, before anyone spoke | +1.18s, when speech actually began |
-| Recorder stopped | never, still running at +37.6s when the capture ended | +5.16s, two seconds after speech ended |
-| Overlay state | `Listening...` for the whole 37.6s | `Listening...` then `Thinking...` then `Tap to interrupt` then back to `Listening...` |
+| Recorder started | +0.29s, on room noise, before anyone spoke | +1.13s, when speech actually began |
+| Recorder stopped | never, still running at +37.4s when the capture ended | +5.14s, two seconds after speech ended |
+| Overlay state | `Listening...` for the whole 37.4s | `Listening...` then `Thinking...` then `Tap to interrupt` then back to `Listening...` |
 | Transcription requests | none, the recorder never released any audio | exactly one |
 | Chat completions | none | exactly one, and the transcript reached the model |
 | Further triggers over the next 33s of room noise | n/a, still holding the first one | none |
@@ -79,8 +79,9 @@ Nothing in this capture is wired into a workflow, for the same reason the
 `voice-response-format-1562` capture is not: no CI lane boots this front end.
 What does run pre-merge is `vendor/open-webui/src/lib/hive/voiceActivity.test.ts`,
 in the `make test-owui-frontend` job and again inside the image build, and it
-covers the decision this capture exercises, sixteen cases including the hard cap
-and the room-noise case, at a hundred percent of the module.
+covers the decision this capture exercises, twenty cases including the hard cap,
+the room-noise case and a room that was already loud when the call opened, at a
+hundred percent of the module.
 
 ## The other half of the issue
 
