@@ -430,13 +430,68 @@ func TestNoEnvelopeLeaksInternalTopology(t *testing.T) {
 // outright rather than buffered.
 func TestWebToolsRefuseOversizedBodies(t *testing.T) {
 	h := newTestHandler(t, Deps{Search: &stubSearcher{hits: okHits()}})
-	req := httptest.NewRequest(http.MethodPost, "/v1/tools/web_search",
-		strings.NewReader(`{"query":"`+strings.Repeat("a", MaxToolRequestBytes+64)+`"}`))
-	req.Header.Set(TurnHeader, "turn-1")
-	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{ID: uuid.New(), TenantID: uuid.New()}))
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
+	rr := postRaw(t, h, "/v1/tools/web_search", "turn-1",
+		`{"query":"`+strings.Repeat("a", MaxToolRequestBytes+64)+`"}`)
 	if rr.Code != http.StatusRequestEntityTooLarge && rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 413 or 400", rr.Code)
 	}
+}
+
+// json.Decoder stops at the first complete value, so a small valid object can
+// hide an arbitrary amount of trailing data behind it: without a read to EOF
+// neither the trailing bytes nor the size cap is ever noticed. Both shapes
+// are refused, and the search backend is never reached.
+func TestWebToolsRejectTrailingDataAfterTheJSONBody(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"trailing json value", `{"query":"who won"}{"query":"and again"}`, http.StatusBadRequest},
+		{"trailing garbage", `{"query":"who won"} not json at all`, http.StatusBadRequest},
+		// Trailing bytes that are themselves valid JSON are the case that
+		// actually reaches the size cap: the decoder keeps reading until
+		// MaxBytesReader stops it. Unparseable trailing bytes, as above, fail
+		// as a syntax error in the first buffered chunk instead, which is a
+		// different status but the same refusal.
+		{
+			"oversized valid payload hidden behind a small valid value",
+			`{"query":"who won"}"` + strings.Repeat("a", MaxToolRequestBytes+64) + `"`,
+			http.StatusRequestEntityTooLarge,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			search := &stubSearcher{hits: okHits()}
+			h := newTestHandler(t, Deps{Search: search})
+			rr := postRaw(t, h, "/v1/tools/web_search", "turn-1", tc.body)
+			if rr.Code != tc.want {
+				t.Fatalf("status = %d, want %d, body = %s", rr.Code, tc.want, rr.Body)
+			}
+			if search.calls != 0 {
+				t.Fatalf("the search backend ran %d times on a malformed body", search.calls)
+			}
+		})
+	}
+}
+
+// Trailing whitespace is not trailing data. A client that ends its body with a
+// newline is well behaved and must not be refused.
+func TestWebToolsAcceptTrailingWhitespace(t *testing.T) {
+	h := newTestHandler(t, Deps{Search: &stubSearcher{hits: okHits()}})
+	rr := postRaw(t, h, "/v1/tools/web_search", "turn-1", "{\"query\":\"who won\"}\n\n  ")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rr.Code, rr.Body)
+	}
+}
+
+func postRaw(t *testing.T, h http.Handler, path, turn, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	if turn != "" {
+		req.Header.Set(TurnHeader, turn)
+	}
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{ID: uuid.New(), TenantID: uuid.New()}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	return rr
 }

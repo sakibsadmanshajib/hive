@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 )
 
 // Envelope status values. StatusOK and StatusEmpty are both outcomes of a
@@ -128,9 +129,14 @@ func EmptySearchResult(query string, dropped int) SearchResult {
 	return SearchResult{Status: StatusEmpty, Query: query, Results: []Hit{}, Dropped: dropped}
 }
 
-// Part is one extracted span of a fetched page, carrying the character
-// offsets it occupied in the extracted document so the model can say where in
-// the page a quote came from.
+// Part is one extracted span of a fetched page, carrying the offsets it
+// occupied in the extracted document so the model can say where in the page a
+// quote came from.
+//
+// Start and End are counted in characters, not bytes, and the pipeline that
+// fills them (slice S2) must count them the same way. Every "chars" figure on
+// this envelope is a rune count: a byte count would report a Bangla page as
+// three times its real length, and Bangladesh is this product's first market.
 type Part struct {
 	Text  string `json:"text"`
 	Start int    `json:"start"`
@@ -170,9 +176,12 @@ func NewFetchResult(meta FetchMeta, parts []Part) (FetchResult, error) {
 	if len(parts) == 0 {
 		return FetchResult{}, ErrEmptyResult
 	}
+	// Characters, not bytes, matching Part.Start and Part.End. len() here
+	// would report three times the real figure for Bangla or any other
+	// non-Latin script.
 	retrieved := 0
 	for _, p := range parts {
-		retrieved += len(p.Text)
+		retrieved += utf8.RuneCountInString(p.Text)
 	}
 	final := meta.FinalURL
 	if final == "" {

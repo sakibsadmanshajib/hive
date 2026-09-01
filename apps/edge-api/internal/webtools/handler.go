@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -309,15 +310,32 @@ func decodeBody(w http.ResponseWriter, r *http.Request, into any) bool {
 	// parse failure whose message says nothing useful.
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxToolRequestBytes))
 	if err := dec.Decode(into); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			writeEnvelope(w, http.StatusRequestEntityTooLarge, NewError(CodeInvalidRequest, msgBodyTooLarge, 0))
+		writeBodyError(w, err)
+		return false
+	}
+	// Decode stops at the first complete JSON value and never looks at what
+	// follows, so on its own it neither rejects trailing data nor reads far
+	// enough for MaxBytesReader to notice an oversized body behind a small
+	// valid one. Reading on until EOF settles both: trailing bytes are a bad
+	// body, and trailing bytes past the cap are an oversized one.
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		if err == nil {
+			writeEnvelope(w, http.StatusBadRequest, NewError(CodeInvalidRequest, msgBadBody, 0))
 			return false
 		}
-		writeEnvelope(w, http.StatusBadRequest, NewError(CodeInvalidRequest, msgBadBody, 0))
+		writeBodyError(w, err)
 		return false
 	}
 	return true
+}
+
+func writeBodyError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeEnvelope(w, http.StatusRequestEntityTooLarge, NewError(CodeInvalidRequest, msgBodyTooLarge, 0))
+		return
+	}
+	writeEnvelope(w, http.StatusBadRequest, NewError(CodeInvalidRequest, msgBadBody, 0))
 }
 
 func writeEnvelope(w http.ResponseWriter, status int, envelope any) {

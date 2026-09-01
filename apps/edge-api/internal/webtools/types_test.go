@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"unicode/utf8"
 )
 
 // A success envelope with zero items must not be constructible. This is the
@@ -24,6 +25,26 @@ func TestNewSearchResultRefusesEmpty(t *testing.T) {
 func TestNewFetchResultRefusesEmpty(t *testing.T) {
 	if _, err := NewFetchResult(FetchMeta{URL: "https://example.com"}, nil); !errors.Is(err, ErrEmptyResult) {
 		t.Fatalf("NewFetchResult with no parts: want ErrEmptyResult, got %v", err)
+	}
+}
+
+// retrieved_chars is a character count, matching Part.Start and Part.End. A
+// byte count reports a Bangla page as three times its real length, which is
+// the figure the model reads when deciding whether it has enough of the page.
+func TestNewFetchResultCountsCharactersNotBytes(t *testing.T) {
+	const bangla = "খবরের কাগজ"
+	got, err := NewFetchResult(FetchMeta{URL: "https://example.com"}, []Part{
+		{Text: bangla, Start: 0, End: utf8.RuneCountInString(bangla)},
+	})
+	if err != nil {
+		t.Fatalf("NewFetchResult: %v", err)
+	}
+	want := utf8.RuneCountInString(bangla)
+	if len(bangla) == want {
+		t.Fatal("the fixture is single-byte, so it cannot distinguish the two counts")
+	}
+	if got.RetrievedChars != want {
+		t.Fatalf("RetrievedChars = %d, want %d (byte length is %d)", got.RetrievedChars, want, len(bangla))
 	}
 }
 
