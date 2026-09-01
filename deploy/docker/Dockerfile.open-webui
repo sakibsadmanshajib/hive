@@ -637,6 +637,25 @@ RUN python3 /tmp/apply_chat_error_detail_1569_patch.py \
     && test "$(grep -c '# hive (#1569)' /app/backend/open_webui/utils/middleware.py)" -eq 6 \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/middleware.py').read_text())"
 
+# issue #1600: routers/tasks.py declares stream false on all seven task
+# payloads and its callers subscript the result, but routers/openai.py decides
+# on the RESPONSE content type alone, so a StreamingResponse came back and the
+# subscript raised TypeError before any query was extracted. Web search then
+# ran on the raw user message instead of a query written for retrieval, and
+# the search-query chip in the chat UI showed the typed question verbatim.
+# What makes that reachable is our own gateway: /v1/chat/completions routes a
+# JWT-authenticated call (which every OWUI task request now is) to the
+# session-chat dispatcher, and that dispatcher forces stream true and always
+# answers text/event-stream (apps/edge-api/internal/chat/dispatch.go). One
+# guard here honours the caller declaration for every non-streaming caller at
+# once rather than teaching each caller to accept two shapes. Same fail-loud
+# posture as the patches above. Behaviour is covered by
+# scripts/test_owui_task_nonstreaming_response.py.
+COPY deploy/docker/owui-patches/apply_task_nonstreaming_response_1600_patch.py /tmp/apply_task_nonstreaming_response_1600_patch.py
+RUN python3 /tmp/apply_task_nonstreaming_response_1600_patch.py \
+    && test "$(grep -c '# hive (#1600)' /app/backend/open_webui/routers/openai.py)" -eq 2 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/openai.py').read_text())"
+
 # Security review, MEDIUM (PR #1525): upstream's own default for this flag,
 # read in config.py as os.getenv('ENABLE_ADMIN_CHAT_ACCESS', 'True'), is
 # permissive. A malformed value already fails closed (anything that is not
