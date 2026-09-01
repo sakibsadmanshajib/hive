@@ -226,12 +226,28 @@ func encodeVector(v []float32) (string, error) {
 // floats. Results are ordered most similar first.
 //
 // projectID is uuid.Nil for "the tenant's whole corpus", which is what every
-// caller did before Projects existed (issue #1595). A non-Nil value narrows the
-// search to documents attached to that project, and it MUST already have been
-// authorized by the caller: this method filters, it does not decide who is
-// allowed to filter by what. Handler.authorizeProject is the decision, and it
-// runs before this call rather than inside it, so a second caller cannot reach
-// the filter without also reaching the check.
+// caller did before Projects existed (issue #1595) and what POST /v1/rag/chat
+// still always sends. A non-Nil value narrows the search to documents attached
+// to that project, and it MUST already have been authorized by the caller: this
+// method filters, it does not decide who is allowed to filter by what.
+// Handler.authorizeProject is the decision, and it runs before this call rather
+// than inside it.
+//
+// That contract is the resolve-ownership-at-the-call-site shape issue #1533 is
+// filed about, and it is deliberate here rather than overlooked. The decision
+// has exactly one implementation, it is reached from outside the package only
+// through the narrow ProjectAuthorizer, and every current call site takes it.
+// Moving the check inside this method would put an authorization decision in
+// the repository layer, which is where the other four instances in #1533 went
+// wrong in the opposite direction. The site to watch is issue #1595 spec task 9,
+// which adds retrieval inside the chat path and inside the launcher: neither is
+// an HTTP handler, so neither has an obvious place for the check, and whoever
+// writes them has to put it in.
+//
+// Scope, not confidentiality. A project scoped search returns only that
+// project's passages, and an unscoped one returns the tenant's whole corpus,
+// including passages belonging to another member's project, because
+// public.rag_documents has no uploader column. Issue #1643 carries that.
 func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []float32, topK int, projectID uuid.UUID) ([]ChunkRow, error) {
 	if topK <= 0 {
 		topK = 5
@@ -286,12 +302,29 @@ func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []
 // $4 is the optional project scope: NULL means the whole tenant corpus, so one
 // statement serves both shapes.
 //
-// ponytail: the project filter is applied after the HNSW ordering, so a
-// project-scoped search over a large tenant corpus can return fewer than topK
-// passages even when the project holds more. That is pgvector's ordinary
-// post-filter behaviour and it is fine at the corpus sizes this ships for. The
-// upgrade, if a tenant ever outgrows it, is a partial index per project or an
-// iterative scan, not a second query path.
+// The two shapes get two different plans, measured rather than assumed:
+// EXPLAIN (ANALYZE, BUFFERS) for both against a pg17 database holding 10000
+// chunks in the tenant and 500 in the project is posted on the pull request
+// that introduced the join (issue #1595).
+//
+//   - Unscoped ($4 NULL): Index Scan on rag_chunks_embedding_hnsw_idx, then a
+//     nested loop to rag_documents on its primary key. Approximate top-k, which
+//     is what this endpoint has always been.
+//   - Scoped ($4 set): the planner does NOT use the HNSW index. It reaches the
+//     project's documents first and sorts that project's chunks by distance
+//     (top-N heapsort). So a project scoped search is EXACT: it returns topK
+//     whenever the project holds topK chunks, and the post-filter truncation
+//     that an HNSW-first plan would suffer under hnsw.ef_search does not arise.
+//
+// ponytail: the scoped plan therefore costs O(the project's chunks) in distance
+// computation plus a cheap scan of the tenant's chunk table, not O(the tenant's
+// chunks) in distance computation. Fine at the corpus sizes this ships for. The
+// ceiling worth naming is the other direction: if a project ever holds most of a
+// large tenant corpus the planner may switch to the HNSW path, and then the
+// filter genuinely is a post-filter and can return fewer than topK passages. The
+// upgrade at that point is one line, pgvector 0.8's SET LOCAL
+// hnsw.iterative_scan = relaxed_order, and only then a partial index per
+// project. Not a second query path either way.
 func searchChunksQuery(pgType string) string {
 	cast := embedmodel.Cast(pgType)
 	return fmt.Sprintf(`

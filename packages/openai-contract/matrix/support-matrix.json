@@ -1089,6 +1089,48 @@
     },
     {
       "method": "POST",
+      "path": "/v1/rag/projects",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): create a project, a named retrieval context over the tenant's documents."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/rag/projects",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): list the calling user's projects."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/rag/projects/{project_id}",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): retrieve one project."
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/rag/projects/{project_id}",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): rename a project or replace its instructions."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/rag/projects/{project_id}",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): delete a project; its documents survive unattached."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/rag/projects/{project_id}/documents",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): attach an already uploaded document to a project."
+    },
+    {
+      "method": "POST",
       "path": "/v1/agent/tasks",
       "status": "supported_now",
       "phase": null,

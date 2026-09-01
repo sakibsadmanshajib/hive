@@ -58,21 +58,27 @@ func (r *Repo) CreateProject(ctx context.Context, tenantID, ownerUserID uuid.UUI
 }
 
 // GetProject fetches one project scoped to tenantID. It deliberately does NOT
-// check ownership: RLS covers the tenant boundary and this returns OwnerUserID
-// so the caller can decide. Handler.authorizeProject is what a request path
-// calls; this exists for the paths that need the row itself.
+// check ownership: it returns OwnerUserID so the caller can decide, and
+// Handler.authorizeProject is what a request path calls.
+//
+// The tenant_id predicate is in the statement rather than left to
+// rag_projects_tenant_isolation. The policy is correct and is exercised by
+// projects_rls_test.go, but it binds on hive_app and every deployment connects
+// as postgres, which carries rolbypassrls (issues #1469, #1444, #1446), so on
+// the box this WHERE clause is the tenant boundary and the policy is inert.
+// Same reason SearchChunks and AttachDocument restate theirs.
 func (r *Repo) GetProject(ctx context.Context, tenantID, projectID uuid.UUID) (ProjectRow, error) {
 	var p ProjectRow
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		var err error
 		p, err = scanProject(tx.QueryRow(ctx,
-			"SELECT "+projectColumns+" FROM public.rag_projects WHERE id = $1", projectID))
+			"SELECT "+projectColumns+" FROM public.rag_projects WHERE id = $1 AND tenant_id = $2",
+			projectID, tenantID))
 		return err
 	})
 	if err != nil {
-		// A row filtered out by RLS (another tenant's project) and a project id
-		// that never existed are both ErrNoRows here, and both mean the same
-		// thing to the caller.
+		// Another tenant's project and a project id that never existed are both
+		// ErrNoRows here, and both mean the same thing to the caller.
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ProjectRow{}, ErrProjectForbidden
 		}
@@ -86,12 +92,20 @@ func (r *Repo) GetProject(ctx context.Context, tenantID, projectID uuid.UUID) (P
 // one user, per group sharing is out of scope (issue #1595 section 14), and
 // listing every tenant member's projects would be the same cross-member
 // exposure the retrieval path refuses.
+//
+// Both predicates are in the statement. Unlike the three below, this one has no
+// Go side restatement anywhere after it, so without tenant_id here a user who
+// belongs to more than one tenant (personal tenants exist alongside workspaces,
+// see 20260801_10_tenants_personal_owner.sql) would list every project they own
+// in every tenant, whichever workspace they were acting in. Row level security
+// does not supply it on a deployment that connects as a BYPASSRLS role.
 func (r *Repo) ListProjects(ctx context.Context, tenantID, ownerUserID uuid.UUID) ([]ProjectRow, error) {
 	var out []ProjectRow
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			"SELECT "+projectColumns+" FROM public.rag_projects WHERE owner_user_id = $1 ORDER BY created_at DESC",
-			ownerUserID)
+			"SELECT "+projectColumns+" FROM public.rag_projects"+
+				" WHERE tenant_id = $1 AND owner_user_id = $2 ORDER BY created_at DESC",
+			tenantID, ownerUserID)
 		if err != nil {
 			return fmt.Errorf("rag.repo: list projects: %w", err)
 		}
@@ -116,9 +130,10 @@ func (r *Repo) ListProjects(ctx context.Context, tenantID, ownerUserID uuid.UUID
 // must not blank the instructions and an instructions edit must not blank the
 // name.
 //
-// The owner_user_id predicate travels in the UPDATE itself rather than only in
-// a preceding read, so nothing can slip between the authorization check and the
-// write.
+// Both the owner_user_id and the tenant_id predicates travel in the UPDATE
+// itself rather than only in a preceding read, so nothing can slip between the
+// authorization check and the write, and neither half depends on a policy that
+// does not bind on the deployed role.
 func (r *Repo) UpdateProject(ctx context.Context, tenantID, ownerUserID, projectID uuid.UUID, name, instructions *string) (ProjectRow, error) {
 	var p ProjectRow
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -128,8 +143,8 @@ func (r *Repo) UpdateProject(ctx context.Context, tenantID, ownerUserID, project
 			   SET name         = COALESCE($3, name),
 			       instructions = COALESCE($4, instructions),
 			       updated_at   = now()
-			 WHERE id = $1 AND owner_user_id = $2
-			RETURNING `+projectColumns, projectID, ownerUserID, name, instructions))
+			 WHERE id = $1 AND owner_user_id = $2 AND tenant_id = $5
+			RETURNING `+projectColumns, projectID, ownerUserID, name, instructions, tenantID))
 		return err
 	})
 	if err != nil {
@@ -147,8 +162,8 @@ func (r *Repo) UpdateProject(ctx context.Context, tenantID, ownerUserID, project
 func (r *Repo) DeleteProject(ctx context.Context, tenantID, ownerUserID, projectID uuid.UUID) error {
 	return r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
-			"DELETE FROM public.rag_projects WHERE id = $1 AND owner_user_id = $2",
-			projectID, ownerUserID)
+			"DELETE FROM public.rag_projects WHERE id = $1 AND owner_user_id = $2 AND tenant_id = $3",
+			projectID, ownerUserID, tenantID)
 		if err != nil {
 			return fmt.Errorf("rag.repo: delete project: %w", err)
 		}

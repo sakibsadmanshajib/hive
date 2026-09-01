@@ -37,34 +37,42 @@ const (
 //
 // Why it has to exist at all, stated plainly because it is the point of this
 // seam. A project id arrives from the client, and public.rag_documents is
-// tenant scoped rather than user scoped. Row level security on
-// app.current_tenant_id therefore stops a caller in tenant A from reading
-// tenant B's project, and does nothing whatever about two members of the same
-// tenant: they present the identical app.current_tenant_id, so filtering by a
-// supplied project id without checking who owns it hands one member another
-// member's private passages.
+// tenant scoped rather than user scoped. The tenant_id predicate every project
+// statement carries therefore stops a caller in tenant A from reading tenant
+// B's project, and does nothing whatever about two members of the same tenant:
+// they are in one tenant, so filtering by a supplied project id without
+// checking who owns it hands one member another member's private passages.
+//
+// The tenant half is deliberately not left to rag_projects_tenant_isolation.
+// That policy is correct and proven in projects_rls_test.go, and it binds on
+// hive_app while every deployment connects as postgres with rolbypassrls, so it
+// is inert on the box (issues #1469, #1444, #1446). What holds the tenant line
+// in production is the SQL predicate plus the comparison below.
 //
 // Both refusals return ErrProjectForbidden and nothing else, so a caller cannot
 // tell "no such project" from "not yours" and cannot enumerate project ids.
 //
+// It returns the authorized row, so a caller that needs the project itself does
+// not read it a second time.
+//
 // Called BEFORE any filtering, never after it and never instead of it.
-func authorizeProjectOwnership(ctx context.Context, s Store, tenantID, userID, projectID uuid.UUID) error {
+func authorizeProjectOwnership(ctx context.Context, s Store, tenantID, userID, projectID uuid.UUID) (ProjectRow, error) {
 	project, err := s.GetProject(ctx, tenantID, projectID)
 	if err != nil {
-		return err
+		return ProjectRow{}, err
 	}
-	// project.TenantID is already guaranteed by row level security. Restated
-	// here as defence in depth for the same reason SearchChunks restates its
-	// tenant filter: a SECURITY DEFINER path or a BYPASSRLS role would
-	// otherwise remove the only check standing.
+	// project.TenantID restates the statement's own tenant_id predicate, for the
+	// same reason SearchChunks restates its tenant filter: a SECURITY DEFINER
+	// path, or a future statement that drops the predicate, would otherwise
+	// leave no check standing.
 	if project.TenantID != tenantID || project.OwnerUserID != userID {
-		return ErrProjectForbidden
+		return ProjectRow{}, ErrProjectForbidden
 	}
-	return nil
+	return project, nil
 }
 
 // authorizeProject is the Handler's own entry point to the decision above.
-func (h *Handler) authorizeProject(ctx context.Context, tenantID, userID, projectID uuid.UUID) error {
+func (h *Handler) authorizeProject(ctx context.Context, tenantID, userID, projectID uuid.UUID) (ProjectRow, error) {
 	return authorizeProjectOwnership(ctx, h.store, tenantID, userID, projectID)
 }
 
@@ -227,11 +235,9 @@ func (h *Handler) handleGetProject(w http.ResponseWriter, r *http.Request, proje
 		apierrors.Write(w, http.StatusUnauthorized, apierrors.CodeUnauthenticated, "unauthenticated")
 		return
 	}
-	if err := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); err != nil {
-		writeProjectError(w, err)
-		return
-	}
-	project, err := h.store.GetProject(r.Context(), user.TenantID, projectID)
+	// authorizeProject has already read the row, so this route renders what it
+	// returned rather than selecting the same project a second time.
+	project, err := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID)
 	if err != nil {
 		writeProjectError(w, err)
 		return
@@ -257,7 +263,7 @@ func (h *Handler) handleUpdateProject(w http.ResponseWriter, r *http.Request, pr
 	// UpdateProject carries the owner predicate in its own UPDATE, so this is
 	// not the only guard; it is here so a caller who owns nothing gets the same
 	// 404 as every other project refusal rather than a bare no-rows path.
-	if err := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); err != nil {
+	if _, err := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); err != nil {
 		writeProjectError(w, err)
 		return
 	}
@@ -277,7 +283,7 @@ func (h *Handler) handleDeleteProject(w http.ResponseWriter, r *http.Request, pr
 		apierrors.Write(w, http.StatusUnauthorized, apierrors.CodeUnauthenticated, "unauthenticated")
 		return
 	}
-	if err := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); err != nil {
+	if _, err := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); err != nil {
 		writeProjectError(w, err)
 		return
 	}
@@ -307,7 +313,7 @@ func (h *Handler) handleAttachDocument(w http.ResponseWriter, r *http.Request, p
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid document_id")
 		return
 	}
-	if aerr := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); aerr != nil {
+	if _, aerr := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); aerr != nil {
 		writeProjectError(w, aerr)
 		return
 	}
@@ -346,5 +352,6 @@ func NewProjectAuthorizer(s Store) *ProjectAuthorizer {
 // AuthorizeProject reports whether userID within tenantID owns projectID,
 // returning ErrProjectForbidden when they do not, whatever the reason.
 func (a *ProjectAuthorizer) AuthorizeProject(ctx context.Context, tenantID, userID, projectID uuid.UUID) error {
-	return authorizeProjectOwnership(ctx, a.store, tenantID, userID, projectID)
+	_, err := authorizeProjectOwnership(ctx, a.store, tenantID, userID, projectID)
+	return err
 }

@@ -22,10 +22,24 @@
 --     unaffected. Explicit rows always win over the declared default, which is
 --     the COALESCE(s.enabled, k.default_enabled) in
 --     apps/control-plane/internal/tenant/settings/resolver.go.
---   * A tenant with no row moves from RAG refused to RAG available. No data is
---     created or exposed by that alone: every /v1/rag/* route still requires an
---     authenticated caller and every row is still tenant scoped by RLS, so this
---     widens a feature gate and never an authentication or isolation boundary.
+--   * A tenant with no row moves from RAG refused to RAG available. No
+--     authentication or isolation boundary moves with it: featuregate's
+--     requireFunc resolves the principal and denies when there is none, so an
+--     unauthenticated request never benefits from a true default, FeatureRAG has
+--     exactly one enforcement site (gated_routes.go), and every row stays tenant
+--     scoped.
+--   * A cost surface does move, and it is not free. Handler.WithBilling wires
+--     the money path for POST /v1/rag/chat only: sessionbilling.Start is called
+--     from chat_handler.go and nowhere else, so document ingest and the query
+--     embedding on POST /v1/rag/search reach the embedding backend with no
+--     credit hold, no charge and no per tenant corpus quota, bounded only by a
+--     per request byte cap. budgetGate does not cover the difference, because it
+--     resolves identity from an API key bearer and stays inert for the JWT
+--     traffic these routes serve. Before this migration that spend was reachable
+--     only on tenants scripts/seed-demo-owner.py had seeded; after it, every
+--     authenticated user of every workspace can drive it, including an account
+--     at zero credits. That is an accepted risk taken to unblock issue #1506 and
+--     issue #1595, not an absence of one, and it is tracked in issue #1644.
 --   * An administrator can still turn RAG off per workspace by writing an
 --     enabled=false row through the existing feature-gate admin surface.
 --
@@ -37,8 +51,30 @@
 
 BEGIN;
 
-UPDATE public.feature_gate_keys
-   SET default_enabled = true
- WHERE key = 'ENABLE_RAG';
+-- Asserted rather than assumed. An UPDATE matching zero rows is not an error:
+-- it would still be recorded as applied in public.hive_schema_migrations, the
+-- gate would stay closed, Projects would stay unusable on every workspace with
+-- no explicit row, and nothing anywhere would say so. Failing the migration is
+-- the loud version of that.
+--
+-- The row's presence is what is asserted, not its spelling. feature_gate_keys.key
+-- is the tenant_setting_key enum, so a typo would fail on the cast rather than
+-- match nothing; what varies between installations is which registry rows are
+-- seeded (20260715_04_featuregate_dynamic_keys.sql made the registry a table
+-- rows are added to), and this file is worthless on one where the ENABLE_RAG row
+-- is absent.
+DO $$
+DECLARE
+    updated int;
+BEGIN
+    UPDATE public.feature_gate_keys
+       SET default_enabled = true
+     WHERE key = 'ENABLE_RAG';
+    GET DIAGNOSTICS updated = ROW_COUNT;
+    IF updated <> 1 THEN
+        RAISE EXCEPTION
+            'ENABLE_RAG registry row not found (matched % rows): the gate default was not applied', updated;
+    END IF;
+END$$;
 
 COMMIT;

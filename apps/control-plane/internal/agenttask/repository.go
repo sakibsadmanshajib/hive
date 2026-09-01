@@ -102,6 +102,7 @@ func (r *pgxRepository) Create(ctx context.Context, tenantID, userID uuid.UUID, 
 	t.ProjectID = projectID
 	return t, nil
 }
+
 func (r *pgxRepository) Get(ctx context.Context, tenantID, userID, id uuid.UUID) (Task, error) {
 	var t Task
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -263,9 +264,13 @@ func (r *pgxRepository) ListActive(ctx context.Context) ([]Task, error) {
 //     batch on every retry while both writers stayed live. The lock is
 //     per-task, transaction-scoped, released at commit, so it serializes only
 //     same-task appends and nothing else waits.
-//   - ON CONFLICT (task_id, source_event_id) WHERE source_event_id <> ”
-//     targets the partial unique index exactly, so a re-pulled event is a
-//     no-op while genuinely new events in the same batch still land.
+//   - ON CONFLICT (task_id, source_event_id), with the index's own predicate
+//     that source_event_id is not the empty string, targets the partial unique
+//     index exactly, so a re-pulled event is a no-op while genuinely new
+//     events in the same batch still land. The predicate is spelled out rather
+//     than quoted because gofmt's doc comment formatter rewrites a pair of
+//     straight single quotes into a typographic quote, which is how this line
+//     acquired one; the SQL below is the literal form.
 func (r *pgxRepository) AppendEvents(ctx context.Context, task Task, events []TaskEvent) error {
 	if len(events) == 0 {
 		return nil

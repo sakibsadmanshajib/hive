@@ -171,6 +171,15 @@ func NewHandler(s store, embed Embedder, audit AuditFunc, ingest IngestFunc, ser
 
 // Register mounts all /v1/rag/* routes on mux.
 // Callers wrap with featuregate.Require(FeatureRAG) before mounting.
+//
+// A route added here is not reachable until it also has a supported_now entry
+// in packages/openai-contract/matrix/support-matrix.json and a line in
+// ragEndpoints (route_matrix_test.go). main.go wraps the whole mux in
+// middleware.UnsupportedEndpointMiddleware, which answers 404 for any /v1/ path
+// the matrix does not carry, and the boot-time assertMatrixCoverage guard reads
+// mux patterns only, so a new leaf under the already-covered "/v1/rag/" subtree
+// passes it while 404ing every request. TestRAGRoutesReachHandlersThroughTheMiddlewareChain
+// is what turns that silence into a failing test.
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/rag/documents", h.routeDocuments)
 	mux.HandleFunc("/v1/rag/documents/", h.routeDocumentByID)
@@ -715,11 +724,20 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// on purpose: an unauthorized project id must cost nothing, and it must
 	// leave no RAG_SEARCH or RAG_CHUNK_RETRIEVED trail naming documents the
 	// caller may not read. Filtering by a client supplied project id without
-	// this check would hand one member of a tenant another member's passages,
-	// because row level security keys on the tenant and both members present
-	// the same tenant.
+	// this check would let one member of a tenant name another member's project
+	// and be served its passages: every tenant scoped guard, the SQL predicate
+	// and the policy alike, is satisfied by two members of one tenant.
+	//
+	// What this check does NOT provide, stated because the surface above it
+	// implies otherwise: it does not make a project's contents confidential
+	// from other members of the same tenant. public.rag_documents has no
+	// uploader column, so an unscoped search (project_id absent, which is also
+	// what handleChat sends) still returns the tenant's whole corpus, this
+	// project's passages included. This check refuses a project id, not a
+	// document. Tracked in issue #1643; issue #1595's frontend must not present
+	// a project as private until that is closed.
 	if projectID != uuid.Nil {
-		if aerr := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); aerr != nil {
+		if _, aerr := h.authorizeProject(r.Context(), user.TenantID, user.ID, projectID); aerr != nil {
 			writeProjectError(w, aerr)
 			return
 		}
