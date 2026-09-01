@@ -93,6 +93,11 @@ on:
       # below in this same file). Neither had an entry, so a fix to either
       # script would merge and never redeploy to pick the fix up.
       - 'scripts/check-retention-schedule.sh'
+      # Invoked by the migrate job's workspace-role divergence gate, right
+      # after the migrations it verifies the outcome of (issue #1646). Same
+      # blind spot as every other script listed here, and the same shape the
+      # entry above it exists for.
+      - 'scripts/check-tenant-role-divergence.sh'
       - 'scripts/derive-pooler-dsn.py'
       # The single answer to "how does a command on the box reach the stack's
       # database". Both the migrate job and the deploy job's price assertion go
@@ -837,6 +842,30 @@ jobs:
         # window is loose enough (72 hours against a daily schedule) that one
         # skipped night from a box reboot does not block anything.
         run: scripts/check-retention-schedule.sh
+
+      - name: Assert workspace administrator roles agree across both tables
+        # Issues #1244, #1245 and #1646. public.tenant_users.role authorizes
+        # platform.WorkspaceAdminGate while public.account_memberships.role is
+        # what the Members page and the console's own page gate read, and the
+        # two drifted apart for every account promoted before PR #1287 taught
+        # accounts.Service.UpdateMemberRole to propagate. Both directions of
+        # that drift were corrected by a migration (20260828_02 and
+        # 20260901_01), and both are kept corrected by a write side sync that
+        # is best effort by design: it logs and continues when its statement
+        # matches nothing.
+        #
+        # A one time correction plus a best effort sync is exactly the state
+        # that was in place when issue #1646 was filed, so this step is the
+        # part that was missing rather than a belt on top of a working braces.
+        # It reads the live rows after the migrations above have run and fails
+        # when either direction is non empty: somebody holding workspace
+        # administrator authority the record says they should not, or a real
+        # owner being told to ask their administrator.
+        #
+        # Placed after the migrations deliberately: running it first would
+        # report the very drift the migration in this same run is about to
+        # correct.
+        run: scripts/check-tenant-role-divergence.sh
 
   deploy:
     name: Pull + recreate stack on the demo box
