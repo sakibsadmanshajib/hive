@@ -55,6 +55,7 @@ func TestAssertMatrixCoverage_RealRegistrations(t *testing.T) {
 	registerAgentTaskRoutes(mux, gate, spy)
 	registerAgentScheduleRoutes(mux, gate, spy)
 	registerAudioVoicesRoute(mux)
+	registerWebToolRoutes(mux, spy)
 	registerMediaFileBatchRoutes(mux, spy, spy, spy, spy, identityMW)
 	mux.Handle("/v1/featuregate", featuregate.NewStateHandler(gate))
 	artifacts.NewHandler(nil, nil, "", nil, "", nil).Register(mux)
