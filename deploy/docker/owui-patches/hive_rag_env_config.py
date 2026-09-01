@@ -541,9 +541,21 @@ INT_KEYS = frozenset(
 # directions. rag.embedding_batch_size reaches range(0, len(texts), 0) inside
 # get_embedding_function, which raises on every document;
 # rag.embedding_concurrent_requests treats 0 as "no semaphore at all", which
-# is the unbounded burst this issue exists to end. Unbounded by accident is
-# the dangerous direction, so a zero is refused at boot rather than obeyed at
-# request time.
+# is the unbounded burst this issue exists to end.
+#
+# What "refused" means here, precisely, because the two callers differ. Under
+# `fatal=True` (the CI/self-check path) a zero raises. Under `fatal=False`,
+# which is what the boot splice deliberately uses since the 2026-08-30
+# outage, `_refuse` logs at ERROR and the key is skipped, so the boot starts
+# normally and the persisted row keeps whatever it already held -- which, on
+# a volume seeded from DEFAULT_CONFIG, is the unbounded 0. So this rejects the
+# write, it does not repair the row and it does not stop the container.
+#
+# Clamping to 1 on the non-fatal path was considered and rejected: 1 is the
+# correct floor for the concurrency knob but is exactly the unbatched,
+# one-request-per-chunk batch size that caused this defect, so a single clamp
+# constant would silently re-arm one half of the fix while appearing to
+# repair it. An operator who wants a bound names a positive number.
 POSITIVE_INT_KEYS = frozenset(
     {"rag.embedding_batch_size", "rag.embedding_concurrent_requests"}
 )
@@ -914,9 +926,9 @@ def overrides(environ, fatal: bool = True) -> dict:
                     f"a legal integer here and a broken one: a batch size of "
                     f"0 makes every embedding call raise, and a concurrency "
                     f"of 0 means no bound at all, which is the unbounded "
-                    f"burst issue #1609 exists to end. Name a positive "
-                    f"number, or unset {variable} to leave the persisted "
-                    f"value alone.",
+                    f"burst issue #1609 exists to end. This value is not "
+                    f"written and the persisted one is left as it was, which "
+                    f"may itself be an unbounded 0: name a positive number.",
                     fatal,
                 )
                 continue

@@ -26,6 +26,26 @@ guaranteed-useless empty retrieval into the visible "An error occurred while
 searching the web" status the middleware already emits on its own except
 branch (utils/middleware.py, chat_web_search_handler).
 
+Two things that assertion depends on, named rather than assumed silently.
+
+First, the embed-before-insert ordering is upstream's, not a guarantee we
+hold. It is true of the pinned digest and nothing in this build asserts it, so
+a future digest bump that started inserting per batch would turn this raise
+into a silent discard of whatever had already been written. Not worth a guard
+today; worth knowing before the next bump.
+
+Second, "fatal to this search" is not "the turn stops", and the two callers
+differ. The frontend calls this endpoint directly (`processWebSearch`,
+src/lib/apis/retrieval/index.ts, imported by Chat.svelte), so a client-side
+search receives the 502 and this detail string, which is why the no-exception
+-text decision below is load bearing rather than merely defensive. On the
+middleware path the detail is discarded: `chat_web_search_handler` catches
+everything, emits its own "An error occurred while searching the web" status,
+returns `form_data`, and the turn continues. So a chat-path failure is a
+visible red error next to an answer with no sources, and the model may still
+answer from its own knowledge. That is the intended fix for the reported
+defect, which was the claim of success, not the answer itself.
+
 The raised detail carries no exception text, deliberately. The exception here
 is aiohttp's, and aiohttp bakes the request URL into its string, so re-raising
 the original would publish `http://edge-api:8080/v1/embeddings` to the
@@ -67,10 +87,15 @@ NEW = """            except Exception:
                 #
                 # Nothing partial is lost: save_docs_to_vector_db embeds every
                 # chunk before inserting any of them, so a raise here means
-                # the collection is empty. Raising lands in the enclosing
-                # handler and reaches the user as the visible "An error
-                # occurred while searching the web" status that
-                # chat_web_search_handler already emits.
+                # the collection is empty. That ordering is upstream's, not a
+                # guarantee, so re-check it on a digest bump.
+                #
+                # Fatal to this SEARCH, not to the turn. A client-side call
+                # (processWebSearch) receives this 502 and this detail. On the
+                # chat path chat_web_search_handler catches it, emits its own
+                # "An error occurred while searching the web" status and lets
+                # the turn continue, so the user sees a visible error next to
+                # an answer with no sources rather than no answer.
                 #
                 # The detail is written here rather than borrowed from the
                 # exception: aiohttp bakes the request URL into its own

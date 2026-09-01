@@ -413,6 +413,42 @@ def test_the_patch_is_wired_into_the_image() -> None:
     assert "! grep -q 'error saving docs'" in dockerfile
 
 
+# The three literals every measurement in this file rests on. They live in
+# upstream's get_embedding_function, which this fix configures rather than
+# patches, so nothing else in the build would notice if they moved.
+BATCHER_LITERALS = (
+    "if concurrent_requests:",
+    "asyncio.Semaphore(concurrent_requests)",
+    "range(0, len(query), embedding_batch_size)",
+)
+
+
+def test_the_image_is_bound_to_the_batcher_this_file_measures() -> None:
+    """The one drift path the marker greps above do not cover.
+
+    The shape half of #1609 patches nothing: the batching and the semaphore
+    are upstream's own and the fix is only that the two knobs stop sitting at
+    1 and 0. So the tests here measure the VENDORED copy of
+    get_embedding_function while the container runs the pinned image's copy,
+    and a digest bump inside the same tag that reshuffled that function would
+    leave every assertion in this file green over code the deployment no
+    longer runs. The Dockerfile greps for the same literals at build time, so
+    that drift fails the image build instead of passing silently here.
+    """
+    dockerfile = DOCKERFILE.read_text()
+    vendored = VENDORED_UTILS.read_text()
+    for literal in BATCHER_LITERALS:
+        assert literal in vendored, (
+            f"{literal!r} is gone from the vendored batcher, so the tests in "
+            f"this file no longer measure what they claim to"
+        )
+        assert literal in dockerfile, (
+            f"the Dockerfile must grep {literal!r} in retrieval/utils.py, or "
+            f"nothing binds the running image's batcher to the vendored copy "
+            f"measured here"
+        )
+
+
 def test_env_example_documents_both_knobs() -> None:
     text = (REPO_ROOT / ".env.example").read_text()
     for variable in ("RAG_EMBEDDING_BATCH_SIZE", "RAG_EMBEDDING_CONCURRENT_REQUESTS"):
