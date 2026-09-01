@@ -61,6 +61,18 @@ jobs:
         --profile chat
         --profile monitoring
         --profile selfhost
+      # docker-compose.enterprise.yml, merged by the flags above, declares
+      # WEBUI_SECRET_KEY in compose's REQUIRED form, ${VAR:?message} (issue
+      # #1602). Compose interpolates the merged config before it runs any
+      # subcommand, so without a value here every `docker compose` line in
+      # this job fails, including the read-only `exec` ones, for a reason
+      # that reads as the box being unreachable. post-deploy-verify.yml went
+      # red exactly this way (issue #1610); this job is label-gated so it had
+      # not been dispatched since, which is the only reason it was not red too.
+      #
+      # The repository secret, not the box's .env: the deploy passes it as
+      # workflow env on purpose, so that file carries nothing to read.
+      WEBUI_SECRET_KEY: ${{ secrets.WEBUI_SECRET_KEY }}
       # Ephemeral edge-api built from the checkout under test (see the step
       # that starts it). Named per run so two concurrent runs cannot collide
       # on the box, and so a leaked container is traceable to a run.
