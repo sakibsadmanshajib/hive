@@ -288,6 +288,41 @@ RUN python3 /tmp/apply_web_loader_bounds_patch.py \
     && grep -q 'hive: stream with a hard byte cap' /app/backend/open_webui/retrieval/web/utils.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/retrieval/web/utils.py').read_text())"
 
+# issue #1609: process_web_search wrapped its save_docs_to_vector_db call in a
+# bare `except Exception as e: log.debug(...)` and then returned status True
+# with the collection name it had never written, so a search that dropped
+# every fetched page was reported to the caller as a completed search. On the
+# demo box that produced "Searched 5 sites", an empty retrieval, and an
+# assistant confidently denying it had internet access, three times on
+# 2026-08-31. The swallow is replaced with an ERROR-level log plus a raise
+# carrying no exception text, which reaches the user as the visible "An error
+# occurred while searching the web" status the middleware already emits. No
+# exception text, deliberately: aiohttp bakes the internal request URL into
+# its own string, which is the leak apply_audio_error_leak_patch.py closes.
+#
+# The marker count is the drift guard, in the same shape as the patches above:
+# the patch script asserts its own literals first, and this line still fails
+# the build if anyone ever makes it a silent no-op.
+COPY deploy/docker/owui-patches/apply_web_search_embed_failure_1609_patch.py /tmp/apply_web_search_embed_failure_1609_patch.py
+RUN python3 /tmp/apply_web_search_embed_failure_1609_patch.py \
+    && test "$(grep -c '# hive (#1609)' /app/backend/open_webui/routers/retrieval.py)" -eq 1 \
+    && ! grep -q 'error saving docs' /app/backend/open_webui/routers/retrieval.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/retrieval.py').read_text())"
+
+# The other half of #1609 patches nothing: the batching and the semaphore are
+# upstream's own, in get_embedding_function, and the fix is only that
+# RAG_EMBEDDING_BATCH_SIZE and RAG_EMBEDDING_CONCURRENT_REQUESTS stop sitting
+# at 1 and 0. That makes it the one piece with no build-time literal binding
+# it to anything, and scripts/test_owui_embedding_burst.py measures the
+# VENDORED copy of that function while the container runs the pinned image's
+# copy. Identical today, and nothing but this line would notice if a digest
+# bump inside the same tag reshuffled the batcher: the test would stay green
+# over code the deployment no longer runs. So assert the two lines the test's
+# measurement depends on, in the same shape as the marker greps above.
+RUN grep -q 'if concurrent_requests:' /app/backend/open_webui/retrieval/utils.py \
+    && grep -q 'asyncio.Semaphore(concurrent_requests)' /app/backend/open_webui/retrieval/utils.py \
+    && grep -q 'range(0, len(query), embedding_batch_size)' /app/backend/open_webui/retrieval/utils.py
+
 # #1562: the audio router stringified the aiohttp exception into the HTTP
 # detail it returns to the browser, and aiohttp bakes the request URL into that
 # string, so every failed read-aloud published `http://edge-api:8080/v1/audio/

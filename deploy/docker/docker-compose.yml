@@ -1758,6 +1758,70 @@ services:
       # crash-looped this container and returned 502 on chat-hive.scubed.co.
       PGVECTOR_DB_URL: ${SUPABASE_DB_POOL_URL_LIBPQ:-${SUPABASE_DB_URL:-}}
       RAG_TOP_K: "5"
+      # Issue #1609: the two knobs that decide the SHAPE of a document's
+      # embedding traffic, both of which upstream defaults to the shape that
+      # took web search down. RAG_EMBEDDING_BATCH_SIZE defaults to 1, so Open
+      # WebUI sends one HTTP request per chunk, and
+      # RAG_EMBEDDING_CONCURRENT_REQUESTS defaults to 0, which
+      # get_embedding_function reads as "build no semaphore" and so fires
+      # every one of those requests at once through asyncio.gather
+      # (retrieval/utils.py).
+      #
+      # Five fetched pages chunk to tens of chunks at the upstream CHUNK_SIZE
+      # of 1000 characters, so one web search opened tens of simultaneous
+      # POSTs to /v1/embeddings, part of the burst came back 429,
+      # save_docs_to_vector_db raised, and the answer arrived with no sources
+      # at all while the model denied having web access. Reproduced live three
+      # times on 2026-08-31.
+      #
+      # Which 429 that was is NOT established, and nothing here depends on it.
+      # A 429 on this route can come from four places, and the log line the
+      # issue captured is aiohttp's status reason phrase, which cannot tell
+      # them apart: the limiter verdict and the fail-closed limiter-backend
+      # arm (internal/authz/authorizer.go, both of which PR #1557's all-zero
+      # default policy should have taken out of play), the reservation guard
+      # mapping a credit-policy 409 onto 429 (internal/inference/
+      # reservation_guard.go), and a provider 429 relayed verbatim by
+      # internal/inference/orchestrator.go. That last one is a live candidate
+      # rather than a footnote: the primary embedding route is
+      # nvidia/llama-nemotron-embed-vl-1b-v2:free (deploy/litellm/config.yaml)
+      # and free-tier request quotas are per minute, so 200 requests in a
+      # couple of seconds is an ordinary way to earn one. The two arms are
+      # distinguishable after the fact -- the relay writes a usage_events row
+      # and a provider_blind_upstream_error log line, the reservation guard
+      # returns before recordErrorEvent and leaves nothing -- but a burst of
+      # 200 single-chunk calls is the wrong shape for every one of them, which
+      # is why this fix is the shape and not a ceiling.
+      #
+      # 100 chunks per request keeps a request body near 100 KB, well inside
+      # edge-api's 10 MiB cap (apps/edge-api/internal/errors/codes.go,
+      # MaxRequestBodyBytes), and holds a five page search to one or two
+      # requests. Both live embedding routes were measured accepting a
+      # 100-element input array before this number was chosen: the free
+      # primary and the paid qwen3-embedding-8b fallback each returned 100
+      # vectors for a 100 KB body, at 16,800 prompt tokens (PR #1617).
+      # The concurrency bound is what stops a LARGER document recreating the
+      # burst: a 10,000 chunk upload becomes 100 requests with at most 4 in
+      # flight, not 10,000 at once.
+      #
+      # The bound is PER DOCUMENT, not per container. The semaphore is built
+      # inside get_embedding_function and save_docs_to_vector_db calls that
+      # once per document, so N documents indexing at once are up to 4N in
+      # flight. Two simultaneous searches are 8, which is still an order of
+      # magnitude below the ~200 that broke this, so it is a real bound rather
+      # than a reduced collision probability -- but size it as 4N when adding
+      # concurrent-user load, not as 4.
+      #
+      # Both are persisted config, so compose alone cannot move them on a
+      # volume that has already booted;
+      # owui-patches/hive_rag_env_config.py reconciles both keys from these
+      # variables on every start. A zero is rejected there rather than
+      # written: the boot reconcile runs non-fatally, so it logs an ERROR and
+      # leaves the persisted row untouched. Name a positive number or leave
+      # the variable unset; a zero does not stop the boot and does not clear
+      # an already-persisted zero.
+      RAG_EMBEDDING_BATCH_SIZE: ${RAG_EMBEDDING_BATCH_SIZE:-100}
+      RAG_EMBEDDING_CONCURRENT_REQUESTS: ${RAG_EMBEDDING_CONCURRENT_REQUESTS:-4}
       # Off by default because this deployment configures no reranking model,
       # and Open WebUI's hybrid path is not merely "vector plus BM25" without
       # one. retrieval/utils.py builds a RerankCompressor for every hybrid

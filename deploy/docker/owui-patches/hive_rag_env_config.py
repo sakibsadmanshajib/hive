@@ -237,6 +237,32 @@ RAG_CONFIG_ENV = {
     # below for the numeric coercion these two need instead.
     "rag.top_k": "RAG_TOP_K",
     "web.search.result_count": "WEB_SEARCH_RESULT_COUNT",
+    # Issue #1609, the two knobs that decide the SHAPE of a document's
+    # embedding traffic rather than its destination. Upstream defaults both to
+    # the shape that took web search down: RAG_EMBEDDING_BATCH_SIZE is 1, so
+    # one HTTP request carries one chunk, and
+    # RAG_EMBEDDING_CONCURRENT_REQUESTS is 0, which get_embedding_function
+    # reads as "build no semaphore" and so fires every one of those requests
+    # at once through asyncio.gather (retrieval/utils.py). Five fetched pages
+    # chunk to tens of chunks, so one web search opened tens of simultaneous
+    # POSTs to the gateway embeddings route, edge-api refused part of the
+    # burst with 429, and the search answered with no sources at all.
+    #
+    # Reconciled rather than only set in docker-compose.yml, and this half is
+    # the load-bearing one: both are persisted config, so a volume that has
+    # already booted keeps the value its first boot seeded and no compose
+    # change reaches it. The demo box has been up since long before either
+    # variable appeared in compose, so unless an administrator has since
+    # changed them in Settings it is holding 1 and 0 today.
+    #
+    # Both are read live, not frozen, so reconciling them at startup is
+    # sufficient: RETRIEVAL_CONFIG_KEYS in routers/retrieval.py maps both
+    # names to these keys, and get_retrieval_config() rebuilds its
+    # RetrievalConfig from Config.get_many on every call, which is the object
+    # save_docs_to_vector_db hands to get_embedding_function for each
+    # document.
+    "rag.embedding_batch_size": "RAG_EMBEDDING_BATCH_SIZE",
+    "rag.embedding_concurrent_requests": "RAG_EMBEDDING_CONCURRENT_REQUESTS",
     # Corrected post-review (PR #1582): these five were first placed on
     # ENVIRONMENT_ONLY_ENV_VARS below on the false premise that utils/oauth.py
     # reads every oauth.* value as a frozen module constant. Two of them,
@@ -495,11 +521,44 @@ LIST_KEYS = frozenset({"rag.file.allowed_extensions"})
 
 # Keys Open WebUI stores as a JSON integer, coerced the same way upstream's
 # own parse does (`int(os.getenv(...))`). A raw string here is not merely
-# cosmetic: both flow into a `k=` argument the retrieval/search call sites
-# pass straight to a vector-store query (issue #1575 audit), so leaving them
-# as strings risks a TypeError deep in a request path rather than a config
-# value simply being ignored.
-INT_KEYS = frozenset({"rag.top_k", "web.search.result_count"})
+# cosmetic: the first two flow into a `k=` argument the retrieval/search call
+# sites pass straight to a vector-store query (issue #1575 audit), and the
+# other two are used as arithmetic, a slice bound and a semaphore size, both
+# of which raise TypeError on a string. So leaving any of them a string risks
+# an error deep in a request path rather than a config value simply being
+# ignored.
+INT_KEYS = frozenset(
+    {
+        "rag.top_k",
+        "web.search.result_count",
+        "rag.embedding_batch_size",
+        "rag.embedding_concurrent_requests",
+    }
+)
+
+# The INT_KEYS members that must additionally be at least 1 (issue #1609).
+# Zero is a legal integer for both and a broken value for both, in opposite
+# directions. rag.embedding_batch_size reaches range(0, len(texts), 0) inside
+# get_embedding_function, which raises on every document;
+# rag.embedding_concurrent_requests treats 0 as "no semaphore at all", which
+# is the unbounded burst this issue exists to end.
+#
+# What "refused" means here, precisely, because the two callers differ. Under
+# `fatal=True` (the CI/self-check path) a zero raises. Under `fatal=False`,
+# which is what the boot splice deliberately uses since the 2026-08-30
+# outage, `_refuse` logs at ERROR and the key is skipped, so the boot starts
+# normally and the persisted row keeps whatever it already held -- which, on
+# a volume seeded from DEFAULT_CONFIG, is the unbounded 0. So this rejects the
+# write, it does not repair the row and it does not stop the container.
+#
+# Clamping to 1 on the non-fatal path was considered and rejected: 1 is the
+# correct floor for the concurrency knob but is exactly the unbatched,
+# one-request-per-chunk batch size that caused this defect, so a single clamp
+# constant would silently re-arm one half of the fix while appearing to
+# repair it. An operator who wants a bound names a positive number.
+POSITIVE_INT_KEYS = frozenset(
+    {"rag.embedding_batch_size", "rag.embedding_concurrent_requests"}
+)
 
 # Keys Open WebUI stores as a JSON list, comma-split like LIST_KEYS but
 # case-preserving and with no dot to strip: role/group identifiers, not file
@@ -852,14 +911,28 @@ def overrides(environ, fatal: bool = True) -> dict:
                 _refuse(
                     f"{variable} must be a whole, non-negative number, got "
                     f"{value!r}. {key} is passed straight into a "
-                    f"vector-store or web-search result count, and a value "
-                    f"int() rejects, or a negative one a query would not "
-                    f"expect, would surface as an unhandled error on every "
-                    f"request that reads it instead of at boot.",
+                    f"vector-store or web-search result count, an embedding "
+                    f"batch size or a concurrency bound, and a value int() "
+                    f"rejects, or a negative one a query would not expect, "
+                    f"would surface as an unhandled error on every request "
+                    f"that reads it instead of at boot.",
                     fatal,
                 )
                 continue
-            applied[key] = int(value)
+            parsed = int(value)
+            if key in POSITIVE_INT_KEYS and parsed < 1:
+                _refuse(
+                    f"{variable} must be at least 1, got {value!r}. Zero is "
+                    f"a legal integer here and a broken one: a batch size of "
+                    f"0 makes every embedding call raise, and a concurrency "
+                    f"of 0 means no bound at all, which is the unbounded "
+                    f"burst issue #1609 exists to end. This value is not "
+                    f"written and the persisted one is left as it was, which "
+                    f"may itself be an unbounded 0: name a positive number.",
+                    fatal,
+                )
+                continue
+            applied[key] = parsed
         else:
             applied[key] = value
 
