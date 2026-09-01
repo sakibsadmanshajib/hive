@@ -117,9 +117,15 @@ def _safe_destination(url) -> str:
     """scheme://host:port, for the log line.
 
     The full URL is not logged. A connection base URL is administrator supplied
-    and can legally embed userinfo (`https://user:secret@host/v1`), and this
-    module exists because a credential reached somewhere it should not have.
-    `urlparse().hostname` drops userinfo, and the path and query go with it.
+    and can legally embed userinfo, in the shape scheme://<user>:<password>@host,
+    and this module exists because a credential reached somewhere it should not
+    have. `urlparse().hostname` drops userinfo, and the path and query go with
+    it.
+
+    The example above is spelled with placeholders rather than as a URI
+    literal on purpose: a literal of that shape is exactly what secret scanning
+    flags, and one in the test fixture opened a GitGuardian incident on the
+    first pass of this change.
     """
     parsed = urlparse(_normalize(url))
     if not parsed.scheme or not parsed.hostname:

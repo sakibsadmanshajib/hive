@@ -122,7 +122,7 @@ VENDOR_MODEL = "vendor-task-model"
 FAKE_TOKEN = "Bearer SYNTHETIC-NOT-A-REAL-TOKEN-1578"
 FAKE_CHAT_ID = "chat-0000-synthetic"
 # The redaction leg needs a connection URL of the shape
-# scheme://user:password@host/path?query. Held as parts and assembled at the
+# scheme://<user>:<password>@host/path?query. Held as parts and assembled at the
 # call site, so the file contains no basic-auth literal for secret scanning to
 # flag; the first pass of this pull request did, and GitGuardian was right to
 # open an incident on it even though the value was invented.
@@ -704,7 +704,7 @@ def main() -> int:
         helper.strip_internal_metadata(
             {"__metadata": {"upstream_auth": FAKE_TOKEN, "chat_id": FAKE_CHAT_ID}},
             # Assembled from parts rather than written as one literal. A base
-            # URL of the shape scheme://user:password@host is what this leg has
+            # URL of the shape scheme://<user>:<password>@host is what this leg has
             # to exercise, and spelling it out inline is what secret scanning is
             # supposed to flag, so it is not spelled out inline.
             f"https://{FAKE_URL_USER}:{FAKE_URL_PASSWORD}@api.some-vendor.invalid"
