@@ -93,16 +93,26 @@ const freePoolDailyCappedProvider = "gemini"
 // pool row on the same provider, which catches a re-add under a new route id.
 // The ceiling, stated so this file is not over-trusted on its own:
 // foldMigrations is an offline approximation of the migration chain and reads
-// only INSERT tuples and single-row `UPDATE ... WHERE route_id = '...'`. A
-// future migration that re-enables this route through a join-form or IN-list
-// UPDATE would be invisible here. free_pool_capability_truth_test.go documents
-// that limit in full and the same limit applies to every assertion below.
+// only INSERT tuples and single-row `UPDATE ... WHERE route_id = '...'`.
+// free_pool_capability_truth_test.go documents that limit in full and it
+// applies to every assertion below, but the specific shape it misses is worth
+// naming here rather than left as a general caveat, because it is the first
+// thing somebody re-enabling a whole provider would reach for:
+//
+//	UPDATE public.provider_routes SET health_state = 'healthy'
+//	 WHERE alias_id = 'hive-free' AND provider = 'gemini';
+//
+// `updateAssignments` keys on `route_id`, so a statement with no `route_id`
+// predicate is invisible to both assertions below and this guard would stay
+// green through it. Closing that needs the offline reader to understand
+// predicate-form updates, which is a change to the shared fold rather than to
+// this file, and it is not attempted here.
 func TestFreePoolExcludesTheDailyCappedMember(t *testing.T) {
 	state := foldMigrations(t)
 
 	route, ok := state.routes[freePoolDailyCappedRoute]
 	if !ok {
-		t.Fatalf("no provider_routes row survives the migration chain for %s; it is disabled rather than deleted on purpose, so that it stays readable", freePoolDailyCappedRoute)
+		t.Fatalf("no provider_routes row survives the migration chain for %s. Either it was DELETED, or the fold stopped reading the statement that inserts it. The member is meant to sit at health_state 'disabled' rather than be deleted, so that the reason it left stays readable; if deleting it was deliberate, this guard has to be rewritten rather than made to pass", freePoolDailyCappedRoute)
 	}
 	if !strings.EqualFold(route["health_state"], "disabled") {
 		t.Errorf(
@@ -119,7 +129,11 @@ func TestFreePoolExcludesTheDailyCappedMember(t *testing.T) {
 		if strings.EqualFold(row["health_state"], "disabled") {
 			continue
 		}
-		if row["provider"] == freePoolDailyCappedProvider {
+		// Case-insensitive on purpose. These values are folded out of raw
+		// migration text rather than read from the database, so nothing has
+		// normalised them, and a row inserted as 'Gemini' would otherwise
+		// satisfy this assertion while failing its intent.
+		if strings.EqualFold(row["provider"], freePoolDailyCappedProvider) {
 			offenders = append(offenders, routeID)
 		}
 	}
