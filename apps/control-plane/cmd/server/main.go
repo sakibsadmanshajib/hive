@@ -509,13 +509,20 @@ func main() {
 		apikeysSvc = apikeys.NewService(apikeysRepo, apikeys.NewRedisSnapshotCache(redisClient))
 		apikeysHandler = apikeys.NewHandler(apikeysSvc, accountsSvc).WithResolveHealth(resolveHealth)
 
+		// Built here rather than beside the rest of the budgets wiring below
+		// because the accounting service takes the spend counter at
+		// construction, before the reservation reaper starts reading it from
+		// another goroutine.
+		workspaceBudgetsRepo := budgets.NewWorkspacePgxRepository(pool)
+
 		accountingRepo := accounting.NewPgxRepository(pool)
 		// Postgres advisory locker serializes the credit-reservation critical
 		// section across all control-plane instances, preventing the TOCTOU
 		// credit double-spend (issue #106). Single-instance in-process locking
 		// is the NewService default; this upgrades it to be cross-process safe.
 		accountingSvc = accounting.NewService(accountingRepo, ledgerSvc, usageSvc, apikeysSvc).
-			WithAccountLocker(accounting.NewPgxAccountLocker(pool))
+			WithAccountLocker(accounting.NewPgxAccountLocker(pool)).
+			WithSpendCounter(buildSpendCounter(redisClient, workspaceBudgetsRepo))
 		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
 
 		// Issue #616 — stranded-hold reaper. A finalize that fails loses its
@@ -549,7 +556,6 @@ func main() {
 		}
 
 		budgetsRepo := budgets.NewPgxRepository(pool)
-		workspaceBudgetsRepo := budgets.NewWorkspacePgxRepository(pool)
 		emailNotifier := budgets.NewLogNotifier(slog.Default())
 		alertNotifier := budgets.NewCompositeNotifier(nil, slog.Default())
 		budgetsSvc := budgets.NewServiceWithWorkspace(budgetsRepo, emailNotifier, workspaceBudgetsRepo, alertNotifier, redisClient)
@@ -1667,6 +1673,30 @@ func main() {
 		log.Fatalf("server shutdown error: %v", err)
 	}
 	log.Println("control-plane stopped")
+}
+
+// buildSpendCounter wires the month-to-date spend counter the edge-api budget
+// gate reads (issue #1651). Returns a nil SpendCounter, not a typed nil, when
+// there is no Redis to write to, so settlement skips it cleanly.
+//
+// The conversion rate is resolved once, here, rather than per settlement: the
+// only way it can fail is a malformed HIVE_USD_BDT_RATE, which an operator set
+// by hand, and which also breaks invoice generation and the spend-alert cron
+// (both fail closed on it since #1657). A typo in a money-path configuration
+// value should stop the process at boot where it is unmissable, not surface as
+// a per-request error nobody reads. Unset is the common case and never fails:
+// payments.PlatformUSDBDTRate falls back to the documented default.
+func buildSpendCounter(redisClient *goredis.Client, repo budgets.WorkspaceBudgetRepository) accounting.SpendCounter {
+	if redisClient == nil {
+		log.Println("WARNING: no Redis; workspace budget hard caps will not be enforced (no month-to-date counter)")
+		return nil
+	}
+	rate, err := payments.PlatformUSDBDTRate()
+	if err != nil {
+		log.Fatalf("budget spend counter: %v", err)
+	}
+	log.Printf("budget spend counter ready (usd to bdt rate=%s source=%s)", rate.Display, rate.Source)
+	return budgets.NewMTDSpendCounter(redisClient, repo, rate, slog.Default())
 }
 
 func resolveLiteLLMBaseURL() string {
