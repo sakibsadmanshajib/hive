@@ -94,7 +94,17 @@ func aliasCandidates(t *testing.T, state effectiveCatalog, aliasID string) []Rou
 		route := state.routes[routeID]
 		caps, ok := state.caps[routeID]
 		if !ok {
-			t.Fatalf("no provider_capabilities row survives the migration chain for %s", routeID)
+			// Inner join, the same rule advertisedAliases and
+			// ListRouteToolCapabilities apply: a route with no capabilities row
+			// can never be selected, so it is not a candidate. Fataling here
+			// instead made the two helpers model the same catalog differently,
+			// and would have aborted the blast-radius loop below with a message
+			// about a missing row on an alias whose identity property was fine.
+			//
+			// Nothing is lost by not fataling: TestFreePoolIsUniformlyToolCapable
+			// asserts outright that every ACTIVE pool member has a capabilities
+			// row, which is where that claim belongs.
+			continue
 		}
 		priority := 10
 		if p, err := strconv.Atoi(strings.TrimSpace(route["priority"])); err == nil {
