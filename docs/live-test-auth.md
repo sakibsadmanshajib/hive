@@ -292,7 +292,7 @@ shape they now share is the one to copy:
 
 | script | account | how it behaves now |
 | --- | --- | --- |
-| `scripts/seed-demo-owner.py` | `demo@hive-demo.invalid` | `password_to_set` leaves an existing account alone unless `HIVE_DEMO_PASSWORD` is set. Creation still generates one. |
+| `scripts/seed-demo-owner.py` | `demo@hive-demo.invalid` | `password_to_set` leaves an existing account alone unless `HIVE_DEMO_PASSWORD` is set. Creation still generates one. `HIVE_DEMO_CREDITS` optionally funds the workspace: no default, unset grants nothing, and at most one grant per account ever (issue #1599). |
 | `scripts/seed-owui-e2e-user.py` | `owui-e2e@…`, `owui-e2e-bootstrap@…` | Same helper. Prints a `PASSWORD` line only for a password it actually set. `OWUI_E2E_RUN_KEY` namespaces both addresses per run, which is how the nightly gets a usable credential without touching a shared one, and `sweep_stale_fixture_users` clears what earlier runs left. |
 | `scripts/verify-rag-roundtrip.py` | `rag-verify-e2e@hive-e2e.invalid` | Never had a password to begin with: signs in through the admin one-time-token mint (same protocol as `live-auth.mjs`, reimplemented in Python since the script has no other reason to depend on a browser or `@supabase/ssr`). No `RAG_VERIFY_PASSWORD` and nothing to save. |
 

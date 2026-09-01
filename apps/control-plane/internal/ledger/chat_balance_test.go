@@ -115,13 +115,68 @@ func TestChatBalanceHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown email is 404 without leaking identity state", func(t *testing.T) {
+	// Issue #1599. A principal whose tenant has no billing account holds no
+	// credit, which is a zero balance, not a missing resource. The 404 this
+	// used to answer rendered no banner at all, so a workspace that could not
+	// chat looked exactly like one that merely had nothing to show, and the
+	// only surface naming the problem was edge-api's refusal on the next
+	// message.
+	t.Run("unbilled email reads as a zero balance without leaking identity state", func(t *testing.T) {
 		rec := do(http.MethodPost, `{"email":"stranger@test.local"}`)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("status %d", rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
+		}
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		for _, key := range []string{"posted_credits", "reserved_credits", "available_credits", "usage_today_credits"} {
+			value, ok := got[key]
+			if !ok {
+				t.Fatalf("missing %s in %s", key, rec.Body.String())
+			}
+			// Checked, not asserted bare: a string or a null here would panic
+			// the test instead of naming the key, which is the one thing this
+			// loop exists to report.
+			number, ok := value.(float64)
+			if !ok {
+				t.Fatalf("%s is %T, want a number: %s", key, value, rec.Body.String())
+			}
+			if number != 0 {
+				t.Fatalf("%s = %v, want 0", key, number)
+			}
 		}
 		if strings.Contains(strings.ToLower(rec.Body.String()), "stranger") {
-			t.Fatalf("error echoes the email: %s", rec.Body.String())
+			t.Fatalf("response echoes the email: %s", rec.Body.String())
+		}
+	})
+
+	// The answer for an unbilled principal must be byte-identical to a real
+	// zero balance: anything that distinguishes the two turns this route into
+	// an oracle for whether an email is billed at all.
+	t.Run("unbilled and genuinely-zero answers are indistinguishable", func(t *testing.T) {
+		// Its own fixture and its own mux: writing the funded-but-empty account
+		// into the shared repo above would leave a mutation behind for every
+		// subtest added after this one.
+		zeroRepo := newStubRepo()
+		zeroAccount := uuid.New()
+		zeroRepo.emailAccounts["broke@test.local"] = zeroAccount
+		zeroRepo.entries[zeroAccount] = []LedgerEntry{
+			{EntryType: EntryTypeGrant, CreditsDelta: 1000},
+			{EntryType: EntryTypeUsageCharge, CreditsDelta: -1000},
+		}
+		zeroMux := http.NewServeMux()
+		RegisterChatBalanceRoute(zeroMux, NewService(zeroRepo), func(h http.Handler) http.Handler { return h })
+
+		unbilled := do(http.MethodPost, `{"email":"stranger@test.local"}`)
+
+		req := httptest.NewRequest(http.MethodPost, ChatBalanceRoute,
+			strings.NewReader(`{"email":"broke@test.local"}`))
+		zero := httptest.NewRecorder()
+		zeroMux.ServeHTTP(zero, req)
+		if unbilled.Code != zero.Code || unbilled.Body.String() != zero.Body.String() {
+			t.Fatalf("unbilled %d %s differs from zero %d %s",
+				unbilled.Code, unbilled.Body.String(), zero.Code, zero.Body.String())
 		}
 	})
 

@@ -38,6 +38,25 @@ surface demo.
 
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 Optional env: HIVE_DEMO_PASSWORD -- set the account's password to this value.
+Optional env: HIVE_DEMO_CREDITS -- grant this many credits to the account, as
+one append-only public.credit_ledger_entries row of entry_type 'grant' whose
+metadata states why it exists. There is no default and no implicit grant:
+unset means the workspace is provisioned with a zero balance, because credit
+on Hive is owner-discretionary (no trial, no signup bonus, no referral
+reward). Unit is credits, not dollars; 1 USD = 1,000,000,000 credits.
+
+  AT MOST ONE GRANT PER ACCOUNT, EVER. The idempotency key carries the
+  account and not the amount (grant_idempotency_key), so a later run with a
+  different amount is refused by the ledger's unique index rather than added
+  to the first. This run says so on stderr, naming what the account already
+  holds, instead of reporting a silent no-op. That is deliberate: this script
+  is idempotent by contract and re-running it is the documented recovery
+  procedure, so a version that stacked grants would move real money by an
+  unbounded amount under correct-looking operator behaviour. Changing the
+  funding afterwards belongs on the platform admin credit grants surface,
+  which records who granted it and why. See grant_ledger_row for the
+  deliberate deviation from grants.CreateWithLedger and what a seeded grant
+  therefore does not carry.
 Optional env (identity, see env_or): HIVE_DEMO_EMAIL, HIVE_DEMO_TENANT_SLUG,
 HIVE_DEMO_TENANT_NAME, HIVE_DEMO_ACCOUNT_SLUG, HIVE_DEMO_ACCOUNT_NAME. Set
 all three of email/tenant-slug/account-slug together to provision a second,
@@ -50,6 +69,11 @@ of the separate identity the operator meant to create.
 Prints to stdout (and nothing else):
   EMAIL=<email>
   PASSWORD=<password>   only when this run actually set a password
+
+Both lines are printed as soon as the identity exists, before the tenant,
+account and billing rows are provisioned, so a run that fails partway still
+hands its caller the credential it just minted. Branch on the exit status, not
+on the presence of these lines, to decide whether the workspace is complete.
 
 A PASSWORD line appears when the account was created by this run, or when
 HIVE_DEMO_PASSWORD contains a non-whitespace value. For an account that already
@@ -69,6 +93,13 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+# `scripts/` is sys.path[0] for `python3 scripts/<name>.py`, including the
+# relative invocation in demo-chat-settings-check.yml, so this plain import
+# needs no packaging. See the module's own docstring for why the tenant to
+# account mapping is shared with seed-owui-e2e-user.py rather than copied.
+import shared_billing_mapping
+
 
 def env_or(name: str, default: str) -> str:
     """An optional env override for one of the identity constants below.
@@ -232,6 +263,221 @@ def password_to_set(user_exists: bool, env_password: str, new_user_password: str
     return None
 
 
+# Credit unit, owner directive 2026-08-23:
+# supabase/migrations/20260823_40_credit_unit_rescale_billion.sql. Kept here as
+# a display and validation constant only; this script never converts an amount,
+# it grants exactly the credits it was given.
+CREDITS_PER_USD = 1_000_000_000
+
+# public.credit_ledger_entries.credits_delta is a bigint.
+MAX_BIGINT = 2**63 - 1
+
+
+# The knobs THIS script exposes for moving an identity off a collision, handed
+# to the shared guard so its exit message names a variable that exists here.
+BILLING_MAPPING_OPTIONS = ("HIVE_DEMO_TENANT_SLUG", "HIVE_DEMO_ACCOUNT_SLUG")
+
+
+def credits_to_grant(raw: str | None) -> int | None:
+    """Credits this run should grant, or None to grant nothing.
+
+    Credit on Hive is owner-discretionary: there is no trial, no signup bonus
+    and no referral reward, and no code path grants credit implicitly. So the
+    amount is passed in through HIVE_DEMO_CREDITS or nothing is granted at all,
+    and there is deliberately no default -- an operator funding a demo
+    workspace says how much, in writing, every time.
+
+    Anything that is not a positive integer is refused loudly rather than
+    rounded, truncated or quietly skipped: a typo in a money amount must not
+    turn into a silent zero, and a fractional or exponent-notation amount has
+    no meaning in a bigint ledger column. Unit is CREDITS, not dollars, matching
+    public.credit_ledger_entries.credits_delta directly so nothing here does
+    money arithmetic (1 USD = 1,000,000,000 credits since 2026-08-23; see
+    supabase/migrations/20260823_40_credit_unit_rescale_billion.sql).
+    """
+    value = (raw or "").strip()
+    if not value:
+        return None
+    # int() accepts leading signs and surrounding whitespace but not floats,
+    # exponents or separators, which is exactly the acceptance surface wanted.
+    # str.isdigit() first so "+5" and "5_0" are refused rather than accepted,
+    # and isascii() with it because isdigit() is true for characters int()
+    # itself rejects ("2" superscript, for one), which would raise instead of
+    # printing the sentence below.
+    if not (value.isascii() and value.isdigit()) or int(value) <= 0:
+        print(
+            f"error: HIVE_DEMO_CREDITS must be a positive integer number of credits, got "
+            f"{value!r}. Leave it unset to grant nothing (credit on Hive is owner-discretionary; "
+            f"1 USD = {CREDITS_PER_USD:,} credits).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if int(value) > MAX_BIGINT:
+        # credits_delta is a bigint. Caught here rather than in Postgres, which
+        # would refuse the write only after the whole workspace had already
+        # been provisioned by the steps above.
+        print(
+            f"error: HIVE_DEMO_CREDITS is {value}, past the largest value the credit ledger can "
+            f"hold ({MAX_BIGINT}). The unit is credits, not dollars: 1 USD = "
+            f"{CREDITS_PER_USD:,} credits.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return int(value)
+
+
+def format_usd_from_credits(credits: int) -> str:
+    """The credit amount as dollars, for the confirmation line only.
+
+    The unit an operator passes is credits, and somebody thinking in dollars is
+    off by a billion in either direction, so the run says what it granted in
+    both units and a fat-fingered unit is visible immediately instead of at the
+    next invoice. Integer arithmetic throughout: no float touches a money
+    quantity here, displayed or not. Truncating, never rounding, so this line
+    can never overstate what was granted.
+    """
+    dollars, remainder = divmod(credits, CREDITS_PER_USD)
+    cents = remainder * 100 // CREDITS_PER_USD
+    return f"${dollars}.{cents:02d}"
+
+
+def grant_idempotency_key(account_id: str) -> str:
+    """The ledger key for a seeded grant, keyed on the account ALONE.
+
+    The amount is deliberately NOT in the key. This script is idempotent by
+    contract -- its own docstring says so, docs/live-test-auth.md says so, and
+    three workflows re-run it as the recovery procedure -- and re-running it is
+    the documented fix for the very row that made issue #1599. With the amount
+    in the key, a run at 10,000,000,000 followed by a corrected run at
+    20,000,000,000 would leave 30,000,000,000 on the account: two correct
+    looking operator actions, an unbounded sum, and nothing in the output
+    saying the first grant was still there.
+
+    So the unique index on (account_id, entry_type, idempotency_key) is made to
+    refuse a second seeded grant whatever amount it carries. The seeder places
+    at most one grant per account, ever. A deliberate top-up is a second,
+    different decision and belongs on the platform admin grants surface, which
+    records who granted it and why.
+    """
+    return f"demo-seed-grant:{account_id}"
+
+
+def grant_ledger_row(account_id: str, credits: int) -> dict:
+    """The one append-only ledger row that carries a seeded demo grant.
+
+    Every credit this script grants exists as exactly one
+    public.credit_ledger_entries row of entry_type 'grant', stating in its own
+    metadata why it exists and what wrote it. There is no path here that moves
+    a balance without leaving that row behind, and the row is inserted, never
+    merged: the ledger is append-only, so an existing entry is left exactly as
+    it was written.
+
+    DELIBERATE DEVIATION, read this before copying the pattern. The canonical
+    grant path in this repository is grants.Repository.CreateWithLedger
+    (apps/control-plane/internal/grants/repository.go), which writes three rows
+    in one transaction: public.credit_grants, this ledger entry, and a
+    public.credit_idempotency_keys claim. This function writes the middle one
+    only. A grant seeded here therefore has no credit_grants row, so no
+    granted_by_user_id, no reason_note column, no currency, no grant id, and it
+    does NOT appear in grants.Repository.List, which is what the platform admin
+    credit grants surface reads. The balance is unaffected: GetBalance sums
+    credit_ledger_entries directly.
+
+    Why the deviation: credit_grants.granted_by_user_id names a platform admin,
+    and this script deliberately holds no such actor. It writes
+    is_platform_admin false on the account it provisions and only ever carries
+    the deployment's service role key, never an admin JWT, so there is no
+    honest value to put in that column and inventing one would put a fabricated
+    granting actor into the audit trail. scripts/ci-seed-api-key.sh makes the
+    same call for the same reason. If a seeded grant ever needs to be
+    attributable, the right fix is an operator-run grant through the admin
+    surface, not a synthetic actor here.
+    """
+    return {
+        "account_id": account_id,
+        "entry_type": "grant",
+        "credits_delta": credits,
+        "idempotency_key": grant_idempotency_key(account_id),
+        "metadata": {
+            "reason": "operator-specified demo provisioning grant (HIVE_DEMO_CREDITS)",
+            "source": "scripts/seed-demo-owner.py",
+        },
+    }
+
+
+def provision_credit_grant(request, rest, headers, account_id: str, credits: int) -> None:
+    """Post this account's one seeded grant, or say why it did not.
+
+    A function rather than inline in main so the only money write in this
+    script has a self-check behind it (scripts/test_seed_demo_owner.py).
+
+    The layering is deliberate and is the part worth preserving if this is ever
+    edited. The unique index on (account_id, entry_type, idempotency_key) is
+    what ENFORCES one seeded grant per account; the read below is only
+    LEGIBILITY, so that a refusal names what the account already holds instead
+    of looking like a silent no-op. The insert never trusts that read: it
+    carries the conflict target and ignore-duplicates, and the outcome is
+    decided by the returned representation, so a read that was stale, racing or
+    simply wrong produces a misleading sentence and never a second grant.
+
+    Exits non-zero only when the state is UNKNOWN (a failed lookup, a failed
+    write). A refusal is exit zero on purpose: three workflows re-run this
+    script as their recovery procedure, and turning a correct no-op into a red
+    job would train operators to ignore it.
+    """
+    status, existing = request(
+        rest, headers, "GET", "/credit_ledger_entries",
+        params={
+            "account_id": f"eq.{account_id}",
+            "entry_type": "eq.grant",
+            "idempotency_key": f"eq.{grant_idempotency_key(account_id)}",
+            "select": "credits_delta",
+        },
+    )
+    if status != 200 or existing is None:
+        # A read that failed is not a read that returned nothing.
+        print(f"error: existing grant lookup failed: {status} {existing}", file=sys.stderr)
+        sys.exit(1)
+
+    if existing:
+        held = existing[0]["credits_delta"]
+        print(
+            f"credit grant: skipped, this account already carries a seeded grant of {held} "
+            f"credits ({format_usd_from_credits(held)}). The seeder posts at most one grant "
+            f"per account, so the {credits} in HIVE_DEMO_CREDITS was NOT added and the "
+            "balance is unchanged. To change the funding, use the platform admin credit "
+            "grants surface, which records who granted it and why.",
+            file=sys.stderr,
+        )
+        return
+
+    # Inserted with ignore-duplicates and never merged: the ledger is
+    # append-only, so a replay must leave the existing row byte for byte as it
+    # was written rather than update it. The key carries no amount, so a second
+    # grant of any size collides here and is dropped rather than stacking on
+    # the first.
+    status, body = request(
+        rest, headers, "POST", "/credit_ledger_entries",
+        body=grant_ledger_row(account_id, credits),
+        params={"on_conflict": "account_id,entry_type,idempotency_key"},
+        prefer="resolution=ignore-duplicates,return=representation",
+    )
+    if status not in (200, 201, 204):
+        print(f"error: credit grant failed: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+    if body:
+        print(
+            f"credit grant: ok ({credits} credits, {format_usd_from_credits(credits)}, posted)",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "credit grant: skipped, a concurrent run posted this account's seeded grant "
+            f"first. The {credits} in HIVE_DEMO_CREDITS was NOT added.",
+            file=sys.stderr,
+        )
+
+
 def find_by_slug(rest, headers, table, slug):
     """Returns the row for slug in table, or None. Used by the tenant/account
     collision guards below -- both tables are upserted by slug with the
@@ -303,6 +549,9 @@ def guard_account_slug(existing_account, foreign_owners, user_id):
 
 
 def main() -> None:
+    # Parsed before any write, so a typo in a money amount fails the run
+    # instead of provisioning everything and then refusing at the last step.
+    credits = credits_to_grant(os.environ.get("HIVE_DEMO_CREDITS"))
     supabase_url = env("SUPABASE_URL").rstrip("/")
     service_key = env("SUPABASE_SERVICE_ROLE_KEY")
     headers = {
@@ -358,6 +607,21 @@ def main() -> None:
                 print(f"error: user update failed: {status} {body}", file=sys.stderr)
                 sys.exit(1)
     print(f"user_id={user_id}", file=sys.stderr)
+
+    # The stdout contract is printed HERE, the moment the identity it describes
+    # is committed, rather than at the end of main. For a newly created user
+    # that generated password is the account's only credential, and
+    # password_to_set deliberately never rotates an existing account's, so a
+    # re-run will not mint another one: a run that dies at any later step used
+    # to leave an account nobody could sign in to, and hand its caller
+    # (.github/workflows/demo-chat-settings-check.yml reads this stdout) nothing
+    # to mask or use. Every step below this line is provisioning around an
+    # identity that already exists, so nothing after it can invalidate these
+    # two lines. Callers that need the whole workspace still have the exit
+    # status, which is what they should be branching on.
+    print(f"EMAIL={USER_EMAIL}")
+    if password is not None:
+        print(f"PASSWORD={password}")
 
     # 2. Guard + upsert the demo tenant. slug is user-chosen; an
     # on_conflict=slug upsert with the service-role key would otherwise
@@ -536,9 +800,35 @@ def main() -> None:
             print(f"error: feature gate {key} upsert failed: {status} {body}", file=sys.stderr)
             sys.exit(1)
 
-    print(f"EMAIL={USER_EMAIL}")
-    if password is not None:
-        print(f"PASSWORD={password}")
+    # 8. Map the tenant to the billing account (issue #1599). Without this row
+    # the identity this script provisions can sign in and cannot do anything:
+    # edge-api resolves the caller's tenant through
+    # public.tenant_billing_accounts and refuses every chat, RAG and voice
+    # request with billing_not_configured ("This workspace is not set up for
+    # usage yet"), and the credits route answers no balance at all. Same shape
+    # as the live signup path, signup.EnsureTenantBillingAccount, and the same
+    # omission that made the OWUI shim seed 403 every model listing in #717.
+    shared_billing_mapping.provision_billing_mapping(
+        request, rest, headers, tenant_id, account_id, BILLING_MAPPING_OPTIONS,
+    )
+
+    # 9. Optionally grant credit, and only ever the amount the operator named,
+    # and only if this account carries no seeded grant already. Credit on Hive
+    # is owner-discretionary: no trial, no signup bonus, no referral reward,
+    # and nothing here defaults an amount. Unset means the workspace is
+    # provisioned with a zero balance, which is now a legible state end to end
+    # rather than a dead end (step 8 plus the zero-balance answer on
+    # /internal/chat/credits/balance).
+    if credits is None:
+        print(
+            "credit grant: skipped (HIVE_DEMO_CREDITS unset). The workspace balance stays at "
+            "zero, the chat banner shows 'You're out of credits', and the gateway refuses "
+            "requests with insufficient_quota until credit is added. Set HIVE_DEMO_CREDITS to a "
+            f"positive integer number of credits (1 USD = {CREDITS_PER_USD:,} credits) to fund it.",
+            file=sys.stderr,
+        )
+    else:
+        provision_credit_grant(request, rest, headers, account_id, credits)
 
 
 if __name__ == "__main__":

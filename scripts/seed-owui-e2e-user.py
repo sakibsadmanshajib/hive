@@ -44,7 +44,7 @@ allow-all-models key on an unmapped account answers 403
 account_not_provisioned on model listing, RAG embeddings and TTS alike
 (issue #717). The mapping is 1:1 in both directions, so a deployment that
 passes its own --account-slug must pass its own --tenant-slug as well;
-see provision_billing_mapping.
+see shared_billing_mapping.provision_billing_mapping.
 
 ROTATION AND ACCOUNT SCOPING. Every run mints a fresh key and revokes the
 account's previous ones: a key's raw secret only exists in the response to
@@ -125,6 +125,11 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+
+# scripts/ is sys.path[0] for `python3 scripts/<name>.py`, so this plain
+# import needs no packaging. See the module docstring for why the tenant to
+# account mapping is shared with seed-demo-owner.py rather than copied.
+import shared_billing_mapping
 
 TENANT_SLUG = "owui-e2e"
 TENANT_NAME = "OWUI E2E"
@@ -500,90 +505,12 @@ def rewrite_env_file(path: str, raw_secret: str) -> bool:
     return True
 
 
-def provision_billing_mapping(rest, headers, tenant_id: str, account_id: str) -> None:
-    """Map tenant_id to account_id in public.tenant_billing_accounts.
-
-    That row is what apps/control-plane/internal/apikeys/repository.go resolves
-    an API key's tenant from. Without it edge-api answers 403
-    account_not_provisioned to this shim key on GET /v1/models, on document RAG
-    embeddings and on text-to-speech, even though the key itself is active and
-    allowed every model, which is issue #717: the whole model picker came up
-    empty because this script minted a key on an account no tenant billed.
-
-    Shape follows the live signup path (signup.EnsureTenantBillingAccount): one
-    row, tenant_id plus account_id, no ids invented here. The pairing is
-    asserted rather than derived, because that path's convergence predicate
-    cannot resolve this fixture: the bootstrap member below deliberately has no
-    billing account of its own, which reads as "not converged yet" forever.
-
-    Never moves an existing mapping. The table is 1:1 in both directions
-    (tenant_id is the primary key, account_id is UNIQUE, so an account funds at
-    most one tenant and a credit balance is never double-spent across two).
-    Repointing either side is an operator decision about whose credits pay for
-    whose traffic, so a collision exits non-zero here, before any key is minted
-    or revoked, and names the fix. Two shim accounts cannot share one tenant:
-    that is what --tenant-slug is for."""
-    status, body = request(
-        rest, headers, "GET", "/tenant_billing_accounts",
-        params={"tenant_id": f"eq.{tenant_id}", "select": "account_id"},
-    )
-    if status != 200 or body is None:
-        print(f"error: billing mapping lookup by tenant failed: {status} {body}", file=sys.stderr)
-        sys.exit(1)
-    if body:
-        mapped_account = body[0]["account_id"]
-        if mapped_account == account_id:
-            print("billing mapping: ok (already mapped)", file=sys.stderr)
-            return
-        print(
-            f"error: tenant {tenant_id} already bills to account {mapped_account}, not the shim "
-            f"account {account_id}. One tenant bills to exactly one account, so the key this run "
-            "would mint could never resolve a tenant and would 403 every model listing. Either "
-            "run with --account-slug set to the account that mapping already names, or give this "
-            "shim its own tenant with --tenant-slug.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    status, body = request(
-        rest, headers, "GET", "/tenant_billing_accounts",
-        params={"account_id": f"eq.{account_id}", "select": "tenant_id"},
-    )
-    if status != 200 or body is None:
-        print(f"error: billing mapping lookup by account failed: {status} {body}", file=sys.stderr)
-        sys.exit(1)
-    if body:
-        print(
-            f"error: shim account {account_id} already funds tenant {body[0]['tenant_id']}, not "
-            f"{tenant_id}. An account funds at most one tenant. Either point this run at that "
-            "tenant with --tenant-slug, or mint on a different account with --account-slug.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    status, body = request(
-        rest, headers, "POST", "/tenant_billing_accounts",
-        body={"tenant_id": tenant_id, "account_id": account_id},
-    )
-    if status in (200, 201, 204):
-        print("billing mapping: ok (created)", file=sys.stderr)
-        return
-
-    # A concurrent run can pass both lookups above and insert first, so this
-    # insert can lose on either uniqueness constraint to a row that already
-    # says exactly what this run wanted. Re-read before failing: the same pair
-    # is a success, any other pair is the collision the messages above
-    # describe. Without this, two overlapping runs make one of them fail for no
-    # reason anybody has to act on.
-    reread_status, rows = request(
-        rest, headers, "GET", "/tenant_billing_accounts",
-        params={"tenant_id": f"eq.{tenant_id}", "select": "account_id"},
-    )
-    if reread_status == 200 and rows and rows[0]["account_id"] == account_id:
-        print("billing mapping: ok (a concurrent run created the same pairing first)", file=sys.stderr)
-        return
-    print(f"error: billing mapping insert failed: {status} {body}", file=sys.stderr)
-    sys.exit(1)
+# The knobs THIS script exposes for moving an identity off a collision, handed
+# to the shared guard so its exit message names a flag that exists here. The
+# mapping itself lives in shared_billing_mapping.py: both seeders write that
+# row, and the two copies of the rule drifted once already (this script learned
+# it in issue #717, seed-demo-owner.py had not, which is issue #1599).
+BILLING_MAPPING_OPTIONS = ("--tenant-slug", "--account-slug")
 
 
 def provision_tenant_member(
@@ -759,7 +686,9 @@ def main() -> None:
     # revoked, and the deployment keeps working on whatever it already had.
     # Without this row every key minted here 403s account_not_provisioned on
     # model listing, RAG embeddings and TTS (issue #717).
-    provision_billing_mapping(rest, headers, tenant_id, shim_account_id)
+    shared_billing_mapping.provision_billing_mapping(
+        request, rest, headers, tenant_id, shim_account_id, BILLING_MAPPING_OPTIONS,
+    )
 
     # 5. Mint the new shim key FIRST, and revoke the account's previous keys
     # only in step 7, after every configured consumer carries the new value.
