@@ -18,6 +18,8 @@ const component = (rel: string): string => read(`../components/${rel}`);
 
 const route = (rel: string): string => read(`../../routes/${rel}`);
 
+const chat = (): string => component('chat/Chat.svelte');
+
 describe('one conversation, one model (issue #1626)', () => {
 	const modelSelector = () => component('chat/ModelSelector.svelte');
 
@@ -34,9 +36,26 @@ describe('one conversation, one model (issue #1626)', () => {
 	// Removing the button alone would have left the capability half present:
 	// a `models=` query parameter, a folder carrying several model ids, and any
 	// conversation saved while the button existed all still arrive as a longer
-	// list. The clamp is what makes the drawn model the dispatched model.
-	it('clamps the bound selection to a single model', () => {
-		expect(modelSelector()).toContain('selectedModels.length !== 1');
+	// list. The clamp is what makes the drawn model the dispatched model, and
+	// it belongs in the component that DECLARES the array, not in the chip that
+	// draws it: this one reaches the send path only while it is mounted, so an
+	// invariant living here would hold because of a template rather than
+	// because of the state machine.
+	it('clamps the bound selection where the state is owned, not in the chip', () => {
+		expect(chat()).toContain("selectedModels = [selectedModels[0] ?? ''];");
+		expect(modelSelector()).not.toContain('selectedModels.length !== 1');
+	});
+
+	// The clamp assigns `selectedModels`, and Chat.svelte saves that array back
+	// to the open folder on every assignment. Left alone, opening a chat inside
+	// a folder that still holds several model ids would PATCH that folder down
+	// to one on page load, with no user action, converging so that a reload
+	// cannot undo it. A destructive migration of somebody's configuration is a
+	// decision, not a render side effect, so the save refuses to narrow.
+	it('refuses to let the clamp narrow a folder model list', () => {
+		const source = chat();
+		expect(source).toContain('folderModelIds.length > 1');
+		expect(source).toContain('equal(selectedModels, folderModelIds.slice(0, 1))');
 	});
 
 	it('drops the multi-model permission branch that gated the button', () => {
@@ -104,8 +123,21 @@ describe('Enter sends on every viewport (issue #1619)', () => {
 	// unreachable there and Enter only ever inserted a newline.
 	it('does not gate the send path on touch capability', () => {
 		const source = messageInput();
-		expect(source).not.toContain('ontouchstart');
-		expect(source).not.toContain('maxTouchPoints');
+		// The composed expression that was wrong, rather than the two capability
+		// probes on their own: a future press-and-hold or drag affordance in
+		// this same file may legitimately feature-detect touch, and a guard that
+		// fails for that reason gets deleted rather than narrowed.
+		expect(source).not.toContain('!$mobile ||');
+		expect(source).not.toContain('!$mobile &&');
+		// And the shape that has to hold: nothing between the suggestions check
+		// and the composition guard tests the viewport. Asserted on the slice
+		// rather than on exact indentation, which a formatter is free to move.
+		const branch = source.slice(
+			source.indexOf('if (!suggestionsContainerElement) {'),
+			source.indexOf('if (inOrNearComposition(e)) {')
+		);
+		expect(branch).not.toContain('$mobile');
+		expect(branch.length).toBeGreaterThan(0);
 	});
 
 	it('keeps the IME guard, which is a different thing entirely', () => {
@@ -116,5 +148,25 @@ describe('Enter sends on every viewport (issue #1619)', () => {
 		expect(messageInput()).toContain(
 			'shiftEnter={!($settings?.ctrlEnterToSend ?? false)}'
 		);
+	});
+});
+
+describe('the channel composer keeps the same defect, on purpose (issue #1664)', () => {
+	// `channel/MessageInput.svelte` carries the gate this change removes from the
+	// chat composer, character for character. It is deliberately not fixed here:
+	// ENABLE_CHANNELS defaults to false and nothing under deploy/ or
+	// .github/workflows/ sets it, so the surface is unreachable on every
+	// deployment this repository ships and cannot be given the visual proof the
+	// merge policy requires before a UI change merges.
+	//
+	// This guard PINS the known defect rather than asserting its absence, which
+	// reads oddly and is the point: the day somebody fixes it, or enables
+	// channels and trips over it, this test fails and forces the record to be
+	// updated instead of leaving the reasoning to live only in a merged pull
+	// request nobody will find from there. Tracked in issue #1664.
+	it('still gates its send path on viewport and touch', () => {
+		const source = component('channel/MessageInput.svelte');
+		expect(source).toContain('!$mobile ||');
+		expect(source).toContain('maxTouchPoints');
 	});
 });

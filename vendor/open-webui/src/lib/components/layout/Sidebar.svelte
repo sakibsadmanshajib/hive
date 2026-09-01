@@ -102,6 +102,11 @@
 
 	// Pagination variables
 	let chatListLoading = false;
+	// Component local, while its other half `currentChatPage` is a store, so the
+	// whole-list refreshes elsewhere reset the cursor and cannot re-arm this
+	// terminator. Above one page that leaves the scroll sentinel hidden after a
+	// refresh until a remount. Pre-existing, unchanged here, and tracked in
+	// issue #1665 rather than left undocumented.
 	let allChatsLoaded = false;
 
 	// What one page of GET /api/v1/chats/ actually returns: `limit = 60` in

@@ -9,7 +9,6 @@
 	const i18n = getContext('i18n');
 
 	export let selectedModels = [''];
-	export let disabled = false;
 
 	export let showSetDefault = true;
 
@@ -38,24 +37,11 @@
 		await updateUserSettings(localStorage.token, { ui: $settings });
 	};
 
-	// hive (issue #1626): one conversation, one model.
-	//
-	// Upstream lets the composer hold several models at once and fans a single
-	// prompt out to all of them, side by side. Hive does not sell that, and the
-	// plus button that built such a list is gone from the markup below. Removing
-	// only the button would have left the capability half present: a `models=`
-	// query parameter, a folder carrying several model ids, and any conversation
-	// saved back when the button existed all still arrive here as a longer list,
-	// and the composer would then have drawn one model while dispatching to
-	// several, which is worse than either behaviour on its own.
-	//
-	// `selectedModels` is bound all the way up through MessageInput and
-	// Placeholder to Chat, so clamping it here is what the send path actually
-	// reads, not merely what the chip renders.
-	$: if (selectedModels.length !== 1) {
-		selectedModels = [selectedModels[0] ?? ''];
-	}
-
+	// hive (issue #1626): the plus button that built a multi-model list is gone
+	// from the markup below, and this component now draws exactly one chip. The
+	// invariant that keeps the array itself at one entry lives in Chat.svelte,
+	// which declares and owns `selectedModels`, so that every arrival route is
+	// covered whether or not this component happens to be mounted.
 	$: if (selectedModels.length > 0 && $models.length > 0) {
 		const _selectedModels = selectedModels.map((model) =>
 			$models.map((m) => m.id).includes(model) ? model : ''

@@ -895,6 +895,36 @@
 	};
 
 	const savedModelIds = async () => {
+		const folderModelIds = $selectedFolder?.data?.model_ids;
+
+		// hive (issue #1626): the one-model clamp below must never narrow a
+		// folder's saved list.
+		//
+		// Without this, merely opening a chat inside a folder that still holds
+		// two or more model ids would PATCH that folder down to one, on page
+		// load, with no user action and no toast, because the clamp assigns
+		// `selectedModels` and this reactive save fires on that assignment. It
+		// converges rather than loops, which is exactly what makes it easy to
+		// miss: the damage is done once and reloading cannot undo it.
+		//
+		// Narrowing is refused rather than declared intentional. A folder's
+		// model list is configuration somebody wrote deliberately, this change
+		// removes multi-model dispatch from the composer and not the concept
+		// from the product, and a destructive migration of user data is a
+		// decision that belongs in a migration, not in a render.
+		//
+		// Scoped as tightly as the failure: it skips ONLY the case where the
+		// selection is the folder's own list cut to its first entry, which is
+		// precisely what the clamp produces. Choosing a model the folder does
+		// not list still saves, which is the behaviour this function is for.
+		if (
+			Array.isArray(folderModelIds) &&
+			folderModelIds.length > 1 &&
+			equal(selectedModels, folderModelIds.slice(0, 1))
+		) {
+			return;
+		}
+
 		if (
 			$selectedFolder &&
 			selectedModels.filter((modelId) => modelId !== '').length > 0 &&
@@ -907,6 +937,26 @@
 			});
 		}
 	};
+
+	// hive (issue #1626): one conversation, one model, enforced where the array
+	// is owned rather than in the composer chip that draws it.
+	//
+	// Upstream let the composer hold several models at once and fanned a single
+	// prompt out to all of them. The plus button that built such a list is gone
+	// from ModelSelector.svelte, but the button was never the only way in: a
+	// `models=` query parameter, a folder carrying several model ids, and any
+	// conversation saved while the button existed all still arrive here as a
+	// longer list. `selectedModels` is declared and assigned in this component,
+	// so this is the one place every one of those routes passes through.
+	//
+	// Deliberately NOT in ModelSelector.svelte, where it started. That component
+	// reaches the send path only while it is mounted, so the invariant would
+	// have held because of a template rather than because of the state machine,
+	// and the next move of the composer chip would have reopened multi-model
+	// dispatch silently.
+	$: if (Array.isArray(selectedModels) && selectedModels.length !== 1) {
+		selectedModels = [selectedModels[0] ?? ''];
+	}
 
 	$: if (selectedModels !== null) {
 		savedModelIds();

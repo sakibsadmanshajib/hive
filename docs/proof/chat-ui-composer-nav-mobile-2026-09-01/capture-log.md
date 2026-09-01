@@ -94,3 +94,67 @@ The new guards would have failed on `origin/main`, checked directly:
 `ModelSelector.svelte` carried two `Add Model` occurrences, `MessageInput.svelte`
 two `ontouchstart` occurrences, and `Chat.svelte` ten calls passing the live
 pagination cursor to a whole-list refresh.
+
+---
+
+# Re-capture after the independent review moved the clamp (2026-09-01, second pass)
+
+The review found that the one-model clamp, then living in `ModelSelector.svelte`,
+fired `Chat.svelte`'s `savedModelIds` and PATCHed a folder's `model_ids` down to a
+single entry on page load. The clamp has moved into `Chat.svelte`, where the array
+is owned, and the folder save now refuses to narrow. Both are behaviour changes, so
+the stack was rebuilt from the updated branch and re-captured rather than reasoned
+about.
+
+Rig identical to the first pass, on its own port and its own network so a peer
+agent's container could not be mistaken for it. The first attempt to reuse port
+3402 answered healthy from somebody else's stack, which is why the port is
+explicit here.
+
+```
+signed in (local throwaway account, password redacted)
+#1626 folder model_ids BEFORE: ["hive-fast","hive-free"]
+#1626 folder model_ids AFTER opening it in the browser: ["hive-fast","hive-free"]
+#1626 folder-writing requests observed during that load: 0
+#1626 composer chip inside that folder reads "hive-fast" (one model drawn, folder list untouched)
+#1626 with ?models=hive-fast,hive-free: chips = 1, chip reads "hive-fast"
+#1626 "Add Model" buttons = 0
+#1619 user messages after Enter at 390x844 = 1
+```
+
+The folder route was genuinely exercised rather than skipped, and the log shows it
+from the inside: the composer chip reads `hive-fast`, the FIRST of the folder's two
+model ids, which is the clamp's own output. So the clamp fired, drew one model, and
+no write followed it. Zero requests to `/api/v1/folders/{id}/update` during the load.
+
+| File | Shows |
+| --- | --- |
+| `a0b-1626-04-folder-not-narrowed.png` | A folder holding two model ids, opened in the browser. One chip, reading the first of them, and the folder's stored list unchanged at two. |
+| `a0b-1626-05-two-model-url-clamped-in-chat.png` | `/?models=hive-fast,hive-free` with the clamp now enforced in `Chat.svelte` rather than in the chip. One chip. |
+| `a0b-1619-03-mobile-after-enter.png` | 390x844 with touch on, one Enter press, message sent and answered. Unchanged by the relocation, re-captured because the composer was edited again. |
+
+The RED for the folder write is the reviewer's static trace, not a second build of
+the pre-review commit: `selectedFolder.subscribe` assigns the folder's list, the
+clamp trimmed it, and `$: if (selectedModels !== null) savedModelIds()` fired on that
+assignment with `!equal(...)` true. Rebuilding the superseded commit to watch the
+bad PATCH happen was judged not worth ten minutes of image build; what is captured
+here is the fixed behaviour, which is what the merge policy asks for.
+
+## Automated checks, second pass
+
+```
+make test-owui-frontend    24 files, 351 tests, pass
+                           14/14 lib/hive components compiled
+                           22/22 lib/components components compiled   <- new
+make test-scripts          pass
+npm run lint:proof-tokens  pass
+```
+
+The second compile pass is the review's third MEDIUM: the five upstream components
+this change mirrors into the scratch tree were never handed to the Svelte compiler.
+Proved load-bearing rather than assumed, by breaking one on purpose:
+
+```
+FAIL chat/ModelSelector.svelte (85:0): `<div>` was left open
+21/22 components compiled
+```
