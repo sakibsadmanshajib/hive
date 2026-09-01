@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 const searxngPayload = `{"results":[
@@ -111,6 +112,33 @@ func TestSearchCountsUnusableHitsAsDropped(t *testing.T) {
 	}
 	if dropped != 3 {
 		t.Fatalf("dropped = %d, want 3", dropped)
+	}
+}
+
+// An over-long snippet is trimmed on a character boundary, not a byte one. A
+// byte cut through a multi-byte character produces mojibake in the tool
+// result the model reads, and Bangla, which this product's first market
+// writes in, is three bytes per character throughout.
+func TestSearchTrimsSnippetsOnCharacterBoundaries(t *testing.T) {
+	long := strings.Repeat("খ", maxSnippetChars+50)
+	payload := `{"results":[{"url":"https://example.com/a","title":"T","content":"` + long + `","score":1}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	hits, _, err := NewSearXNG(srv.URL).Search(context.Background(), "q", 5)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits, want 1", len(hits))
+	}
+	if !utf8.ValidString(hits[0].Snippet) {
+		t.Fatal("the trimmed snippet is not valid UTF-8; the cut split a character")
+	}
+	if got := utf8.RuneCountInString(hits[0].Snippet); got != maxSnippetChars {
+		t.Fatalf("the trimmed snippet is %d characters, want %d", got, maxSnippetChars)
 	}
 }
 

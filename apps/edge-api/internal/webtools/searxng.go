@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // The SearXNG client behind web_search. One HTTP call per search, and that is
@@ -38,9 +38,27 @@ const (
 	// snippets, and a long snippet list crowds out the answer.
 	MaxResultsCeiling = 10
 	// maxSnippetChars trims an over-long backend snippet so one verbose
-	// result cannot dominate the tool output.
+	// result cannot dominate the tool output. Counted in runes, not bytes:
+	// Bangladesh is this product's first market and a Bangla snippet is three
+	// bytes per character, so a byte count would cut a legible snippet to a
+	// third of its length and could split a rune in half on the way out.
 	maxSnippetChars = 500
 )
+
+// truncateRunes shortens s to at most n runes, never splitting one.
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	count := 0
+	for i := range s {
+		if count == n {
+			return s[:i]
+		}
+		count++
+	}
+	return s
+}
 
 // ErrSearchBackend is the class every SearXNG failure belongs to. The general
 // rule apply_web_search_ratelimit_patch.py already established for the fork
@@ -130,7 +148,7 @@ func (s *SearXNG) Search(ctx context.Context, query string, n int) ([]Hit, int, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, 0, fmt.Errorf("%w: status %s", ErrSearchBackend, strconv.Itoa(resp.StatusCode))
+		return nil, 0, fmt.Errorf("%w: status %d", ErrSearchBackend, resp.StatusCode)
 	}
 
 	// The response is a snippet list, not a page: a few tens of KiB. Cap it
@@ -143,7 +161,12 @@ func (s *SearXNG) Search(ctx context.Context, query string, n int) ([]Hit, int, 
 	raw := payload.Results
 	sort.SliceStable(raw, func(i, j int) bool { return raw[i].Score > raw[j].Score })
 
-	hits := make([]Hit, 0, n)
+	// No capacity hint. n is clamped to MaxResultsCeiling above, but it still
+	// originates in the request body, and a caller-derived value reaching a
+	// make cap is worth neither the CodeQL alert it raises nor an argument
+	// about whether the clamp is close enough to the allocation to count.
+	// Appending at most MaxResultsCeiling elements costs nothing.
+	var hits []Hit
 	dropped := 0
 	for _, item := range raw {
 		title := strings.TrimSpace(item.Title)
@@ -160,9 +183,7 @@ func (s *SearXNG) Search(ctx context.Context, query string, n int) ([]Hit, int, 
 			dropped++
 			continue
 		}
-		if len(snippet) > maxSnippetChars {
-			snippet = snippet[:maxSnippetChars]
-		}
+		snippet = truncateRunes(snippet, maxSnippetChars)
 		hits = append(hits, Hit{Title: title, URL: item.URL, Snippet: snippet})
 		if len(hits) == n {
 			break

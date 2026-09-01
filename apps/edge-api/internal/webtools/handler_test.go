@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
@@ -141,6 +143,7 @@ func TestWebSearchRejectsBadRequests(t *testing.T) {
 		{"no query", map[string]any{}},
 		{"blank query", map[string]any{"query": "   "}},
 		{"oversized query", map[string]any{"query": strings.Repeat("a", MaxQueryChars+1)}},
+		{"oversized non-latin query", map[string]any{"query": strings.Repeat("খ", MaxQueryChars+1)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := post(t, h, "/v1/tools/web_search", "turn-1", tc.body)
@@ -148,6 +151,56 @@ func TestWebSearchRejectsBadRequests(t *testing.T) {
 				t.Fatalf("status = %d, want 400, body = %s", rr.Code, rr.Body)
 			}
 		})
+	}
+}
+
+// The query limit counts characters, not bytes. Bangladesh is this product's
+// first market and a Bangla character is three bytes, so a byte-counted limit
+// would refuse a Bangla query a third the length of an English one.
+func TestQueryLimitCountsCharactersNotBytes(t *testing.T) {
+	search := &stubSearcher{hits: okHits()}
+	h := newTestHandler(t, Deps{Search: search})
+	// Well under MaxQueryChars characters, well over it in bytes.
+	query := strings.Repeat("খ", MaxQueryChars-1)
+	if len(query) <= MaxQueryChars {
+		t.Fatalf("the fixture is %d bytes, it must exceed the %d byte figure to be meaningful",
+			len(query), MaxQueryChars)
+	}
+	if rr := post(t, h, "/v1/tools/web_search", "turn-1", map[string]any{"query": query}); rr.Code != http.StatusOK {
+		t.Fatalf("a Bangla query of %d characters answered %d, want 200, body = %s",
+			MaxQueryChars-1, rr.Code, rr.Body)
+	}
+}
+
+// A tenant that churns turn identifiers must not be able to fill the shared
+// budget map and deny every other tenant. Refusing past the cap would do
+// exactly that, so the map evicts instead.
+func TestBudgetMapCannotBeFilledToDenyAnotherTenant(t *testing.T) {
+	b := &turnBudget{now: time.Now, turns: make(map[string]turnCounts)}
+	noisy := uuid.New()
+	for i := 0; i < maxTrackedTurns*2; i++ {
+		b.take(noisy, "turn-"+strconv.Itoa(i), ToolWebSearch, SearchBudgetPerTurn)
+	}
+	if len(b.turns) > maxTrackedTurns {
+		t.Fatalf("the budget map grew to %d entries, over the %d cap", len(b.turns), maxTrackedTurns)
+	}
+	if !b.take(uuid.New(), "victim-turn", ToolWebSearch, SearchBudgetPerTurn) {
+		t.Fatal("an unrelated tenant was refused after another tenant filled the map")
+	}
+}
+
+// A deployment with no search backend must not also burn the turn's
+// allowance answering that it has none.
+func TestUnconfiguredSearchDoesNotConsumeBudget(t *testing.T) {
+	h := newTestHandler(t, Deps{})
+	for i := 0; i < SearchBudgetPerTurn+2; i++ {
+		rr := post(t, h, "/v1/tools/web_search", "turn-1", map[string]any{"query": "q"})
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Fatalf("call %d answered %d, want 503, body = %s", i+1, rr.Code, rr.Body)
+		}
+		if env := decodeEnvelope(t, rr); env["code"] != CodeSearchUnavailable {
+			t.Fatalf("call %d code = %v, want %q", i+1, env["code"], CodeSearchUnavailable)
+		}
 	}
 }
 

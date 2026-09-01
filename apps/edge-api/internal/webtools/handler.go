@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
@@ -34,10 +35,15 @@ const (
 	// or a URL and a short focus string; nothing legitimate is near this.
 	MaxToolRequestBytes = 16 << 10
 
-	// MaxQueryChars caps a search query, and MaxURLChars a fetch URL.
+	// MaxQueryChars caps a search query, and MaxURLChars a fetch URL. Query
+	// and focus are counted in runes rather than bytes: Bangladesh is this
+	// product's first market, a Bangla character is three bytes, and a byte
+	// count would silently refuse a query a third the length of an English
+	// one. A URL is percent-encoded ASCII on the wire, so bytes are the right
+	// unit there.
 	MaxQueryChars = 512
 	MaxURLChars   = 2048
-	// MaxFocusChars caps the focus string web_fetch ranks against.
+	// MaxFocusChars caps the focus string web_fetch ranks against, in runes.
 	MaxFocusChars = 512
 	// maxTurnIDChars bounds the turn identifier so the budget map's keys
 	// cannot be grown by a caller.
@@ -53,9 +59,9 @@ const (
 	// turnTTL is how long a turn's counters are remembered. Longer than any
 	// assistant turn, short enough that the map does not accumulate.
 	turnTTL = 15 * time.Minute
-	// maxTrackedTurns bounds the budget map. Past it, after sweeping expired
-	// entries, new turns are refused rather than served unbudgeted: the
-	// budget failing open is the defect, not the refusal.
+	// maxTrackedTurns bounds the budget map. Past it, entries are evicted
+	// rather than new turns refused; see evict for why that direction is the
+	// safe one when the map is shared across tenants.
 	maxTrackedTurns = 4096
 )
 
@@ -157,8 +163,16 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeEnvelope(w, http.StatusBadRequest, NewError(CodeInvalidRequest, msgNoQuery, 0))
 		return
 	}
-	if len(query) > MaxQueryChars {
+	if utf8.RuneCountInString(query) > MaxQueryChars {
 		writeEnvelope(w, http.StatusBadRequest, NewError(CodeInvalidRequest, msgQueryTooLong, 0))
+		return
+	}
+
+	// Checked before the budget is consumed: a deployment with no search
+	// backend wired should not also burn the turn's allowance answering that
+	// it has none.
+	if h.search == nil {
+		writeEnvelope(w, http.StatusServiceUnavailable, NewError(CodeSearchUnavailable, msgSearchDown, 0))
 		return
 	}
 
@@ -167,12 +181,18 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.search == nil {
-		writeEnvelope(w, http.StatusServiceUnavailable, NewError(CodeSearchUnavailable, msgSearchDown, 0))
-		return
+	// Clamped here as well as inside the client. max_results arrives in the
+	// request body, so it is bounded at the trust boundary rather than only
+	// at the place that happens to consume it.
+	count := req.MaxResults
+	if count <= 0 {
+		count = DefaultMaxResults
+	}
+	if count > MaxResultsCeiling {
+		count = MaxResultsCeiling
 	}
 
-	hits, dropped, err := h.search.Search(r.Context(), query, req.MaxResults)
+	hits, dropped, err := h.search.Search(r.Context(), query, count)
 	if err != nil {
 		// Logged with the real cause, answered without it.
 		log.Printf("webtools: web_search failed: %v", err)
@@ -211,10 +231,7 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 		writeEnvelope(w, http.StatusBadRequest, NewError(CodeInvalidRequest, msgNoURL, 0))
 		return
 	}
-	focus := strings.TrimSpace(req.Focus)
-	if len(focus) > MaxFocusChars {
-		focus = focus[:MaxFocusChars]
-	}
+	focus := truncateRunes(strings.TrimSpace(req.Focus), MaxFocusChars)
 
 	// Stage 0 runs before anything else, so a refused URL is refused
 	// identically whether or not the pipeline behind it exists.
@@ -344,11 +361,7 @@ func (b *turnBudget) take(tenant uuid.UUID, turn, tool string, limit int) bool {
 	entry, known := b.turns[key]
 	if !known || now.After(entry.expires) {
 		if len(b.turns) >= maxTrackedTurns {
-			b.sweep(now)
-		}
-		if len(b.turns) >= maxTrackedTurns {
-			// Fail closed. An unbudgeted call is worse than a refused one.
-			return false
+			b.evict(now)
 		}
 		entry = turnCounts{expires: now.Add(turnTTL)}
 	}
@@ -369,11 +382,30 @@ func (b *turnBudget) take(tenant uuid.UUID, turn, tool string, limit int) bool {
 	return true
 }
 
-// sweep drops expired turns. Called under b.mu.
-func (b *turnBudget) sweep(now time.Time) {
+// evict makes room in a full map: expired turns first, then, if that was not
+// enough, arbitrary live ones until the map is back under the cap.
+//
+// Evicting rather than refusing is deliberate. Refusing a new turn once the
+// map is full would let one tenant deny every other tenant's web access by
+// sending maxTrackedTurns distinct turn identifiers, since the map is shared
+// across tenants. Evicting cannot do that. What it costs is that a tenant who
+// churns turn identifiers may reset a budget early, and that is not a bypass
+// worth defending: a fresh turn identifier already earns a fresh budget by
+// design. The budget exists to stop an injected page walking the model
+// through a loop within one assistant turn, where the identifier is fixed by
+// the caller, not to ration a tenant across turns.
+//
+// Called under b.mu.
+func (b *turnBudget) evict(now time.Time) {
 	for key, entry := range b.turns {
 		if now.After(entry.expires) {
 			delete(b.turns, key)
 		}
+	}
+	for key := range b.turns {
+		if len(b.turns) < maxTrackedTurns {
+			return
+		}
+		delete(b.turns, key)
 	}
 }

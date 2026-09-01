@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 )
 
@@ -131,6 +132,14 @@ func (d *safeDialer) DialContext(ctx context.Context, network, address string) (
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, fmt.Errorf("%w: unparseable address", ErrBlockedAddress)
+	}
+
+	// Defence in depth. Every path into this client today goes through Admit
+	// first, which already refuses these names, but the dialer is the last
+	// thing between a hostname and a socket and it should not depend on a
+	// caller having remembered.
+	if deniedHostnames[strings.ToLower(strings.TrimSuffix(host, "."))] {
+		return nil, ErrBlockedAddress
 	}
 
 	var candidates []netip.Addr
