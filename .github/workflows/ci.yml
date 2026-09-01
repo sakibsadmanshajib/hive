@@ -859,6 +859,25 @@ jobs:
       # the only place a workflow-only change cannot route around.
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:deploy-diagnosability
+      # Issue #1610. docker-compose.enterprise.yml made WEBUI_SECRET_KEY a
+      # required variable, correctly (issue #1602), and compose interpolates
+      # the merged config before it runs any subcommand. post-deploy-verify.yml
+      # merges that file and supplied no value, so its image-freshness step got
+      # no container ids back and went red on every deploy from the next day,
+      # reporting "no running containers matched these compose flags" for what
+      # was a missing variable. Guarded here because both halves of the break
+      # are workflow-and-compose-only, which no test suite reaches.
+      #
+      # Self-check first, the same order lint:go-db-test-wiring uses. A
+      # CodeRabbit pass on the pull request that added this lint found that its
+      # shell-assignment arm counted `# NAME=value` inside a COMMENT, so a
+      # workflow could name the variable in prose, supply compose with nothing
+      # and still be reported compliant. The fixture pins that case and four
+      # others, including that an empty intersection fails rather than passes.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:compose-required-vars:test
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:compose-required-vars
       # Drive-by, found while checking the wiring above: this lint existed in
       # package.json but no workflow ran it, so it was coverage on paper only.
       # It passes on main today.

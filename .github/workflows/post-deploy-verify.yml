@@ -244,6 +244,28 @@ jobs:
             --profile chat
             --profile monitoring
             --profile selfhost
+          # docker-compose.enterprise.yml, which those flags merge, declares
+          # WEBUI_SECRET_KEY in compose's REQUIRED form, ${VAR:?message}
+          # (issue #1602, commit fa47ec2). Compose interpolates the whole
+          # merged config before it runs any subcommand, so without a value
+          # here even the read-only `ps -q` below exits non-zero and prints no
+          # container ids at all. This step then failed on its own
+          # "nothing was compared" guard, which names containers and never
+          # mentions a missing variable, and that is why this workflow went
+          # red on every deploy from 2026-08-31 (issue #1610).
+          #
+          # It has to come from the repository secret rather than from the
+          # box's .env, because the deploy passes it the same way: as workflow
+          # env, deliberately, so the versioned value wins. There is nothing in
+          # that file for `--env-file` to supply.
+          #
+          # The value is not an input to anything this step verifies, since
+          # listing containers cannot use it. It is the real secret rather than
+          # a placeholder so that any compose command added to this workflow
+          # later is correct by construction, and deploy-demo-box.yml already
+          # fails loudly when the secret is unset, so an empty value here
+          # cannot become this workflow's private failure.
+          WEBUI_SECRET_KEY: ${{ secrets.WEBUI_SECRET_KEY }}
         run: |
           set -euo pipefail
           bogus=sha256:0000000000000000000000000000000000000000000000000000000000000000
