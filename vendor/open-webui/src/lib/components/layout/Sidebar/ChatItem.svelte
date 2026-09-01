@@ -138,7 +138,7 @@
 			}
 
 			currentChatPage.set(1);
-			await chats.set(await getChatList(localStorage.token, $currentChatPage));
+			await chats.set(await getChatList(localStorage.token, 1));
 			await pinnedChats.set(await getPinnedChatList(localStorage.token));
 
 			dispatch('change');
@@ -166,7 +166,7 @@
 			goto(`/c/${res.id}`);
 
 			currentChatPage.set(1);
-			await chats.set(await getChatList(localStorage.token, $currentChatPage));
+			await chats.set(await getChatList(localStorage.token, 1));
 			await pinnedChats.set(await getPinnedChatList(localStorage.token));
 		}
 	};
@@ -232,7 +232,7 @@
 
 			if (res) {
 				currentChatPage.set(1);
-				await chats.set(await getChatList(localStorage.token, $currentChatPage));
+				await chats.set(await getChatList(localStorage.token, 1));
 				await pinnedChats.set(await getPinnedChatList(localStorage.token));
 
 				dispatch('change');

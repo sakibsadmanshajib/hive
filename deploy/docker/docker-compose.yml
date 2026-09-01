@@ -1419,6 +1419,39 @@ services:
       # Kills the "A new version (vX.Y.Z) is now available" in-app nag banner.
       ENABLE_VERSION_UPDATE_CHECK: "false"
       DEFAULT_LOCALE: "en"
+      # The alias a brand-new conversation opens on (issue #1626). Left unset,
+      # Open WebUI publishes no default at all and the chat front end takes the
+      # first entry of the model list instead, which the catalogue orders
+      # alphabetically, so every new session opened on a Deepseek alias rather
+      # than on the alias this product leads with.
+      #
+      # This is persistent config, so the compose value alone would be a silent
+      # no-op on any already-booted box; owui-patches/hive_rag_env_config.py
+      # reconciles `ui.default_models` from this variable on every container
+      # start, the same mechanism ENABLE_LOGIN_FORM and OAUTH_AUTO_REDIRECT
+      # above rely on. Confirm after deploying with
+      # `curl -s https://<chat-host>/api/config` and check default_models.
+      #
+      # The default here is upstream-free on purpose, and the demo box's paid
+      # alias arrives from deploy-demo-box.yml's OWUI_DEFAULT_MODEL instead.
+      # Every lane that starts a stack from this file, including the nightly
+      # chat end-to-end run, opens its conversations on whatever this resolves
+      # to, so a paid alias committed here would be a pipeline spending real
+      # budget on every scheduled run. That is what
+      # TestNoCISurfaceCallsAPaidCompletionModel enforces, and it caught this
+      # line on the first push of the change.
+      #
+      # Worth stating because it reads like a downgrade and is not: before this
+      # variable existed the front end fell through to the first entry of an
+      # alphabetically sorted catalogue, which is `deepseek-v4-flash`, also
+      # paid. CI was already opening on a paid alias, just without naming one.
+      #
+      # A deployment whose catalogue has neither alias sets OWUI_DEFAULT_MODEL
+      # to one of its own. It degrades quietly rather than breaking: the front
+      # end filters the resolved default against the models it was actually
+      # served and falls back to the first available one when the named alias
+      # is not among them.
+      DEFAULT_MODELS: ${OWUI_DEFAULT_MODEL:-hive-free}
       OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
       # Issue #1063 credits banner: lets the chat backend read the signed-in
       # user's tenant balance from control-plane behind its internal token.

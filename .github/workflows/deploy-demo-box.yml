@@ -225,6 +225,15 @@ env:
   # only unranked snippets. See the docker-compose.yml comments on the
   # searxng service and on these same four keys in the open-webui service
   # for the measured latency and the embedding-cost reasoning.
+  # The alias a new conversation opens on, on the DEPLOYED box (issue #1626).
+  # Same split as the web-search block below and for the same reason: the
+  # compose default is upstream-free so no pipeline that starts a stack from
+  # that file spends real budget, and the paid alias this product actually
+  # leads with is supplied here, where it reaches only the demo deployment.
+  # docker-compose.yml's DEFAULT_MODELS reads this, and
+  # owui-patches/hive_rag_env_config.py reconciles ui.default_models from it on
+  # every container start, so it survives the box's first-boot persisted config.
+  OWUI_DEFAULT_MODEL: "hive-default"
   ENABLE_WEB_SEARCH: "true"
   WEB_SEARCH_ENGINE: "searxng"
   SEARXNG_QUERY_URL: "http://searxng:8080/search"

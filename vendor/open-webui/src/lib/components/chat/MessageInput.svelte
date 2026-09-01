@@ -21,7 +21,6 @@
 
 	import {
 		type Model,
-		mobile,
 		settings,
 		models,
 		config,
@@ -1552,13 +1551,7 @@
 													showFormattingToolbar={$settings?.showFormattingToolbar ?? false}
 													floatingMenuPlacement={'top-start'}
 													insertPromptAsRichText={$settings?.insertPromptAsRichText ?? false}
-													shiftEnter={!($settings?.ctrlEnterToSend ?? false) &&
-														!$mobile &&
-														!(
-															'ontouchstart' in window ||
-															navigator.maxTouchPoints > 0 ||
-															navigator.msMaxTouchPoints > 0
-														)}
+													shiftEnter={!($settings?.ctrlEnterToSend ?? false)}
 													placeholder={placeholder ? placeholder : $i18n.t('Send a Message')}
 													largeTextAsFile={($settings?.largeTextAsFile ?? false) && !shiftKey}
 													autocomplete={$config?.features?.enable_autocomplete_generation &&
@@ -1619,32 +1612,38 @@
 														}
 
 														if (!suggestionsContainerElement) {
-															if (
-																!$mobile ||
-																!(
-																	'ontouchstart' in window ||
-																	navigator.maxTouchPoints > 0 ||
-																	navigator.msMaxTouchPoints > 0
-																)
-															) {
-																if (inOrNearComposition(e)) {
-																	return;
-																}
+															// hive (issue #1619): Enter sends on every viewport, phones
+															// included. Upstream wrapped this whole block in a narrow
+															// viewport test ANDed with a touch-capability test, so on a
+															// phone, which satisfies both, the send path was unreachable
+															// and Enter only ever inserted a newline. The composer's send
+															// button is still there for soft keyboards that emit no Enter
+															// at all; what is gone is the assumption that a touch device
+															// cannot have a keyboard. The same pair also gated the
+															// shiftEnter prop above, so Shift+Enter now inserts its line
+															// break on every viewport too.
+															//
+															// The composition guard below is NOT part of that gate and
+															// stays: an IME confirming a candidate with Enter emits
+															// compositionend and keydown together, and sending on that
+															// keydown would fire the message mid-word.
+															if (inOrNearComposition(e)) {
+																return;
+															}
 
-																// Uses keyCode '13' for Enter key for chinese/japanese keyboards.
-																//
-																// Depending on the user's settings, it will send the message
-																// either when Enter is pressed or when Ctrl+Enter is pressed.
-																const enterPressed =
-																	($settings?.ctrlEnterToSend ?? false)
-																		? (e.key === 'Enter' || e.keyCode === 13) && isCtrlPressed
-																		: (e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey;
+															// Uses keyCode '13' for Enter key for chinese/japanese keyboards.
+															//
+															// Depending on the user's settings, it will send the message
+															// either when Enter is pressed or when Ctrl+Enter is pressed.
+															const enterPressed =
+																($settings?.ctrlEnterToSend ?? false)
+																	? (e.key === 'Enter' || e.keyCode === 13) && isCtrlPressed
+																	: (e.key === 'Enter' || e.keyCode === 13) && !e.shiftKey;
 
-																if (enterPressed) {
-																	e.preventDefault();
-																	if (prompt !== '' || files.length > 0) {
-																		dispatch('submit', prompt);
-																	}
+															if (enterPressed) {
+																e.preventDefault();
+																if (prompt !== '' || files.length > 0) {
+																	dispatch('submit', prompt);
 																}
 															}
 														}

@@ -230,6 +230,21 @@ RAG_CONFIG_ENV = {
     # stale persisted "user" here would silently reopen that door.
     "ui.default_locale": "DEFAULT_LOCALE",
     "ui.default_user_role": "DEFAULT_USER_ROLE",
+    # The model a brand-new conversation opens on (issue #1626). Published to
+    # the browser as `default_models` on /api/config (main.py:1968) and read by
+    # the chat front end's initNewChat, which falls back to the FIRST entry of
+    # the model list when it is unset. The live catalogue sorts alphabetically,
+    # so that fallback opened every new session on a Deepseek alias rather than
+    # on `hive-default`, the alias this product actually leads with.
+    #
+    # Same first-boot trap as the keys above, and this one is in upstream's own
+    # DEFAULT_CONFIG (config.py:2978), so a compose variable alone would be a
+    # silent no-op on any box that has already booted once. An unset or blank
+    # value still leaves whatever an administrator persisted alone, and a value
+    # naming an alias the tenant cannot see degrades to upstream's own
+    # first-available fallback rather than to an error, because the front end
+    # filters the resolved default against the models it was served.
+    "ui.default_models": "DEFAULT_MODELS",
     # Both are read fresh on every request (routers/retrieval.py's
     # get_retrieval_config(), and the web-search call site for the result
     # count), and both are integers upstream (int(os.getenv(...))), so

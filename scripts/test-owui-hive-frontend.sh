@@ -71,6 +71,11 @@ for rel in \
 	channel/MessageInput.svelte \
 	chat/Chat.svelte \
 	chat/Placeholder.svelte \
+	chat/Messages.svelte \
+	chat/ModelSelector.svelte \
+	layout/Sidebar.svelte \
+	layout/SearchModal.svelte \
+	layout/Sidebar/ChatItem.svelte \
 	chat/Settings/Interface.svelte \
 	common/RichTextInput.svelte \
 	workspace/Skills.svelte \
@@ -156,17 +161,25 @@ cd "$WORK"
 # the meaning of a green run. The scratch directory is the only mount, and the
 # container is given the caller's uid so the npm cache it writes there is not
 # left root owned on the host.
-# Two passes in one container: the unit tests, then a Svelte compile of every
-# component under lib/hive. The compile pass is what stops a component that does
-# not build from merging green, which happened on 2026-08-23 and only surfaced
-# in the deploy-demo-box image build, four minutes into a Docker build and hours
-# after merge.
+# Three passes in one container: the unit tests, then a Svelte compile of every
+# component under lib/hive AND of every upstream component mirrored into
+# lib/components. The compile pass is what stops a component that does not build
+# from merging green, which happened on 2026-08-23 and only surfaced in the
+# deploy-demo-box image build, four minutes into a Docker build and hours after
+# merge.
 #
-# Scoped to lib/hive, not the whole scratch tree. The upstream components and
-# routes copied in above are fixtures the declutter guard READS as text; they
-# are compiled by the image build with the real preprocessor chain and their
-# imports resolved against the real node_modules, neither of which exists here,
-# so compiling them out of context would test this script rather than them.
+# lib/components was NOT compiled until 2026-09-01 (issue #1626 review). The
+# reasoning for excluding it was that these files are fixtures the guards read
+# as text and that compiling them out of context would test this script rather
+# than them. Half of that is right and half of it was wrong. Right: their
+# IMPORTS cannot be resolved here, so nothing is bundled. Wrong: the compile
+# check resolves nothing, it calls svelte/compiler on the source and reports
+# syntax and template errors, which is precisely the class of defect the check
+# exists for, and it is a class Hive edits into these files regularly. That
+# gap meant a template rewrite in ModelSelector.svelte, swapping an `{#each}`
+# for a fixed node and moving a binding, was mirrored into this tree and then
+# handed to no compiler at all: a check reporting green over code it never
+# looked at.
 docker run --rm \
   -v "$WORK:/work" -w /work \
   -u "$(id -u):$(id -g)" \
@@ -223,4 +236,5 @@ docker run --rm \
     npm install --no-save --no-audit --no-fund --loglevel=error \
       vitest@2 @vitest/coverage-v8@2 $pinned
     npx vitest run --coverage --coverage.include="lib/hive/**" --coverage.reporter=text
-    node owui-hive-svelte-compile-check.mjs lib/hive'
+    node owui-hive-svelte-compile-check.mjs lib/hive
+    node owui-hive-svelte-compile-check.mjs lib/components'

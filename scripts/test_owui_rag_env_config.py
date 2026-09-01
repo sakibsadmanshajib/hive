@@ -1480,6 +1480,64 @@ def test_webui_url_and_default_locale_and_default_user_role_are_reconciled() -> 
     assert applied["ui.default_user_role"] == "pending"
 
 
+def test_default_models_is_reconciled() -> None:
+    """Issue #1626. `ui.default_models` is in upstream's DEFAULT_CONFIG, so a
+    box that has booted once already has a row for it and no compose edit could
+    reach that row. Unset, it publishes an empty default_models on /api/config
+    and the chat front end opens every new conversation on whatever the model
+    list happens to sort first, which is a Deepseek alias, not the alias this
+    product leads with."""
+    config = FakeConfig({"ui.default_models": ""})
+    applied = reconcile(config, {"DEFAULT_MODELS": "hive-default"})
+    assert applied["ui.default_models"] == "hive-default", applied
+    assert config.stored["ui.default_models"] == "hive-default", config.stored
+
+
+def test_unset_default_models_leaves_the_persisted_value_alone() -> None:
+    """A deployment that lets its administrators pick the default through Open
+    WebUI's own settings keeps their choice; this reconcile is per-key, not
+    ENABLE_PERSISTENT_CONFIG=false."""
+    for environ in ({}, {"DEFAULT_MODELS": "  "}):
+        config = FakeConfig({"ui.default_models": "some-local-model"})
+        applied = reconcile(config, environ)
+        assert "ui.default_models" not in applied, applied
+        assert config.stored["ui.default_models"] == "some-local-model", config.stored
+
+
+def test_compose_names_a_default_model_and_keeps_ci_on_a_free_one() -> None:
+    """The reconcile only helps if compose names a value. Asserted against the
+    file because an unset variable is not an error anywhere: it silently
+    restores the alphabetical-first fallback this fixes.
+
+    The committed default has to be upstream-free. Every lane that starts a
+    stack from this file opens its conversations on whatever it resolves to,
+    so a paid alias here is a pipeline spending real budget on a schedule;
+    TestNoCISurfaceCallsAPaidCompletionModel enforces that separately and this
+    states the same requirement where the value is read."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        "DEFAULT_MODELS: ${OWUI_DEFAULT_MODEL:-hive-free}" in compose
+    ), "docker-compose.yml must name the alias new chats open on (issue #1626)"
+
+
+def test_the_deploy_workflow_gives_the_demo_box_the_product_default() -> None:
+    """The other half of that split. The compose default keeps pipelines off
+    the paid catalogue; the deployed box is what #1626 is actually about, and
+    it gets `hive-default` from the deploy workflow's environment, which wins
+    over the box's own .env during interpolation."""
+    workflow = (
+        Path(__file__).resolve().parents[1]
+        / ".github"
+        / "workflows"
+        / "deploy-demo-box.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        'OWUI_DEFAULT_MODEL: "hive-default"' in workflow
+    ), "deploy-demo-box.yml must give the demo box its product default (issue #1626)"
+
+
 def test_ui_enable_signup_is_reconciled() -> None:
     """This deployment is SSO-only; the signup gate
     (routers/auths.py: `if not await Config.get('ui.enable_signup') or not
