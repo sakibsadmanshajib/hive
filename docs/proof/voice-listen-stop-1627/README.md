@@ -66,6 +66,7 @@ docker run -d --name proof1627-owui --network proof1627 -p 127.0.0.1:3402:8080 \
 docker run --rm --network container:proof1627-owui \
   -v "$PWD/docs/proof/voice-listen-stop-1627:/work" -v "$PWD/out:/out" -w /work -u root \
   -e LABEL=after -e POLLS=140 -e OWUI_URL=http://localhost:8080 \
+  -e PROOF_PASSWORD="$(openssl rand -hex 12)" \
   mcr.microsoft.com/playwright:v1.55.0-noble sh -c 'npm i playwright@1.55.0 && node capture.mjs'
 ```
 

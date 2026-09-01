@@ -152,6 +152,21 @@ describe('an utterance', () => {
 		expect(actions).not.toContain('transcribe');
 	});
 
+	it('keeps a word as short as yes', () => {
+		// The other side of the discard rule, and the one that matters more in
+		// a conversation: "yes", "no" and "stop" are around three hundred
+		// milliseconds of voiced audio. A minimum long enough to be safe from
+		// door slams and short enough to keep these is the whole point of
+		// picking the number, and a threshold that silently swallows "yes" is
+		// worse than one that occasionally transcribes a cough.
+		const { actions } = feed([
+			...frames(SPEECH_RMS, 19),
+			...frames(ROOM_RMS, 200, 304)
+		]);
+		expect(actions).toContain('transcribe');
+		expect(actions).not.toContain('discard');
+	});
+
 	it('stops at the hard cap even if the noise never stops', () => {
 		// The guarantee the issue asks for: the microphone cannot stay open
 		// forever, whatever the room does. Continuous loud noise, no gap.
@@ -214,6 +229,14 @@ describe('the call overlay uses it (issue #1627)', () => {
 		// leaking one per utterance trades a microphone that never stops for a
 		// microphone that stops a handful of times and then never again.
 		expect(overlay).toContain('audioContext.close()');
+	});
+
+	it('binds the frame loop to the recorder it started with', () => {
+		// toggleMute stops the recorder directly, which recycles it through
+		// stopRecordingCallback and starts a second loop. A guard that only
+		// asked whether some recorder existed left the first loop running too,
+		// so two loops drove one recorder with two sets of state.
+		expect(overlay).toContain('mediaRecorder !== recorder');
 	});
 
 	it('drives the decision from a monotonic clock', () => {

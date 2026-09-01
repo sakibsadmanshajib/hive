@@ -330,11 +330,19 @@
 		// already shows, and is bounded by a hard cap on utterance length.
 		let voiceActivity = createVoiceActivityState();
 
+		// This loop belongs to the recorder that was live when it started, and
+		// to no other. toggleMute stops the recorder directly, which recycles it
+		// through stopRecordingCallback and starts a second loop; a guard that
+		// only asked whether SOME recorder existed left the first one running
+		// against a stale analyser, so two loops drove one recorder with two
+		// sets of state and two AudioContexts.
+		const recorder = mediaRecorder;
+
 		hasStartedSpeaking = false;
 
 		const detectSound = () => {
 			const processFrame = () => {
-				if (!mediaRecorder || !$showCallOverlay) {
+				if (mediaRecorder !== recorder || !$showCallOverlay) {
 					releaseAnalyser();
 					return;
 				}
@@ -357,8 +365,8 @@
 				voiceActivity = step.state;
 
 				if (step.action === 'start') {
-					if (mediaRecorder.state !== 'recording') {
-						mediaRecorder.start();
+					if (recorder.state !== 'recording') {
+						recorder.start();
 					}
 					hasStartedSpeaking = true;
 					stopAllAudio();
@@ -375,8 +383,8 @@
 
 					releaseAnalyser();
 
-					if (mediaRecorder.state === 'recording') {
-						mediaRecorder.stop();
+					if (recorder.state === 'recording') {
+						recorder.stop();
 					} else {
 						// Nothing to stop, so no onstop is coming. Recycle the loop by
 						// hand rather than leaving a live microphone with no frame

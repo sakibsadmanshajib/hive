@@ -23,7 +23,7 @@ export interface VoiceActivityConfig {
 	floorSmoothing: number;
 	/** Quiet time after speech that ends an utterance. */
 	silenceMs: number;
-	/** Shorter than this is a door or a keystroke, not a sentence. */
+	/** Shorter than this is a door or a keystroke, not a word. */
 	minUtteranceMs: number;
 	/** Hard cap. The microphone cannot stay open longer than this, ever. */
 	maxUtteranceMs: number;
@@ -41,7 +41,12 @@ export const DEFAULT_VOICE_ACTIVITY_CONFIG: VoiceActivityConfig = Object.freeze(
 	floorMultiplier: 2.5,
 	floorSmoothing: 0.98,
 	silenceMs: 2000,
-	minUtteranceMs: 400,
+	// Long enough to drop a door or a keystroke, which are tens of
+	// milliseconds of audio, and short enough to keep "yes", "no" and "stop",
+	// which are around three hundred. Erring high here would silently swallow
+	// the shortest answers a person gives out loud, which is a worse failure
+	// than transcribing the occasional cough.
+	minUtteranceMs: 250,
 	maxUtteranceMs: 30000
 });
 

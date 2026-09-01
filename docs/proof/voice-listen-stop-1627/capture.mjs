@@ -18,9 +18,14 @@ const LABEL = process.env.LABEL ?? 'after';
 const WAV = process.env.WAV ?? '/work/speech.wav';
 
 const EMAIL = `voice-proof-${LABEL}@hive.invalid`;
-// Throwaway credential for a throwaway container that exists for one
-// capture and is deleted after it. Nothing else accepts it.
-const PASSWORD = process.env.PROOF_PASSWORD ?? 'proof-1627-local';
+// Supplied by the caller, with no default. The account is throwaway and the
+// container it lives in is deleted after the capture, but a literal in a
+// public repository is a literal in a public repository, and the next person
+// to copy this file may point it somewhere that matters.
+const PASSWORD = process.env.PROOF_PASSWORD;
+if (!PASSWORD) {
+	throw new Error('PROOF_PASSWORD is required, see docs/proof/voice-listen-stop-1627/README.md');
+}
 
 mkdirSync(OUT, { recursive: true });
 const logPath = `${OUT}/capture-${LABEL}.log`;
@@ -192,6 +197,11 @@ const run = async () => {
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ email: EMAIL, password: PASSWORD })
 		});
+		if (!signin.ok) {
+			// Reading a token out of an error body is how a capture ends up
+			// reporting a browser failure for what was an auth failure.
+			throw new Error(`signin failed: ${signin.status} ${signin.statusText}`);
+		}
 		token = (await signin.json()).token;
 		say('signed the existing local proof account in through the API');
 	}
