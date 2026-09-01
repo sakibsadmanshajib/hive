@@ -169,4 +169,4 @@ deliberate hardcode in `signup/personal_tenant.go`, not drift, and promoting it
 would hand workspace admin authority to every self serve signup. The console
 still admits the page shell for such an account and still tells its sole owner
 to ask their administrator; that is a separate defect with its own decision to
-make, filed separately and named in the pull request body.
+make, filed as issue #1660.
