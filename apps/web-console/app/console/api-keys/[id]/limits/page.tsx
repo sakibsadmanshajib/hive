@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
-import { redirect, notFound } from "next/navigation";
+import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import {
   ControlPlaneError,
@@ -17,6 +17,7 @@ import {
   type SaveLimitsResult,
 } from "@/lib/api-keys";
 import { RateLimitForm } from "@/components/api-keys/rate-limit-form";
+import { ConsoleNotFound } from "@/components/app-shell/console-not-found";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
 
@@ -71,7 +72,33 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
     // status rather than on message text: the previous message match also let a
     // transport failure through as an uncaught error and crashed the page.
     if (err instanceof ControlPlaneError && err.status === 404) {
-      notFound();
+      // Rendered in place rather than raised through notFound(), which paints
+      // nothing on first load in Next 16.3.x (issue #1652). Reasoning in the
+      // component. Safe here for the same reason as the catalog detail page:
+      // an id that belongs to another account and an id that never existed
+      // both read as 404 upstream, so both render this one page.
+      //
+      // Status note, because this changed and the change is invisible in the
+      // diff: this branch answers HTTP 200, where notFound() answered 404.
+      // Both inputs already collapse upstream (a key belonging to another
+      // account and a key that never existed are both a control-plane 404),
+      // so the status carried nothing here. The role-gated surfaces keep
+      // notFound() and keep their 404. Anything keyed on a 404 from
+      // /console/api-keys/*/limits sees a 200 from here on. Tracked in issue
+      // #1670.
+      return (
+        <ConsoleNotFound
+          viewer={viewer}
+          ownerName={profile.owner_name || null}
+          active="/console/api-keys"
+          section="Rate limits"
+          eyebrow="Authentication"
+          title="API key not found"
+          description="No API key on this workspace matches that address. It may have been revoked, or it may belong to another workspace."
+          backHref="/console/api-keys"
+          backLabel="All API keys"
+        />
+      );
     }
     throw err;
   }

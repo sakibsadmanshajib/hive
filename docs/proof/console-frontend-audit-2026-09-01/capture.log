@@ -1,0 +1,132 @@
+Console frontend audit fixes: capture log
+Date: 2026-09-01
+Branch: fix/console-frontend-audit-2026-09-01
+Issues: 1652 (blank notFound body), 1647 (Try in chat on non-chat models,
+        Hidden badge), 1649 (invoice PDF 500 for an unknown id), 1653 (bidi
+        control character rendering unescaped)
+
+HOW THIS WAS CAPTURED
+
+Console under test: the production build of this branch (next build, next
+start) served on http://127.0.0.1:3199. Browser: Playwright chromium, viewport
+1440x900 at 2x.
+
+Upstreams: a local stub on http://127.0.0.1:4599 answering the two services the
+console talks to, Supabase Auth (GET /auth/v1/user, POST /auth/v1/token) and
+the control plane (viewer, catalog, API keys, usage events, profile, balance,
+and the invoice PDF endpoint). Fixture rows below. No live tenant data, no live
+credential, and no live database is involved: the session bearer is an unsigned
+local JWT that only the stub accepts, so there is nothing here to redact and
+nothing to revoke.
+
+Why a stub rather than the deployed box: the demo box runs main, not this
+branch, and the four defects are all console rendering defects whose inputs are
+control-plane rows. Issue 1653 in particular needs a stored nickname carrying
+U+202E, which is a row the fixture supplies rather than one written into a live
+workspace.
+
+FIXTURE ROWS THAT MATTER
+
+  catalog (GET /api/v1/catalog/models), the badge arrays the migrations seed:
+    hive-small              ["stable","chat","responses"]     lifecycle stable
+    hive-fast               ["stable","chat","responses"]     lifecycle hidden
+    hive-embedding-default  ["stable","embeddings"]           lifecycle stable
+    hive-stt                ["voice","stt"]                   lifecycle stable
+    hive-tts                ["voice","tts"]                   lifecycle stable
+
+  api keys (GET /api/v1/accounts/current/api-keys):
+    key-1 nickname "prod\u202Egnp.txt", the shape issue 1653 found stored live.
+    Rendered without the fix, a browser reads that as "prodtxt.png".
+
+PRE-FIX MEASUREMENT FOR ISSUE 1652 (this branch, before the change)
+
+A probe route (async layout, async page, notFound() after an await) was built
+into this app and served by next start, then removed. Next 16.3.2:
+
+  GET /nfprobe            -> 404, 10038 bytes, <html id="__next_error__">,
+                             body is <div hidden><!--$--><!--/$--></div>
+  GET /does-not-exist-xyz -> 404, 15517 bytes, full styled body, no error shell
+
+Repeated with a segment-scoped not-found.tsx beside the probe page: unchanged.
+Repeated with an app/global-not-found.tsx plus experimental.globalNotFound:
+unchanged for notFound(), while the unmatched URL did switch to it. Repeated on
+next 16.3.4: unchanged. Repeated with a synchronous root layout: unchanged. So
+the boundary file is not what selects that path, and the fix is to stop raising
+notFound() on the two data-miss pages rather than to add another boundary.
+
+CAPTURES (post-fix)
+
+Capture run: console frontend audit fixes (issues 1652, 1647, 1649, 1653)
+Console under test: http://127.0.0.1:3199 (next start, production build of this branch)
+Upstreams: local proof stub on http://127.0.0.1:4599 for Supabase Auth and the
+control plane. No live tenant data and no live credential is involved;
+the session bearer is an unsigned local token the stub accepts.
+
+1. Issue 1652: notFound on a data miss renders inside the console shell
+  GET /console/catalog/does-not-exist-model status: 200
+  server HTML carries the not-found heading: true
+  bare Next error shell present: false
+  screenshot: 01-not-found-in-shell.png
+
+2. Issue 1647: Try in chat is gated on the chat capability badge
+  GET /console/catalog status: 200
+  fixture rows: 5 (2 chat, 1 embeddings, 1 stt, 1 tts)
+  try-in-chat links rendered: 2
+  Hidden badges rendered to the customer: 0
+  Deprecated badges rendered (hive-fast): 1
+  screenshot: 02-catalog-gated-links.png
+
+3. Issue 1649: unknown invoice id answers 404, not 500
+  GET /api/invoices/00000000-0000-0000-0000-000000000001/pdf status: 404
+  response body: {"error":"Invoice not found"}
+  screenshot: 03-invoice-404.png
+
+4. Issue 1653: a stored bidi override renders inert
+  GET /console/logs status: 200
+  stored nickname (escaped): prod\u202Egnp.txt
+  rendered option text: prodgnp.txt
+  rendered text still carries U+202E: false
+  screenshot: 04-logs-bidi-inert.png
+
+HOW TO RE-RUN THIS CAPTURE
+
+  PROOF_STUB_PORT=4599 node docs/proof/console-frontend-audit-2026-09-01/proof-stub.mjs &
+
+  cd apps/web-console
+  NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:4599 \
+  NEXT_PUBLIC_SUPABASE_ANON_KEY=proof-anon-key \
+  NEXT_PUBLIC_APP_URL=http://127.0.0.1:3199 \
+  CONTROL_PLANE_BASE_URL=http://127.0.0.1:4599 \
+  npx next build && npx next start -p 3199 &
+
+  PROOF_APP_URL=http://127.0.0.1:3199 PROOF_STUB_URL=http://127.0.0.1:4599 \
+  PROOF_ANON_KEY=proof-anon-key PROOF_OUT_DIR=/tmp/console-audit-shots \
+  PROOF_APP_DIR="$PWD/apps/web-console" \
+  node docs/proof/console-frontend-audit-2026-09-01/proof-shots.mjs
+
+
+IS THE HARNESS ITSELF HONEST
+
+Every line under CAPTURES is an assertion, not a recording: the harness exits
+non-zero and writes no screenshot when one is false. Two of them were checked
+against a build that genuinely fails them, rather than being trusted:
+
+  1. PROOF_APP_URL pointed at the stub rather than the console:
+     exit 1, "claim failed: GET /console/catalog/does-not-exist-model status
+     was 404, expected 200".
+
+  2. The catalog badge map reverted to render "Hidden" (the pre-fix behaviour of
+     issue 1647), rebuilt and served:
+     exit 1, "claim failed: Hidden badges rendered to the customer was 1,
+     expected 0". Screenshot from that run shows the Hidden badge on hive-fast.
+
+That second check is why the two badge claims are counted on elements
+(getByText with exact:true) rather than pattern-matched over the page body. An
+earlier revision of this harness used a word-boundary regex for Hidden against
+page.textContent("body"), which was doubly wrong: the escape made it match a
+literal backslash-b, and even repaired, textContent concatenates table cells
+with no separator ("$0HiddenTry in chat"), so the word boundary never matched
+a badge that was plainly on screen. The /Deprecated/ half of the same pair was
+matching this stub fixture summary text rather than the badge, so it passed for
+the wrong reason. Both were caught in review of PR #1663 and both now fail when
+the product regresses.
