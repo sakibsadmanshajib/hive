@@ -562,6 +562,21 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 		}
 	}
 
+	// Mirror the role just granted onto public.tenant_users, before the
+	// invitation is consumed (issue #1646's review). platform.WorkspaceAdminGate
+	// authorizes off that table, and every signup path inserts 'MEMBER' there,
+	// so without this an accepted OWNER invitation produced a co-owner the
+	// console admits and the control-plane 403s: exactly the divergence
+	// #1245's fix on UpdateMemberRole was believed to have closed, still being
+	// manufactured on current code.
+	//
+	// Best effort, like the other call site, and for a sharper reason here:
+	// the authoritative write above has already committed and the invitation is
+	// about to be consumed, so failing the caller now would refuse someone who
+	// is already a member. It runs BEFORE the consume rather than after so a
+	// failure to consume (which returns) cannot skip it.
+	s.syncTenantRole(ctx, inv.AccountID, viewer.UserID, "accept_invitation")
+
 	// Consume the invitation. A concurrent acceptance (a double-clicked link,
 	// a console retry) can pass the AcceptedAt check above and reach here
 	// twice; the loser's conditional update matches no row. The caller is a
@@ -677,16 +692,49 @@ func (s *Service) UpdateMemberRole(ctx context.Context, accountID uuid.UUID, vie
 	// line, which would abort the sync for a request that has already changed
 	// the authoritative role. Detaching from cancellation removes that path;
 	// the pool's own timeouts still bound the statement.
-	if s.billing != nil {
-		syncCtx := context.WithoutCancel(ctx)
-		if _, reason, sErr := signup.SyncTenantMembershipRole(syncCtx, s.billing, accountID, targetUserID); sErr != nil {
-			log.Printf("accounts: tenant_users role sync failed account=%s user=%s: %v", accountID, targetUserID, sErr)
-		} else if reason != "" {
-			log.Printf("accounts: tenant_users role sync skipped account=%s user=%s reason=%s", accountID, targetUserID, reason)
-		}
-	}
+	s.syncTenantRole(ctx, accountID, targetUserID, "update_member_role")
 
 	return nil
+}
+
+// syncTenantRole mirrors userID's CURRENT public.account_memberships role for
+// accountID onto public.tenant_users, and never fails its caller.
+//
+// One helper rather than two copies, because there are two writers of an
+// account_memberships role that a workspace administrator decision depends on
+// and they must not drift: UpdateMemberRole (the Members page) and
+// AcceptInvitation (redeeming an owner or member invitation). Only the first
+// had this call until issue #1646's review found the second, which had been
+// manufacturing the divergence #1245's fix was believed to have closed: an
+// accepted OWNER invitation wrote account_memberships and left tenant_users on
+// the 'MEMBER' signup inserted, so platform.WorkspaceAdminGate answered 403 to
+// a real co-owner. Any future writer of that column belongs here too.
+//
+// callSite names the caller in the log line, since the two failure modes need
+// different follow up: a Members page change can be re-issued to retry the
+// sync, while an invitation is consumed and cannot.
+func (s *Service) syncTenantRole(ctx context.Context, accountID, userID uuid.UUID, callSite string) {
+	if s.billing == nil {
+		return
+	}
+	// context.WithoutCancel: ctx is the request context, and the residual this
+	// call leaves behind is asymmetric. A failed promotion is benign (the user
+	// simply does not gain authority yet), while a failed demotion is #1245
+	// itself, a demoted owner keeping WorkspaceAdminGate and egress authority
+	// with the handler still returning success. The likeliest trigger is not a
+	// database fault at all but a client disconnect or a request deadline
+	// firing in the gap between the account_memberships commit and this line,
+	// which would abort the sync for a request that has already changed the
+	// authoritative role. Detaching from cancellation removes that path; the
+	// pool's own timeouts still bound the statement.
+	syncCtx := context.WithoutCancel(ctx)
+	if _, reason, err := signup.SyncTenantMembershipRole(syncCtx, s.billing, accountID, userID); err != nil {
+		log.Printf("accounts: tenant_users role sync failed site=%s account=%s user=%s: %v",
+			callSite, accountID, userID, err)
+	} else if reason != "" {
+		log.Printf("accounts: tenant_users role sync skipped site=%s account=%s user=%s reason=%s",
+			callSite, accountID, userID, reason)
+	}
 }
 
 // resolveWorkspaceActor loads the viewer's active membership for accountID and

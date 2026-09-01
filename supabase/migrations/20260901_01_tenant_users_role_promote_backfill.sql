@@ -15,6 +15,17 @@
 -- the "Managed by your administrator" empty state (issue #1646, measured
 -- live on 2026-09-01).
 --
+-- Two writers, not one. UpdateMemberRole was the only one PR #1287 taught to
+-- propagate; accounts.Service.AcceptInvitation writes the same column through
+-- ActivateMembership and CreateMembership and did not, so an accepted OWNER
+-- invitation (a shipped feature since 20260727_02 widened
+-- account_invitations.role) kept manufacturing this defect on current code.
+-- Two of the three rows this migration promotes on the demo box are exactly
+-- that. The writer is fixed in the same pull request as this file
+-- (accounts.Service.syncTenantRole, called from both sites), which is what
+-- makes a one time correction meaningful rather than a correction of rows the
+-- product would produce again the same afternoon.
+--
 -- 20260828_02 corrected the demotion direction only: a tenant_users 'OWNER'
 -- for a user account_memberships no longer considers an active owner is a
 -- stale grant, and removing authority is always safe. It declined the
@@ -35,6 +46,15 @@
 --     than silently dropped: they are the deliberate design, not drift, and
 --     whether a personal tenant owner should administer their own workspace
 --     is a product decision, not a data correctness fix.
+--   * t.archived_at IS NULL, so a decommissioned workspace is never widened.
+--     This is a deliberate divergence from signup.SyncTenantMembershipRole,
+--     which omits the filter: that function fires on one row at the moment
+--     somebody changes a role, while this statement decides about every
+--     historical row on the box at once, and
+--     platform.pgxTenantRoleStore.GetTenantRole has no archived predicate
+--     either, so a grant written here is honoured by WorkspaceAdminGate for
+--     any session carrying that tenant id. Eight other tenant scoped queries
+--     in this codebase filter archived_at; this one joins them.
 --   * tu.status = 'ACTIVE', so a SUSPENDED or INVITED row is never stamped
 --     OWNER. Suspension is how a tenant removes authority without deleting
 --     the row, and reactivation must not silently restore an owner.
@@ -62,6 +82,15 @@
 -- Depends on: 20260516_03_phase19_tenant_users.sql,
 -- 20260728_01_tenant_billing_account.sql, 20260801_10_tenants_personal_owner.sql.
 
+-- BEGIN/COMMIT, explicitly. A single DO statement is atomic through Postgres's
+-- implicit transaction and apply-migrations.sh deliberately adds no
+-- --single-transaction, so today this is belt and braces. It stops being that
+-- the moment anybody adds a second statement (an audit insert naming who was
+-- promoted, say), which would silently turn a privilege widening with no undo
+-- into one that can half apply. The sibling migrations this file depends on
+-- (20260516_03, 20260728_01, 20260829_03) all carry their own transaction.
+BEGIN;
+
 DO $$
 DECLARE
   promoted_count    int;
@@ -78,6 +107,7 @@ BEGIN
        AND tu.status = 'ACTIVE'
        AND tu.role = 'MEMBER'
        AND t.personal_owner_user_id IS NULL
+       AND t.archived_at IS NULL
        AND EXISTS (
              SELECT 1 FROM public.account_memberships am
               WHERE am.account_id = tba.account_id
@@ -100,6 +130,7 @@ BEGIN
      AND am.status     = 'active'
    WHERE tu.status = 'ACTIVE'
      AND tu.role <> 'OWNER'
+     AND t.archived_at IS NULL
      AND t.personal_owner_user_id IS NOT NULL;
 
   SELECT count(*) INTO other_tier_left
@@ -113,7 +144,10 @@ BEGIN
      AND am.status     = 'active'
    WHERE tu.status = 'ACTIVE'
      AND tu.role NOT IN ('OWNER', 'MEMBER')
+     AND t.archived_at IS NULL
      AND t.personal_owner_user_id IS NULL;
 
   RAISE NOTICE 'tenant_users role promotion backfill (issue #1646): promoted % row(s) to OWNER on business tenants; skipped % personal tenant row(s) by design (see this file''s header); left % row(s) whose tenant_users role is a tier this migration will not widen (ADMIN or VIEWER) -- scripts/check-tenant-role-divergence.sh reports those on every deploy', promoted_count, personal_skipped, other_tier_left;
 END $$;
+
+COMMIT;
