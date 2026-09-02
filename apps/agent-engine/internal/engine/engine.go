@@ -472,9 +472,21 @@ func materializePack(packsDir, pack, workingDir string) (map[string]time.Time, e
 	// files rather than preserving the pack's timestamps, so the source mtime
 	// would never match what the listing later reads and every planted entry
 	// would show up again immediately.
+	//
+	// Read back through a second os.Root, on the workspace this time. A
+	// directory entry name cannot contain a separator, so a plain join would
+	// be safe in fact, but this stays symmetrical with the read above and
+	// keeps the guarantee in the mechanism rather than in a reader's
+	// reasoning about what fs.ReadDir can return.
+	workRoot, err := os.OpenRoot(workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("engine: open agent working directory %s: %w", workingDir, err)
+	}
+	defer func() { _ = workRoot.Close() }()
+
 	planted := make(map[string]time.Time, len(entries))
 	for _, entry := range entries {
-		info, err := os.Lstat(filepath.Join(workingDir, entry.Name()))
+		info, err := workRoot.Lstat(entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("engine: stat planted pack entry %s: %w", entry.Name(), err)
 		}
