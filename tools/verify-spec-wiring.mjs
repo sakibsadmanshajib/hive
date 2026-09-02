@@ -242,6 +242,9 @@ function reactsToOrdinaryPullRequest(doc) {
 // composed with `&&` and `||`:
 //
 //   true                                          a literal, unconditional
+//   always()                                      a required job's own
+//     job-level condition; imposes no restriction of its own, see the
+//     comment on isKnownSurvivingAtom
 //   needs.<job>.outputs.<x> != 'false'             a path gate, either
 //   needs.<job>.outputs.<x> == 'true'              polarity ci.yml uses
 //   github.event_name == 'pull_request(_target)'   the event itself
@@ -274,6 +277,19 @@ function reactsToOrdinaryPullRequest(doc) {
 // narrow a guard was never able to prove.
 function isKnownSurvivingAtom(trimmed) {
   if (/^true$/i.test(trimmed)) return true;
+  // A required job's own job-level `if:` (see .github/ci/lint-workflow-check-
+  // names.mjs Check 3) is the literal string `always()`, on every required
+  // job in ci.yml (go-tests, repo-policy-lints, web-unit, agent-console-unit,
+  // live-integration, web-e2e). It exists so the job still runs, and still
+  // reports its own conclusion, when a job it `needs:` failed or was
+  // cancelled — GitHub's default job-level gating would otherwise skip it
+  // outright. It imposes no restriction of its own: real gating for a
+  // required job lives entirely in its step-level `if:`, which this function
+  // (via evaluate's AND) still has to clear on its own merits. Crediting the
+  // literal `always()` atom here does not widen what counts as surviving; it
+  // only stops a required job's mandatory job-level condition from masking
+  // whatever its step conditions actually say.
+  if (/^always\(\)$/.test(trimmed)) return true;
   if (/^needs\.[\w-]+\.outputs\.[\w-]+\s*!=\s*['"]false['"]$/.test(trimmed)) return true;
   if (/^needs\.[\w-]+\.outputs\.[\w-]+\s*==\s*['"]true['"]$/.test(trimmed)) return true;
   if (/^github\.event_name\s*==\s*['"]pull_request(_target)?['"]$/.test(trimmed)) return true;

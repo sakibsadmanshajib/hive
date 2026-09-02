@@ -65,10 +65,26 @@ router = APIRouter()
 # status, not by holding this connection open.
 UPSTREAM_TIMEOUT_SECONDS = 30
 
-# Bodies here are a pack name and a goal. edge-api applies its own 64 KiB limit
-# on the create route; this one exists so a chat container worker never buffers
-# more than it could possibly need.
-MAX_REQUEST_BODY_BYTES = 64 * 1024
+# Bodies here are a pack name, a goal, and since issue #1065 the text of the
+# documents the person attached in the composer.
+#
+# The three numbers below bound what is forwarded, not what is buffered:
+# `await request.body()` has already read the whole body by the time the check
+# runs, which was true before these numbers changed and is uvicorn's limit to
+# enforce rather than this handler's.
+#
+# Kept in step with maxAttachments and maxAttachmentBytes in
+# apps/edge-api/internal/agenttask/handler.go, which is where the refusal is
+# enforced. This copy is a shape check on a rebuilt body, not a second policy.
+MAX_ATTACHMENTS = 5
+MAX_ATTACHMENT_TOTAL_BYTES = 256 * 1024
+
+# Eight times the content cap, because JSON escaping is what decides the wire
+# size: a control character encodes as \uXXXX, six bytes for one. Same
+# derivation as maxCreateBodyBytes in edge-api's handler, and it has to clear
+# edge-api's or a legal request would be refused here with a message about the
+# description being too long.
+MAX_REQUEST_BODY_BYTES = 8 * MAX_ATTACHMENT_TOTAL_BYTES
 
 # The header edge-api reads the per-user token from. Must match
 # `UpstreamAuthHeader` in apps/edge-api/internal/auth/owui_unwrap.go.
@@ -227,17 +243,58 @@ async def create_task(request: Request, user=Depends(get_verified_user)):
     if not isinstance(instructions, str) or not instructions.strip():
         raise HTTPException(status_code=400, detail='Describe the task first.')
 
-    # Rebuilt from two named fields, never forwarded wholesale. The pack
+    attachments = _attachments(submitted.get('attachments'))
+
+    # Rebuilt from named fields, never forwarded wholesale. The pack
     # vocabulary itself is deliberately not duplicated here: edge-api owns it
     # and answers an unknown pack with its own error, so there is one list of
     # packs in the system rather than two that can disagree.
-    return await _call(
-        request,
-        user,
-        'POST',
-        '/agent/tasks',
-        {'pack': pack.strip(), 'instructions': instructions.strip()},
-    )
+    body = {'pack': pack.strip(), 'instructions': instructions.strip()}
+    if attachments:
+        body['attachments'] = attachments
+    return await _call(request, user, 'POST', '/agent/tasks', body)
+
+
+def _attachments(raw):
+    """Rebuild the attachment list, field by field, or refuse it.
+
+    Same posture as the rest of this handler: nothing the browser sent is
+    forwarded as it arrived, and a shape that is not the documented one is a
+    400 here rather than something edge-api has to guess at. The name is left
+    for edge-api and the launcher to validate as a file name; what is checked
+    here is only that the body is the shape this route documents.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail='Invalid request body.')
+    if len(raw) > MAX_ATTACHMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f'A task can carry at most {MAX_ATTACHMENTS} attachments.',
+        )
+    rebuilt = []
+    total = 0
+    for item in raw:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail='Invalid request body.')
+        name = item.get('name')
+        content = item.get('content')
+        if not isinstance(name, str) or not name.strip():
+            raise HTTPException(status_code=400, detail='An attachment is missing its name.')
+        if not isinstance(content, str) or not content:
+            raise HTTPException(
+                status_code=400,
+                detail=f'{name.strip()} has no readable text yet.',
+            )
+        total += len(content.encode('utf-8'))
+        if total > MAX_ATTACHMENT_TOTAL_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f'Those attachments hold more than {MAX_ATTACHMENT_TOTAL_BYTES // 1024} KB of text.',
+            )
+        rebuilt.append({'name': name.strip(), 'content': content})
+    return rebuilt
 
 
 @router.get('/tasks/{task_id}')

@@ -20,7 +20,7 @@
 //   * Print a secret. Every line it writes goes through redactSecrets, and
 //     the screenshot stamp carries no URL (see stamp.mjs).
 
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -326,6 +326,122 @@ const SCENARIOS = [
       await cancelRow(page, after);
       await waitForRowStatus(page, after, "Cancelled", 120_000);
       await waitForSessions(0, 180_000, "after the cleanup cancel");
+    },
+  },
+  {
+    name: "attachment-reaches-the-sandbox",
+    /*
+     * Issue #1065. A document attached in the composer has to EXIST inside
+     * the sandbox, not merely be accepted by a form, and the only place that
+     * can be observed is a host where Apptainer really runs. This scenario is
+     * the reason that distinction is checkable before merge rather than after.
+     *
+     * The console has no attachment control of its own: the control lives in
+     * the chat composer, which is a different front end. So the create the
+     * console makes is amended on the wire with an attachment, which
+     * exercises every layer under the browser exactly as the composer's own
+     * request does. The composer's half, that it assembles that request at
+     * all, is proven separately in
+     * docs/proof/cowork-attachment-1065-2026-09-02/.
+     *
+     * The assertion is the file's CONTENT, read off the launcher's own
+     * workspace directory. A row, a 201 or a name in a list would all pass on
+     * a tree where the bytes never arrive, which is the defect this whole
+     * issue is.
+     */
+    async run(page) {
+      const code = `HIVE-1065-${RUN_TAG.replace(/[^A-Za-z0-9]/g, "").slice(-8).toUpperCase()}`;
+      const name = "service-record.txt";
+      const content = `Hive demo box service record.\n\nRack asset tag: ${code}\n`;
+      const instructions = `${RUN_TAG} attachment: read ${name} and state the rack asset tag.`;
+
+      // The console attaches the session bearer in its own client, so the
+      // header is taken off its create request rather than rebuilt here.
+      // Never logged: it is a live credential and log() would only redact it
+      // if it happened to match a known shape.
+      let bearer = "";
+      await page.route("**/v1/agent/tasks", async (route) => {
+        const request = route.request();
+        if (request.method() !== "POST") return route.fallback();
+        bearer = request.headers()["authorization"] || "";
+        const body = JSON.parse(request.postData() || "{}");
+        body.attachments = [{ name, content }];
+        log(`amended the create with 1 attachment (${Buffer.byteLength(content, "utf8")} bytes)`);
+        await route.continue({ postData: JSON.stringify(body) });
+      });
+
+      const created = await createTask(page, instructions);
+      if (created.status !== 201 || !created.id) {
+        throw new Error(`create answered HTTP ${created.status} with id ${created.id ?? "absent"}`);
+      }
+      await waitForSessionsAtLeast(1, 300_000, "after creating a task carrying an attachment");
+
+      const planted = join(RUNTIME_DIR, "workspaces", created.id, name);
+      const deadline = Date.now() + 120_000;
+      let landed = null;
+      for (;;) {
+        try {
+          landed = readFileSync(planted, "utf8");
+          break;
+        } catch {
+          if (Date.now() > deadline) {
+            throw new Error(`the attachment never reached the sandbox workspace at ${planted}`);
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+      if (!landed.includes(code)) {
+        throw new Error(`the workspace file exists but does not carry ${code}: ${JSON.stringify(landed)}`);
+      }
+      log(`the sandbox workspace holds ${name} carrying ${code}`);
+
+      /*
+       * The Working folder panel's own data, read through the customer route
+       * rather than off disk, so the panel and the file agree.
+       *
+       * Only after the row reaches Running, and then polled. The listing is
+       * served from the launcher's live session registry, which the task's
+       * engine_session_ref reaches the database ahead of; asked a second
+       * after create, while the row is still queued, it correctly answers an
+       * empty list because there is no session to list yet. Reading that as
+       * "the file is missing" is the mistake this comment exists to stop the
+       * next person repeating.
+       */
+      await waitForRowStatus(page, instructions, "Running", 300_000);
+      const readListing = () =>
+        page.evaluate(
+          async ({ id, auth }) => {
+            const res = await fetch(`/v1/agent/tasks/${id}/files`, {
+              headers: { Accept: "application/json", ...(auth ? { Authorization: auth } : {}) },
+            });
+            return { status: res.status, body: await res.text() };
+          },
+          { id: created.id, auth: bearer },
+        );
+      const listingDeadline = Date.now() + 120_000;
+      let listed = await readListing();
+      while (!listed.body.includes(name) && Date.now() < listingDeadline) {
+        await new Promise((r) => setTimeout(r, 2000));
+        listed = await readListing();
+      }
+      log(`GET /v1/agent/tasks/{id}/files answered HTTP ${listed.status}: ${listed.body.slice(0, 400)}`);
+      if (!listed.body.includes(name)) {
+        throw new Error(`the working folder listing does not name ${name}: ${listed.body}`);
+      }
+
+      await shoot(
+        page,
+        "attachment-reaches-the-sandbox",
+        "01-attachment-inside-the-sandbox",
+        `${name} present in the sandbox workspace carrying ${code} \u00b7 listed in the working folder \u00b7 slots=${liveSessions()}`,
+      );
+
+      const cancel = taskRow(page, instructions).getByRole("button", { name: "Cancel" });
+      if (await cancel.count()) {
+        await cancel.click();
+        await waitForRowStatus(page, instructions, "Cancelled", 120_000);
+      }
+      await page.unroute("**/v1/agent/tasks");
     },
   },
 ];

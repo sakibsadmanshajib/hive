@@ -599,11 +599,21 @@ export class ControlPlaneError extends Error {
   // share a status, and a proxy route needs the exact one to state the true
   // reason back to the customer.
   public readonly code: string | null;
-  constructor(status: number, message: string, code: string | null = null) {
+  // Upstream Retry-After, verbatim, when the response carried one. A refusal
+  // that says when to come back is only useful to a program if the value
+  // survives the proxy hop, and the English in `message` is not parseable.
+  public readonly retryAfter: string | null;
+  constructor(
+    status: number,
+    message: string,
+    code: string | null = null,
+    retryAfter: string | null = null,
+  ) {
     super(message);
     this.name = "ControlPlaneError";
     this.status = status;
     this.code = code;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -612,7 +622,7 @@ async function throwControlPlaneError(response: Response, fallback: string): Pro
   const payload = parseJsonValue(bodyText);
   const message = readErrorMessage(payload) ?? `${fallback}: ${response.status}`;
   const code = isJsonObject(payload) ? readStringField(payload, "code") : null;
-  throw new ControlPlaneError(response.status, message, code);
+  throw new ControlPlaneError(response.status, message, code, response.headers.get("retry-after"));
 }
 
 export async function getViewer(): Promise<Viewer> {

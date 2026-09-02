@@ -22,14 +22,37 @@ export async function signInWithHive(
   password: string,
   owuiOrigin: string,
 ): Promise<void> {
-  // ponytail: OWUI login page has a continuously animating element, so
-  // Playwright's click-stability check never settles, and its force-click still
-  // requires the element in the viewport, which fails during the same
-  // animation. dispatchEvent fires the DOM click handler directly, regardless of
-  // geometry, stability, or overlays.
   const hiveButton = page.getByRole("button", { name: /continue with hive/i });
-  await expect(hiveButton).toBeVisible({ timeout: 30_000 });
-  await hiveButton.dispatchEvent("click");
+
+  // Click the button if it is there, and do not require it to be.
+  //
+  // This deployment sets OAUTH_AUTO_REDIRECT (deploy/docker/docker-compose.yml),
+  // so Open WebUI's landing page starts the authorize chain by itself. Whether a
+  // given load paints the button first or bounces before it can be clicked is a
+  // race with no bearing on what this helper proves, and losing it left the
+  // browser sitting on the console's own sign-in form while a 30 second
+  // assertion waited for a button on an origin the page had already left.
+  // Measured on run 33676212820, where the same run won that race on one login
+  // and lost it on the next.
+  //
+  // Nothing is weakened by accepting either. The assertion that actually
+  // matters is the one below, which requires the browser to have reached the
+  // consent origin, and it is unchanged: a page that neither offers the button
+  // nor redirects still fails there, by name.
+  const stillOnOwui = () => new URL(page.url()).origin === owuiOrigin;
+  const buttonDeadline = Date.now() + 30_000;
+  while (Date.now() < buttonDeadline && stillOnOwui()) {
+    if (await hiveButton.isVisible().catch(() => false)) {
+      // ponytail: OWUI login page has a continuously animating element, so
+      // Playwright's click-stability check never settles, and its force-click
+      // still requires the element in the viewport, which fails during the same
+      // animation. dispatchEvent fires the DOM click handler directly,
+      // regardless of geometry, stability, or overlays.
+      await hiveButton.dispatchEvent("click").catch(() => {});
+      break;
+    }
+    await page.waitForTimeout(250);
+  }
 
   // The OAuth click starts a real full-page redirect chain: OWUI -> Supabase
   // authorize -> /oauth/consent (web-console origin, unauthenticated) ->

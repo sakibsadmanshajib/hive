@@ -69,6 +69,16 @@ type Task struct {
 	// project's passages yet (spec task 9).
 	ProjectID uuid.UUID
 
+	// Attachments are the documents the person attached in the composer
+	// before starting this run (issue #1065). Like BearerJWT they are set by
+	// Service.CreateTask on the in-memory Task handed to Engine.Launch and are
+	// NOT a column on public.agent_tasks: a task row is a control record, not
+	// a copy of the customer's documents, so a Task loaded back from the
+	// database always has this empty. The launcher writes them into the
+	// sandbox's working directory, which is the only place the sandboxed agent
+	// can read anything from.
+	Attachments []Attachment
+
 	// BearerJWT is the task's own user's bearer JWT, set by
 	// Service.CreateTask on the in-memory Task it hands to Engine.Launch and
 	// never touched by Repository: it is not a column on public.agent_tasks
@@ -110,3 +120,12 @@ var (
 	// cancel) a task that already reached a terminal status.
 	ErrTerminalState = errors.New("agenttask: task already reached a terminal state")
 )
+
+// Attachment is one document travelling with a task: a bare file name and the
+// text already extracted from it by the surface it was uploaded on. Validated
+// at edge-api before it gets here, and validated again by the launcher, which
+// is the process that turns the name into a path.
+type Attachment struct {
+	Name    string
+	Content string
+}

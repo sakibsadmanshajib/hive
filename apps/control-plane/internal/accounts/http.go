@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -282,7 +283,10 @@ func (h *Handler) handleCreateInvitation(w http.ResponseWriter, r *http.Request)
 	result, err := h.svc.CreateInvitation(r.Context(), vc.CurrentAccount.ID, viewer, body.Email, body.Role)
 	if err != nil {
 		var gateErr *GateError
+		var capErr *InvitationCapError
 		switch {
+		case AsInvitationCapError(err, &capErr):
+			writeInvitationCap(w, r, capErr)
 		case AsGateError(err, &gateErr):
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": gateErr.Message,
@@ -523,6 +527,57 @@ func writeInternal(w http.ResponseWriter, r *http.Request, msg string, err error
 	slog.ErrorContext(r.Context(), msg, slog.String("err", err.Error()))
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": msg})
 }
+
+// writeInvitationCap answers a refusal from the invitation send cap.
+//
+// The response says the limit was hit and when it lifts, and nothing else. It
+// does not name which dimension tripped, because a per-recipient refusal would
+// then tell the caller that somebody recently invited that address, and it does
+// not vary by whether the address already holds an account, because it never
+// looked. The refusal happens before any invitation is stored, so there is
+// deliberately no "created but not delivered" result to report.
+func writeInvitationCap(w http.ResponseWriter, r *http.Request, capErr *InvitationCapError) {
+	if capErr.Unavailable {
+		// Not the caller's quota. The counter this cap depends on could not be
+		// reached, and an abuse control that cannot count denies rather than
+		// admits (#51), so this is a temporary server-side refusal.
+		slog.ErrorContext(r.Context(), "accounts: invitation cap counter unavailable",
+			slog.String("dimension", capErr.Dimension))
+		// A window rollover has nothing to do with a Redis blip, so this does
+		// not borrow one: a two second outage must not tell every client to
+		// stand off for the rest of the hour.
+		w.Header().Set("Retry-After", strconv.Itoa(int(invitationOutageRetry.Seconds())))
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "invitations are temporarily unavailable, please try again shortly",
+			"code":  "invitation_unavailable",
+		})
+		return
+	}
+	// The real time to the window rollover never reaches the caller, in the
+	// header or in the prose. It is a fingerprint of which cap tripped: under
+	// five minutes could only be the per-address cooldown, so one invitation
+	// from a fresh account would report that somebody, in some other workspace,
+	// invited that address moments ago. One constant for every dimension is
+	// what makes the refusals indistinguishable. Retry-After is a hint rather
+	// than a contract, so a caller that retries at it and is refused again has
+	// lost nothing.
+	slog.WarnContext(r.Context(), "accounts: invitation refused by send cap",
+		slog.String("dimension", capErr.Dimension),
+		slog.Duration("actual_retry_after", capErr.RetryAfter))
+	w.Header().Set("Retry-After", strconv.Itoa(int(invitationCapRetry.Seconds())))
+	writeJSON(w, http.StatusTooManyRequests, map[string]string{
+		"error": "invitation limit reached, try again later",
+		"code":  "invitation_rate_limited",
+	})
+}
+
+// What every capped invitation reports, whichever dimension refused it, and
+// what a counter outage reports instead: a blip is over in seconds, and telling
+// clients to stand off for a window they never hit is its own small outage.
+const (
+	invitationCapRetry    = 5 * time.Minute
+	invitationOutageRetry = 30 * time.Second
+)
 
 func writeJSON(w http.ResponseWriter, status int, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
