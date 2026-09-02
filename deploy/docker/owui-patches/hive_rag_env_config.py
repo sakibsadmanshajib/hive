@@ -252,6 +252,30 @@ RAG_CONFIG_ENV = {
     # below for the numeric coercion these two need instead.
     "rag.top_k": "RAG_TOP_K",
     "web.search.result_count": "WEB_SEARCH_RESULT_COUNT",
+    # Issue #1639. `web.fetch.max_content_length` is in upstream's
+    # DEFAULT_CONFIG (config.py:2846) and was absent from this map, so it was
+    # a first-boot seed only: on the demo box's already-booted volume the row
+    # holds whatever the very first boot wrote, and no compose change could
+    # ever reach it. That is the #1575 class of defect exactly.
+    #
+    # What it is, precisely, so nobody mistakes it for a fetch bound. It is
+    # read once by tools/builtin.py:276, after the body has already been
+    # fetched and extracted, and it truncates the extracted STRING to that
+    # many characters. It caps what enters the prompt. It does not cap what is
+    # read off the socket, so it is not, and never was, the fix for issue
+    # #1638's unbounded `response.content` read at retrieval/utils.py:170.
+    # That branch is still unbounded on the Python path; what closes it is the
+    # Go pipeline in apps/edge-api/internal/webtools, which enforces its own
+    # byte cap with io.LimitReader during the read, on both the text and the
+    # binary branch, and which slice S7 makes the only fetch path by retiring
+    # this one.
+    #
+    # Reconciled here anyway, because until S7 lands the fork's own fetch_url
+    # is still reachable and an inert cap is worse than an absent one: it
+    # reads as configured while enforcing nothing. INT_KEYS coerces it, and
+    # POSITIVE_INT_KEYS refuses a zero, which upstream's own `max_length > 0`
+    # test would silently read as "no truncation at all".
+    "web.fetch.max_content_length": "WEB_FETCH_MAX_CONTENT_LENGTH",
     # Issue #1609, the two knobs that decide the SHAPE of a document's
     # embedding traffic rather than its destination. Upstream defaults both to
     # the shape that took web search down: RAG_EMBEDDING_BATCH_SIZE is 1, so
@@ -548,6 +572,7 @@ INT_KEYS = frozenset(
         "web.search.result_count",
         "rag.embedding_batch_size",
         "rag.embedding_concurrent_requests",
+        "web.fetch.max_content_length",
     }
 )
 
@@ -572,7 +597,15 @@ INT_KEYS = frozenset(
 # constant would silently re-arm one half of the fix while appearing to
 # repair it. An operator who wants a bound names a positive number.
 POSITIVE_INT_KEYS = frozenset(
-    {"rag.embedding_batch_size", "rag.embedding_concurrent_requests"}
+    {
+        "rag.embedding_batch_size",
+        "rag.embedding_concurrent_requests",
+        # Issue #1639. Upstream gates the truncation on `max_length > 0`, so a
+        # persisted 0 turns the cap off entirely while the configuration still
+        # names one. Same failure shape as the two above: a legal integer that
+        # means "no bound" in a place where the value exists to be a bound.
+        "web.fetch.max_content_length",
+    }
 )
 
 # Keys Open WebUI stores as a JSON list, comma-split like LIST_KEYS but

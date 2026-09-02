@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 )
 
 // TestReduceEmbedding verifies the MRL truncate-and-renormalize helper:
@@ -69,9 +71,7 @@ func TestHTTPEmbedderNeverRequestsDimensions(t *testing.T) {
 			vec[i] = 0.01
 		}
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()
@@ -100,9 +100,7 @@ func TestHTTPEmbedderAcceptsBackendAtTargetWidth(t *testing.T) {
 			vec[i] = 0.02
 		}
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()
@@ -123,9 +121,7 @@ func TestHTTPEmbedderStrictRejectByDefault(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		vec := make([]float32, 4096)
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()
@@ -144,9 +140,7 @@ func TestHTTPEmbedderSendsAuthHeaderWhenKeySet(t *testing.T) {
 		gotAuth = r.Header.Get("Authorization")
 		vec := make([]float32, EmbeddingDimension)
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()
@@ -168,9 +162,7 @@ func TestHTTPEmbedderOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
 		sawAuth = r.Header.Get("Authorization") != ""
 		vec := make([]float32, EmbeddingDimension)
 		_ = json.NewEncoder(w).Encode(embedResp{
-			Data: []struct {
-				Embedding []float32 `json:"embedding"`
-			}{{Embedding: vec}},
+			Data: []embedVector{{Embedding: vec}},
 		})
 	}))
 	defer srv.Close()
@@ -181,5 +173,65 @@ func TestHTTPEmbedderOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
 	}
 	if sawAuth {
 		t.Error("expected no Authorization header when apiKey is empty")
+	}
+}
+
+// The response read ceiling must be sized off the width that crosses the wire,
+// not off the post-reduction width. On an MRL deployment reduceEmbedding runs
+// client side on a native-width vector, so a backend serving 3584 or 4096
+// natively sends that much regardless of EmbeddingDimension being 1024. A
+// ceiling sized on the reduced width truncates a 256 chunk page at the
+// LimitReader, the decode returns an unexpected EOF, and every large web_fetch
+// on that deployment fails permanently and indistinguishably from an outage.
+//
+// Asserted arithmetically rather than with an eleven megabyte fixture: the
+// property is the sizing, and the sizing is a function.
+func TestEmbedResponseCeilingCoversNativeWidthBatches(t *testing.T) {
+	// Measured bytes per dimension for a JSON float32 plus its comma, rounded
+	// up from about 14. The ceiling has to clear this in the worst case.
+	const measuredBytesPerDim = 15
+
+	restore := EmbeddingDimension
+	t.Cleanup(func() { EmbeddingDimension = restore })
+	// The reduced width an MRL deployment configures, which is what the first
+	// version of this ceiling was sized on.
+	EmbeddingDimension = 1024
+
+	for _, nativeDim := range []int{1024, 2048, 3584, 4096} {
+		for _, n := range []int{1, 128, 256} {
+			need := int64(n) * int64(nativeDim) * measuredBytesPerDim
+			if got := embedResponseCeiling(n); got < need {
+				t.Fatalf("ceiling for %d inputs = %d bytes, need at least %d for a native width of %d",
+					n, got, need, nativeDim)
+			}
+		}
+	}
+
+	// And the fixed 4 MiB this replaced would not have: a 256 chunk page at
+	// 1024 native is about 2.9 MB and fits, but the same page at 4096 native
+	// is about 11.7 MB and does not. Keeps the reason for the change attached
+	// to the test that enforces it.
+	if embedResponseCeiling(256) <= 4*1024*1024 {
+		t.Fatal("the ceiling did not grow past the fixed 4 MiB it replaced")
+	}
+}
+
+// The ceiling constant has to move whenever a wider model joins the
+// selectable set, and nothing else makes that happen. This turns a future
+// silent re-arm into a red build: today the registry carries native widths of
+// 1024, 4096 and 4096, so 4096 covers it exactly rather than approximately.
+//
+// Test-only import of the registry, deliberately: the production path resolves
+// its width from configuration and should not gain a dependency on the
+// registry just to size a read buffer.
+func TestEmbedResponseCeilingCoversEveryRegisteredModel(t *testing.T) {
+	if len(embedmodel.Registry) == 0 {
+		t.Fatal("the embedding model registry is empty; this assertion would pass vacuously")
+	}
+	for name, m := range embedmodel.Registry {
+		if m.NativeDim > maxNativeEmbeddingDim {
+			t.Fatalf("%s has a native width of %d, past maxNativeEmbeddingDim %d: widen the constant, or a full batch from this model truncates at the read ceiling and every large page fails",
+				name, m.NativeDim, maxNativeEmbeddingDim)
+		}
 	}
 }

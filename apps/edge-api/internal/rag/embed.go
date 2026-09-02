@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"strings"
@@ -103,16 +104,72 @@ type embedReq struct {
 	Input []string `json:"input"`
 }
 
+const (
+	// maxNativeEmbeddingDim is the widest native vector this client will
+	// budget a response for. Not a validation rule and not a configuration
+	// value: the dimension check below still requires EmbeddingDimension
+	// exactly. It exists only to size the response read ceiling against the
+	// width that actually crosses the wire, which on an MRL deployment is the
+	// backend's native width rather than the reduced one. 4096 covers every
+	// model in the selectable set today.
+	maxNativeEmbeddingDim = 4096
+	// bytesPerJSONFloat is a generous allowance per dimension for a float32
+	// serialised as JSON with a comma. Measured at about 14; 20 leaves room.
+	bytesPerJSONFloat = 20
+)
+
+// embedResponseCeiling is how many response bytes a batch of n inputs is
+// allowed. Extracted so the sizing can be asserted directly rather than only
+// through an eleven megabyte fixture.
+func embedResponseCeiling(n int) int64 {
+	return int64(n)*maxNativeEmbeddingDim*bytesPerJSONFloat + 4*1024*1024
+}
+
+// embedVector is one element of an embeddings response. Named rather than
+// anonymous so a test can build one without restating the shape, which is
+// what makes adding a field here a one-line change instead of five.
+type embedVector struct {
+	// Index is the position of the input this vector belongs to. The OpenAI
+	// embeddings contract does not promise response order, and a batch that
+	// came back reordered would rank every chunk against the wrong text, so
+	// the batch path below places by it rather than trusting arrival order.
+	Index     int       `json:"index"`
+	Embedding []float32 `json:"embedding"`
+}
+
 type embedResp struct {
-	Data []struct {
-		Embedding []float32 `json:"embedding"`
-	} `json:"data"`
+	Data []embedVector `json:"data"`
 }
 
 // Embed embeds a single text string and returns an EmbeddingDimension-wide vector.
 // Errors are provider-blind: no backend URL, model name, or upstream message.
 func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, err := json.Marshal(embedReq{Model: e.model, Input: []string{text}})
+	vectors, err := e.EmbedBatch(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	return vectors[0], nil
+}
+
+// EmbedBatch embeds every text in ONE request and returns the vectors in the
+// order the texts were given.
+//
+// One request, not one per text. The embeddings API takes an input array and
+// always has; sending them one at a time is what produced issue #1609, where
+// a single web search fetched five pages and made roughly two hundred
+// embedding calls, each taking its own credit hold, until accounting refused
+// them and every source was dropped. web_fetch uses this for the whole of a
+// page in one call plus one for the query, which is two calls regardless of
+// page size.
+//
+// Single-input Embed is this function with a slice of one, so both paths
+// share the request shape, the MRL reduction, the dimension check and the
+// provider-blind error contract rather than having two of each.
+func (e *HTTPEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("rag.embed: no inputs")
+	}
+	body, err := json.Marshal(embedReq{Model: e.model, Input: texts})
 	if err != nil {
 		return nil, fmt.Errorf("rag.embed: marshal: %w", err)
 	}
@@ -138,22 +195,73 @@ func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 		return nil, fmt.Errorf("rag: embedding service unavailable")
 	}
 
+	// The response carries one vector per input, so the ceiling scales with
+	// the batch rather than being a fixed figure a legitimate batch can
+	// exceed. A fixed 4 MiB refuses a 256-chunk page outright, which is
+	// exactly what web_fetch sends.
+	//
+	// Sized off maxNativeEmbeddingDim, NOT off EmbeddingDimension. The wire
+	// carries the backend's NATIVE width and EmbeddingDimension is the
+	// post-reduction width, and those differ on precisely the deployments
+	// where reduceTo > 0, since reduceEmbedding runs client-side on a
+	// native-width vector. Measured: 256 inputs at a native 3584 is about
+	// 10.2 MB and at 4096 about 11.7 MB, both past a ceiling sized on a
+	// reduced 1024. That deployment would then fail every large page
+	// permanently, and indistinguishably from a real outage.
+	maxResponseBytes := embedResponseCeiling(len(texts))
+	// A LimitedReader rather than io.LimitReader, so N can be read back
+	// afterwards: a decode failure with the budget exhausted is a response
+	// too large, which is a configuration fact, and a decode failure with
+	// budget left is a transport or protocol fault. Collapsing the two is how
+	// the first version of this would have reported a permanent misfit as an
+	// intermittent outage.
+	limited := &io.LimitedReader{R: resp.Body, N: maxResponseBytes}
 	var result embedResp
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&result); err != nil {
+	if err := json.NewDecoder(limited).Decode(&result); err != nil {
+		if limited.N <= 0 {
+			log.Printf("rag: embedding response exceeded %d bytes for %d inputs; the backend's native vector width is wider than this ceiling allows", maxResponseBytes, len(texts))
+		}
 		return nil, fmt.Errorf("rag: embedding service unavailable")
 	}
 
-	if len(result.Data) == 0 {
-		return nil, fmt.Errorf("rag: embedding service returned no data")
+	if len(result.Data) != len(texts) {
+		// A short answer is a failure, never a partial success: ranking N
+		// chunks against N-1 vectors would silently mis-attribute every one
+		// after the gap.
+		return nil, fmt.Errorf("rag: embedding service returned %d vectors for %d inputs", len(result.Data), len(texts))
 	}
-	vec := result.Data[0].Embedding
-	if e.reduceTo > 0 {
-		// Legitimate MRL slice; a no-op for a backend that already serves the
-		// model at reduceTo width.
-		vec = reduceEmbedding(vec, e.reduceTo)
+
+	// The API does not promise response order, so the index field is used
+	// when it is a complete permutation of the inputs. Some OpenAI-compatible
+	// backends omit it entirely, which arrives as all-zero; that is not a
+	// permutation, and arrival order is used instead, which is what the
+	// single-input path always relied on.
+	byIndex := true
+	seen := make([]bool, len(texts))
+	for _, item := range result.Data {
+		if item.Index < 0 || item.Index >= len(texts) || seen[item.Index] {
+			byIndex = false
+			break
+		}
+		seen[item.Index] = true
 	}
-	if len(vec) != EmbeddingDimension {
-		return nil, fmt.Errorf("rag: unexpected embedding dimension %d", len(vec))
+
+	out := make([][]float32, len(texts))
+	for i, item := range result.Data {
+		position := i
+		if byIndex {
+			position = item.Index
+		}
+		vec := item.Embedding
+		if e.reduceTo > 0 {
+			// Legitimate MRL slice; a no-op for a backend that already serves
+			// the model at reduceTo width.
+			vec = reduceEmbedding(vec, e.reduceTo)
+		}
+		if len(vec) != EmbeddingDimension {
+			return nil, fmt.Errorf("rag: unexpected embedding dimension %d", len(vec))
+		}
+		out[position] = vec
 	}
-	return vec, nil
+	return out, nil
 }

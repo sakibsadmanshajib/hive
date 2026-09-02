@@ -2030,6 +2030,38 @@ def test_ci_default_still_refuses_every_boot_path_value() -> None:
         assert raised, f"CI must still refuse {environ}"
 
 
+def test_web_fetch_content_cap_is_reconciled() -> None:
+    """Issue #1639. `web.fetch.max_content_length` is in upstream's
+    DEFAULT_CONFIG, so it was seeded on the very first boot and thereafter
+    read from Open WebUI's own database: absent from this map, no compose
+    change could ever reach the demo box's already-booted volume, and the cap
+    read as configured while being whatever the first boot happened to write.
+    Same class as #1575, and it stays worth reconciling until slice S7 retires
+    the fork's own fetch path entirely."""
+    applied = hive_rag_env_config.overrides(dict(WEB_FETCH_MAX_CONTENT_LENGTH="50000"))
+    assert applied["web.fetch.max_content_length"] == 50000, applied
+    assert isinstance(applied["web.fetch.max_content_length"], int), applied
+
+
+def test_web_fetch_content_cap_refuses_zero_and_malformed_values() -> None:
+    """Upstream gates the truncation on `max_length > 0` (tools/builtin.py),
+    so a persisted 0 turns the cap off entirely while the configuration still
+    names one. A cap that is inert while looking set is the defect this row
+    exists to end, so zero is refused rather than written."""
+    for value in ("0", "-1", "1.5", "lots"):
+        raised = False
+        try:
+            hive_rag_env_config.overrides(dict(WEB_FETCH_MAX_CONTENT_LENGTH=value))
+        except RuntimeError:
+            raised = True
+        assert raised, f"must refuse WEB_FETCH_MAX_CONTENT_LENGTH={value!r}"
+
+
+def test_web_fetch_content_cap_unset_leaves_the_persisted_value_alone() -> None:
+    applied = hive_rag_env_config.overrides(dict(WEB_FETCH_MAX_CONTENT_LENGTH="  "))
+    assert "web.fetch.max_content_length" not in applied
+
+
 def main() -> None:
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
