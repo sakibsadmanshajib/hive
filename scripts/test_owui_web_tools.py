@@ -644,6 +644,41 @@ def test_an_argument_the_specification_does_not_declare_is_dropped() -> None:
     run_gateway(check)
 
 
+def test_a_string_result_count_from_the_model_is_coerced() -> None:
+    """Models emit "3" as often as 3, and upstream's ast.literal_eval leaves
+    the string intact. Sent as a string, the gateway's decode fails and the
+    whole search comes back as unreadable arguments."""
+    def check(base, server):
+        tools = select(base, TOOL_CAPABLE)
+        loop_execute(tools, "web_search", {"query": "x", "max_results": "3"})
+        body = [entry for entry in server.seen if entry[0] == "POST"][0][3]
+        assert body["max_results"] == 3, body
+
+    run_gateway(check)
+
+    def check_garbage(base, server):
+        tools = select(base, TOOL_CAPABLE)
+        loop_execute(tools, "web_search", {"query": "x", "max_results": "lots"})
+        body = [entry for entry in server.seen if entry[0] == "POST"][0][3]
+        assert "max_results" not in body, body
+
+    run_gateway(check_garbage)
+
+
+def test_the_deployment_actually_gets_native_function_calling() -> None:
+    """The box's own untracked .env was seeded from .env.example, which carried
+    legacy, and --env-file would keep winning over a changed compose default
+    forever. Shell environment beats it, so the workflow is the versioned place
+    that reaches the deployment. Without this the feature merges and is not
+    deployed, which is a silent failure rather than a visible one."""
+    workflow = (REPO / ".github" / "workflows" / "deploy-demo-box.yml").read_text(encoding="utf-8")
+    assert 'OWUI_DEFAULT_FUNCTION_CALLING: "native"' in workflow, (
+        "the deploy workflow does not force native function calling, so the "
+        "box's own .env decides and the tools never reach a model"
+    )
+    assert 'OWUI_WEB_TOOLS_ENABLED: "true"' in workflow
+
+
 def test_a_refusal_reaches_the_model_as_its_own_reason() -> None:
     """D-034. A call that cannot be priced is refused rather than served free,
     and the model is told which refusal it was rather than a generic failure."""

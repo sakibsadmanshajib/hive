@@ -457,8 +457,20 @@ def build_tools(request, user, metadata, specs: list) -> dict:
 
             async def web_search(query: str = "", max_results: int = 0) -> str:
                 body: dict = {"query": query}
-                if max_results:
-                    body["max_results"] = max_results
+                # Coerced, not trusted. A model emits "3" as often as 3, and
+                # upstream parses tool arguments with ast.literal_eval before
+                # this ever sees them, so a string survives to here. Sent as a
+                # string it would fail the gateway's JSON decode and the whole
+                # search would come back as "the tool arguments could not be
+                # read", which reads as a broken tool rather than a sloppy
+                # argument. Anything uncoercible is dropped, and the gateway
+                # applies its own default.
+                try:
+                    count = int(max_results)
+                except (TypeError, ValueError):
+                    count = 0
+                if count:
+                    body["max_results"] = count
                 payload = await _call_tool(
                     request, user, metadata, WEB_SEARCH, body, SEARCH_TIMEOUT_SECONDS
                 )
