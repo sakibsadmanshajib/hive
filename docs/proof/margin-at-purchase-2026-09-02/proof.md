@@ -160,10 +160,11 @@ TestBatchSettlementCarriesNoMultiplier and
 TestOneDollarOfBatchCostSettlesAtOneBillionCredits (batch executor).
 
 
-## 5. Review findings fixed before the first review round closed
+## 5. Review findings fixed before merge
 
-Two defects found by the database and security passes over this branch's own
-diff, both fixed in the second commit and re-verified on a fresh throwaway:
+Five, from this branch's own database and security passes and from the
+independent database and money-path review that followed. All fixed and
+re-verified:
 
 1. The first cut repriced `hive-small`, `hive-medium` and `hive-fast` at
    Groq's list rate for gpt-oss-20b and gpt-oss-120b. All three left Groq for
@@ -181,7 +182,35 @@ diff, both fixed in the second commit and re-verified on a fresh throwaway:
    `NULL <> 2130000` evaluates to NULL, an OR chain that evaluates to NULL is
    not true, and the row would have been skipped in silence while keeping its
    old price. Now `IS DISTINCT FROM` throughout.
-3. `usdCentsToLocalPaisa` accepted any parseable rate, including zero and
+3. The migration header justified the TTS and STT reprice as display-only,
+   citing the clause of D-033 that says `internal/audio` charges flat literals
+   and never reads the catalog. That clause was corrected on 2026-09-02, the
+   same day, and it is false: issue #627 closed on 2026-08-01, and
+   `audio/pricing.go` `creditsForQuantity` bills `route.UnitPriceCredits`,
+   which `audio/routing_adapter.go` sets from `model_aliases.output_price_credits`,
+   the exact column this migration rewrites. The reprice stands and is correct
+   under D-064, because both rates are provider list rates with the margin
+   baked in. What changed is the header, which now says plainly that this cuts
+   every speech and transcription charge by 28.57 percent at deploy. Verified
+   against the code rather than taken on the reviewer's word.
+
+4. `PriceForCredits` recorded `PurchaseMarkupRate` on the returned value
+   unconditionally, including on the branch that skips the markup. Latent
+   today, because `PurchaseMarkupAppliesToLocalCurrency` is true, and armed the
+   moment anyone takes the one-line flip the file itself invites: every
+   local-currency intent would then store a 6 percent markup beside an amount
+   that never carried one, which is the #1682 shape the field exists to
+   prevent. Fixed, and pinned by
+   `TestReturnedMarkupRateReproducesTheAmountItIsRecordedBeside`, which never
+   mentions the constant: it takes the rate the call reports and requires it to
+   reproduce the amount the same call returned.
+
+   Mutation checked in both directions rather than asserted. With the fix and
+   the flip taken, the test passes. With the flip taken and the recorded rate
+   put back to the constant, it fails on the local-currency case with
+   `USDCents = 100, but the recorded markup "0.06" reproduces 106`.
+
+5. `usdCentsToLocalPaisa` accepted any parseable rate, including zero and
    negative ones. It now refuses a non-positive rate rather than pricing a
    purchase at nothing or at a negative amount, neither of which looks like a
    failure once it is a row.

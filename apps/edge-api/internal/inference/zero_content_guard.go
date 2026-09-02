@@ -323,8 +323,8 @@ const (
 // WHAT THE FIGURE IS. The credits the request would have been charged, taken
 // from whichever pricing arm priced it: for a catalog-priced alias, the
 // alias's own price applied to the tokens the upstream reported burning; for a
-// variable-price alias (#1538), the upstream's OWN reported cost times the
-// margin, or the hold when that cost could not be read, since that is what
+// variable-price alias (#1538), the upstream's OWN reported cost at the peg,
+// or the hold when that cost could not be read, since that is what
 // UpstreamActualSettlement would have charged. Computed in int64 credits and
 // converted to float64 only here, at the Prometheus boundary. Nothing reads the
 // value back into a charge.

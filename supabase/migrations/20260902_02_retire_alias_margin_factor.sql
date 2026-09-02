@@ -102,11 +102,30 @@
 --                                                            30833333334
 --                                                            (was 43166670000)
 --
---   Both rates are the ones 20260801_13_alias_price_unit.sql recorded. Per
---   D-033 these two prices are display figures: internal/audio charges flat
---   literals and never reads the catalog (issue #627), so this moves what a
---   customer is quoted and not yet what they are charged. That is a reason to
---   fix #627, not a reason to leave a retired margin on a published price.
+--   Both rates are the ones 20260801_13_alias_price_unit.sql recorded. Unlike
+--   the note this file originally carried, these are NOT display-only figures:
+--   issue #627 is closed and the audio path bills from the catalog, in
+--   apps/edge-api/internal/audio/pricing.go creditsForQuantity, which reads
+--   route.UnitPriceCredits, set from model_aliases.output_price_credits in
+--   audio/routing_adapter.go. Repricing them therefore cuts what a caller is
+--   charged for speech and transcription by the same 1.4, at deploy. That is
+--   the intent: both rates are provider list rates with the margin baked in,
+--   so they have a cost basis and D-064 applies to them exactly as it does to
+--   the token aliases.
+--
+--   The original note here claimed the opposite, citing the clause of D-033
+--   that said internal/audio charges flat literals and never reads the
+--   catalog. That clause was corrected on 2026-09-02, the same day as this
+--   file, precisely because agents kept reading it and believing it. Do not
+--   reintroduce it.
+--
+--   hive-stt is the one figure in this file that is not an exact division of
+--   the old one, and it is a RE-DERIVATION rather than a division: 43166670000
+--   over 1.4 is 30833335714.29, while this file writes 30833333334. The old
+--   value carried a ceiling taken at the pre-rescale unit, which the rescale
+--   then multiplied by 10,000 along with the rounding error inside it. Deriving
+--   from the published rate again is the better number, and a reader checking
+--   the 1.4 ratio on this row will find it does not quite hold, by design.
 --
 -- WHAT THIS FILE DELIBERATELY DOES NOT TOUCH, and why. Stated in full because
 -- "sweep for any other place a margin factor is applied" is half of issue

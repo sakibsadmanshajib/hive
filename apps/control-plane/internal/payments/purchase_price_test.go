@@ -157,6 +157,63 @@ func TestPurchasePriceRefusesAnUnusableRate(t *testing.T) {
 	}
 }
 
+// TestReturnedMarkupRateReproducesTheAmountItIsRecordedBeside is the guard that
+// survives the flip. It never mentions PurchaseMarkupRate: it takes the rate
+// the call REPORTS, applies it to the peg price, and requires that to be the
+// amount the same call returned, in each currency.
+//
+// Today, with PurchaseMarkupAppliesToLocalCurrency true, both branches report
+// 0.06 and both reproduce. Flip that constant without also reporting the rate
+// actually applied and the local-currency case goes red here, instead of going
+// quiet and writing a row whose amount cannot be derived from its own stored
+// fields. That is the issue #1682 shape, and the recorded rate is what is meant
+// to stop it.
+func TestReturnedMarkupRateReproducesTheAmountItIsRecordedBeside(t *testing.T) {
+	const effectiveRate = "130.175000"
+
+	for _, tc := range []struct {
+		name string
+		rate string
+	}{
+		{"usd purchase", ""},
+		{"local currency purchase", effectiveRate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := PriceForCredits(CreditsPerUSD, tc.rate)
+			if err != nil {
+				t.Fatalf("PriceForCredits: %v", err)
+			}
+
+			reported, ok := new(big.Rat).SetString(got.MarkupRate)
+			if !ok {
+				t.Fatalf("MarkupRate %q does not parse; a rate nothing can read is not a record", got.MarkupRate)
+			}
+			amount := new(big.Rat).SetFrac(big.NewInt(CreditsPerUSD), big.NewInt(CreditIncrement))
+			amount.Mul(amount, reported.Add(reported, new(big.Rat).SetInt64(1)))
+
+			wantUSD := new(big.Int).Quo(amount.Num(), amount.Denom()).Int64()
+			if got.USDCents != wantUSD {
+				t.Fatalf("USDCents = %d, but the recorded markup %q reproduces %d; the row would not derive from its own fields",
+					got.USDCents, got.MarkupRate, wantUSD)
+			}
+
+			if tc.rate == "" {
+				return
+			}
+			rateRat, ok := new(big.Rat).SetString(tc.rate)
+			if !ok {
+				t.Fatalf("test fixture rate %q does not parse", tc.rate)
+			}
+			amount.Mul(amount, rateRat)
+			wantLocal := new(big.Int).Quo(amount.Num(), amount.Denom()).Int64()
+			if got.LocalMinor != wantLocal {
+				t.Fatalf("LocalMinor = %d, but the recorded markup %q at the recorded rate reproduces %d",
+					got.LocalMinor, got.MarkupRate, wantLocal)
+			}
+		})
+	}
+}
+
 // TestMarkupConstantsAreTheOwnerRulings pins the two rates themselves. They are
 // the product's headline pricing decision (D-065, D-066) and neither should
 // move without the ruling that moves it.

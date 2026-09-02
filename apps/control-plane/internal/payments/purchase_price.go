@@ -107,15 +107,24 @@ func PriceForCredits(credits int64, effectiveRate string) (PurchaseAmounts, erro
 	// Steps 2 and 3: exact US cents at the peg, then the markup.
 	marked := new(big.Rat).SetFrac(big.NewInt(credits), big.NewInt(CreditIncrement))
 	local := effectiveRate != ""
+	// The rate RECORDED is the rate APPLIED, on both branches. Setting it to
+	// the constant unconditionally would be correct only while
+	// PurchaseMarkupAppliesToLocalCurrency is true, and this file invites
+	// flipping that in one line, at which point every local-currency intent
+	// would store a 6 percent markup against an amount that never carried one.
+	// That is the issue #1682 shape, and it is the shape this field exists to
+	// prevent, so the field must not be the thing that reintroduces it.
+	appliedMarkup := "0"
 	if !local || PurchaseMarkupAppliesToLocalCurrency {
 		multiplier, err := markupMultiplier(PurchaseMarkupRate)
 		if err != nil {
 			return PurchaseAmounts{}, err
 		}
 		marked.Mul(marked, multiplier)
+		appliedMarkup = PurchaseMarkupRate
 	}
 
-	amounts := PurchaseAmounts{MarkupRate: PurchaseMarkupRate}
+	amounts := PurchaseAmounts{MarkupRate: appliedMarkup}
 
 	// Step 5 for USD.
 	usdCents, err := truncateToMinorUnit(marked)
