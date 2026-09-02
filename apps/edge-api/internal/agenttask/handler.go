@@ -245,10 +245,18 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.Pack) == "" {
-		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "pack required")
-		return
-	}
+	// An absent pack is a normal submission since issue #1623, not a bad
+	// request: the composer stopped asking a customer to choose between two
+	// words that name a system prompt, and control-plane resolves it from the
+	// instructions instead (agenttask.InferPack). Whitespace normalises to the
+	// same empty value so a hand-rolled client sending " " takes the same
+	// route rather than reaching the pack CHECK constraint.
+	//
+	// Deliberately no default substituted here. Two layers each holding their
+	// own idea of the default is how the two ends come to disagree about what
+	// actually ran; this edge forwards what it was given and control-plane is
+	// the single place that decides.
+	req.Pack = strings.TrimSpace(req.Pack)
 
 	// Ahead of the project check and the solvency gate, for the same reason
 	// that check is ahead of the gate: a request that cannot be honoured

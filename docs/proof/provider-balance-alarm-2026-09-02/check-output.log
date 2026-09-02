@@ -1,0 +1,58 @@
+Proof capture for issue #1411, taken 2026-09-02 against the real OpenRouter account.
+Endpoint: GET https://openrouter.ai/api/v1/credits and GET https://openrouter.ai/api/v1/key
+The key is supplied through OPENROUTER_API_KEY and is never printed by the check or by this log.
+Command: node .github/ci/check-provider-balance.mjs
+
+=== 1. Alarm firing: real balance, default thresholds (7 days of runway, 2.00 USD floor) ===
+LOW: the OpenRouter balance is 1.46 USD, under the 2.00 USD floor. The floor sits under the runway test because a burn rate measured over a quiet window says nothing about the next busy hour.
+1.46 USD remaining of 10.00 purchased (8.54 spent). Burn 0.004 USD/day from the provider's own weekly usage figure for this key (no usable stored sample: either this is a first run, the cache was evicted, or the newest sample is too recent to extrapolate from), runway 382.3 days.
+
+Top up the account at https://openrouter.ai/settings/credits. Every paid route in deploy/litellm/config.yaml draws on this one balance, including the deepseek pair, the document vision route, the upstream-actual auto route and the paid leg of the RAG embedding cascade. That file declares no chat fallback on purpose (one alias, one price), so at zero balance those routes refuse outright rather than degrading to another model.
+exit=1
+
+=== 2. Healthy branch: same real balance, thresholds moved under it (floor 1.00 USD, runway 0.1 days) ===
+OK: 1.46 USD remaining of 10.00 purchased (8.54 spent). Burn 0.004 USD/day from the provider's own weekly usage figure for this key (no usable stored sample: either this is a first run, the cache was evicted, or the newest sample is too recent to extrapolate from), runway 382.3 days. Threshold 0.1 days, floor 1.00 USD.
+exit=0
+
+=== 3. Account-wide delta path, seeded with the real reading recorded in issue #1411 ===
+    (total_usage 8.409778422 at 2026-08-29T09:44Z, four days before this capture)
+OK: 1.46 USD remaining of 10.00 purchased (8.54 spent). Burn 0.030 USD/day from account-wide usage delta over the last 4.3 days, runway 48.2 days. Threshold 0.1 days, floor 1.00 USD.
+exit=0
+
+=== 4. Unreadable API must not report healthy (pointed at a loopback port nothing listens on) ===
+FATAL: could not read the OpenRouter balance after 1 attempt(s). Last error: /credits could not be reached: ECONNREFUSED
+
+This is a failure to READ the balance, not a healthy balance. It is reported as a failure because a monitor that goes green when it could not reach the API asserts a state nothing verified.
+exit=1
+
+=== 5. The alarm's delivery, proved on GitHub Actions rather than locally ===
+    Label gated runs of .github/workflows/provider-balance-watch.yml on pull request #1731,
+    each one reading the real OpenRouter account. Both halves of the alert channel are
+    exercised, because a check whose notification does not arrive is the failure this
+    change exists to remove.
+
+    Run 33662109196 (label provider-balance-test:simulate-low), conclusion failure:
+      Cache not found for input keys: provider-balance-state-33662109196, provider-balance-state-
+      simulating a shortfall: runway threshold raised to 100000 days
+      LOW: the OpenRouter balance is 1.46 USD, under the 2.00 USD floor.
+      1.46 USD remaining of 10.00 purchased (8.54 spent). Burn 0.004 USD/day ... runway 382.3 days.
+      Cache saved with key: provider-balance-state-33662109196
+      opened the tracking issue
+      -> filed issue #1732, titled "the OpenRouter balance is low or unreadable",
+         labelled priority:critical, demo-surface, money-path, authored by app/github-actions.
+
+    Run 33662109465 (same labels, immediately after), conclusion failure:
+      tracking issue #1732 is already open, not commenting again
+      -> deduplication works, and the author match on app/github-actions is confirmed
+         against a real bot filed issue rather than assumed.
+
+    Run 33662230066 (label provider-balance-test:simulate-healthy), conclusion success:
+      simulating recovery: thresholds lowered under the real balance, to prove the tracking
+      issue gets closed
+      OK: 1.46 USD remaining of 10.00 purchased (8.54 spent). ... Threshold 0.001 days, floor 0.00 USD.
+      -> issue #1732 closed at 2026-09-02T17:37:45Z with a recovery comment, so a stale open
+         issue cannot swallow the next alert.
+
+    An earlier run on the same pull request was correctly SKIPPED, before the
+    run-provider-balance-watch label was present, which is the job level gate behaving as
+    designed rather than an accident.

@@ -19,14 +19,17 @@ import (
 // TestGetCheckoutOptions_BDAccount_BDTPaisa verifies BD branch resolves
 // USD → BDT paisa via FX snapshot using math/big.
 //
-// Effective rate fixture: 115.500000 (mid 110.00 + 5% fee).
+// Effective rate fixture: 115.500000, whatever mid rate and FX fee produced it.
 // Expected paisa per CreditsPerUSD-block (= per 1 USD-equivalent of credits;
-// the block itself is CreditsPerUSD, 1e9 since the 2026-08-23 rescale):
+// the block itself is CreditsPerUSD, 1e9 since the 2026-08-23 rescale). The
+// block is priced at 106 cents rather than 100 because the 6 percent purchase
+// markup applies to every purchase (D-065), and the FX markup is already inside
+// the effective rate:
 //
-//	paisa_per_block = floor(effectiveRate * 100)
-//	                = floor(115.500000 * 100)
-//	                = floor(11550)
-//	                = 11550
+//	paisa_per_block = floor(effectiveRate * 106)
+//	                = floor(115.500000 * 106)
+//	                = floor(12243)
+//	                = 12243
 func TestGetCheckoutOptions_BDAccount_BDTPaisa(t *testing.T) {
 	repo := newStubRepository()
 	led := &stubLedger{}
@@ -54,7 +57,7 @@ func TestGetCheckoutOptions_BDAccount_BDTPaisa(t *testing.T) {
 	if opts.Currency != "BDT" {
 		t.Errorf("expected Currency=BDT for BD account, got %q", opts.Currency)
 	}
-	const wantPaisa int64 = 11550
+	const wantPaisa int64 = 12243
 	if opts.PricePerBlockMinor != wantPaisa {
 		t.Errorf("expected PricePerBlockMinor=%d (paisa per USD-block), got %d", wantPaisa, opts.PricePerBlockMinor)
 	}
@@ -66,7 +69,8 @@ func TestGetCheckoutOptions_BDAccount_BDTPaisa(t *testing.T) {
 // TestGetCheckoutOptions_BDAccount_TruncatesViaMathBig confirms the math/big
 // integer truncation path: a non-round effective rate truncates correctly.
 //
-// effectiveRate = 115.557777 → paisa = floor(11555.7777) = 11555
+// effectiveRate = 115.557777 → paisa = floor(115.557777 * 106)
+//              = floor(12249.124362) = 12249
 func TestGetCheckoutOptions_BDAccount_TruncatesViaMathBig(t *testing.T) {
 	repo := newStubRepository()
 	led := &stubLedger{}
@@ -91,15 +95,16 @@ func TestGetCheckoutOptions_BDAccount_TruncatesViaMathBig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCheckoutOptions: %v", err)
 	}
-	const wantPaisa int64 = 11555
+	const wantPaisa int64 = 12249
 	if opts.PricePerBlockMinor != wantPaisa {
 		t.Errorf("expected PricePerBlockMinor=%d (truncated paisa), got %d", wantPaisa, opts.PricePerBlockMinor)
 	}
 }
 
 // TestGetCheckoutOptions_NonBDAccount_USDCents verifies non-BD branch
-// returns 100 cents per CreditsPerUSD-block (= 1 USD per USD-block) and
-// Currency="USD". FX provider is NOT consulted.
+// returns 106 cents per CreditsPerUSD-block (1 USD of credit value at the peg,
+// plus the 6 percent purchase markup) and Currency="USD". FX provider is NOT
+// consulted, which is also what keeps the FX markup off a USD price.
 func TestGetCheckoutOptions_NonBDAccount_USDCents(t *testing.T) {
 	repo := newStubRepository()
 	led := &stubLedger{}
@@ -117,8 +122,8 @@ func TestGetCheckoutOptions_NonBDAccount_USDCents(t *testing.T) {
 	if opts.Currency != "USD" {
 		t.Errorf("expected Currency=USD for non-BD account, got %q", opts.Currency)
 	}
-	if opts.PricePerBlockMinor != 100 {
-		t.Errorf("expected PricePerBlockMinor=100 cents per USD-block, got %d", opts.PricePerBlockMinor)
+	if opts.PricePerBlockMinor != 106 {
+		t.Errorf("expected PricePerBlockMinor=106 cents per USD-block, got %d", opts.PricePerBlockMinor)
 	}
 	if opts.CreditBlockSize != CreditsPerUSD {
 		t.Errorf("expected CreditBlockSize=%d, got %d", CreditsPerUSD, opts.CreditBlockSize)

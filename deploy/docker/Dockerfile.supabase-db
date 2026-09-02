@@ -38,7 +38,7 @@
 #
 # The base is pinned by digest, same value the compose file used to name.
 # Refresh: docker pull pgvector/pgvector:pg16 && docker inspect --format='{{index .RepoDigests 0}}' pgvector/pgvector:pg16
-FROM pgvector/pgvector:pg16@sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6
+FROM pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
 
 # postgresql-16-cron comes from the PGDG apt repository the official postgres
 # image already configures (bookworm-pgdg main 16), so this needs no new source

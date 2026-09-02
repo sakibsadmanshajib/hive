@@ -281,20 +281,36 @@ export const listTasks = async (
 	return tasks;
 };
 
+/**
+ * Starts a run.
+ *
+ * `pack` is null for an ordinary submission (#1623): the composer no longer
+ * asks anyone to classify their own request, so the field is omitted from the
+ * body entirely and control-plane resolves it from the instructions. A pack is
+ * sent only when the person explicitly corrected the last guess.
+ *
+ * Omitted rather than sent as null or "": the endpoint reads an absent field
+ * and a blank one the same way today, but a body that carries the key is a
+ * body that looks like a choice, and the next reader of this call would take
+ * it for one.
+ */
 export const createTask = async (
 	token: string,
-	pack: TaskPack,
+	pack: TaskPack | null,
 	instructions: string,
 	attachments: CoworkAttachment[] = [],
 	apiBase: string = DEFAULT_AGENT_API_BASE_URL
 ): Promise<AgentTask> => {
-	// The key is omitted rather than sent empty when nothing is attached, so
-	// the request is byte for byte what it always was on the common path
-	// (issue #1065).
-	const body: { pack: TaskPack; instructions: string; attachments?: CoworkAttachment[] } = {
-		pack,
+	// Both keys are omitted rather than sent empty: `pack` when the mode is
+	// inferred rather than chosen (issue #1623), `attachments` when nothing is
+	// attached (issue #1065). On the common path the request is byte for byte
+	// what it always was.
+	const body: { pack?: TaskPack; instructions: string; attachments?: CoworkAttachment[] } = {
 		instructions
 	};
+	if (pack) {
+		body.pack = pack;
+	}
 	if (attachments.length > 0) {
 		body.attachments = attachments;
 	}

@@ -169,24 +169,24 @@ func TestDefaultCreditPolicy_FixedPriceRoundsHalfUpOnce(t *testing.T) {
 // alias that can actually reach the batch path today. hive-auto is
 // upstream_actual with NULL price columns, so there is no catalog rate to
 // charge and no token quantity that means anything: the charge is the cost the
-// provider reported for that specific generation, times the 7/5 margin, times
-// 1e9 credits per USD.
+// provider reported for that specific generation, at 1e9 credits per USD and
+// with no margin factor (D-064).
 func TestDefaultCreditPolicy_UpstreamActualSettlesFromReportedCost(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		cost string
 		want int64
 	}{
-		// 0.0001 USD x 1.4 x 1e9 = 140,000 credits, exact.
-		{"ordinary cost", "0.0001", 140_000},
-		// 0.0000000001 USD x 1.4 x 1e9 = 0.14, which rounds to zero and is
-		// then floored at one credit: a line that cost real money is never
-		// settled free.
+		// 0.0001 USD x 1e9 = 100,000 credits, exact.
+		{"ordinary cost", "0.0001", 100_000},
+		// 0.0000000001 USD x 1e9 = 0.1, which rounds to zero and is then
+		// floored at one credit: a line that cost real money is never settled
+		// free.
 		{"sub-credit cost floors at one", "0.0000000001", 1},
-		// Just inside the 10 USD per-line ceiling: 7.142857142 x 1.4 x 1e9 is
-		// 9,999,999,998.8, which rounds half up to 9,999,999,999 and settles
+		// Just inside the 10 USD per-line ceiling: 9.9999999994 x 1e9 is
+		// 9,999,999,999.4, which rounds half down to 9,999,999,999 and settles
 		// rather than being refused.
-		{"just inside the ceiling", "7.142857142", 9_999_999_999},
+		{"just inside the ceiling", "9.9999999994", 9_999_999_999},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := DefaultCreditPolicy{}.Credits(upstreamActual(), nil,
@@ -237,7 +237,7 @@ func TestDefaultCreditPolicy_UpstreamActualFailsClosedToTheHold(t *testing.T) {
 		// reason to carry an exponent.
 		{"exponent literal inside the byte cap", body(t, "gen-1", strings.Repeat("9", 56)+"e999999", 8, 5), "upstream_cost_unparseable"},
 		{"ordinary exponent literal", body(t, "gen-1", "1e5", 8, 5), "upstream_cost_unparseable"},
-		// 100 USD x 1.4 = 140,000,000,000 credits, past the 10 USD per-line
+		// 100 USD = 100,000,000,000 credits, past the 10 USD per-line
 		// ceiling. Refused rather than clamped, so whatever produced an absurd
 		// figure stays visible instead of being quietly capped.
 		{"implausibly large cost", body(t, "gen-1", "100", 8, 5), "upstream_cost_implausible"},
@@ -318,11 +318,6 @@ func TestSettlementConstantsMatchTheMoneyPath(t *testing.T) {
 		t.Fatalf("creditsPerUSD = %d, want payments.CreditsPerUSD (%d): the D-046 rescale moved one and not the other",
 			creditsPerUSD, payments.CreditsPerUSD)
 	}
-	// 7/5 is inference.MarginNumerator / MarginDenominator, the 1.4 margin
-	// expressed exactly as a rational so no float64 touches a charge.
-	if marginNumerator != 7 || marginDenominator != 5 {
-		t.Fatalf("margin = %d/%d, want 7/5", marginNumerator, marginDenominator)
-	}
 	// D-031: prices are stored per million metered units.
 	if creditsPerMillion != 1_000_000 {
 		t.Fatalf("creditsPerMillion = %d, want 1000000", creditsPerMillion)
@@ -364,7 +359,7 @@ func TestDispatcher_SettlesAtTheAliasPriceEndToEnd(t *testing.T) {
 	if res.Error != nil {
 		t.Fatalf("unexpected failed line: %+v", res.Error)
 	}
-	want := LinePrice{Credits: 140_000, Confirmed: true, Reason: "upstream_cost", GenerationID: "gen-live-1"}
+	want := LinePrice{Credits: 100_000, Confirmed: true, Reason: "upstream_cost", GenerationID: "gen-live-1"}
 	if res.Settlement != want {
 		t.Fatalf("settled %+v, want %+v", res.Settlement, want)
 	}

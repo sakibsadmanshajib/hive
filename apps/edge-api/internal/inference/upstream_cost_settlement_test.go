@@ -36,14 +36,18 @@ var openrouterAutoPricing = UpstreamActualPricing(2_000_000_000)
 //	prompt:     50 bytes, a rigorous upper bound on prompt tokens
 //	                       50 x 3.00 / 1e6            = 0.000150 USD
 //	completion: 16384 x 15.00 / 1e6                   = 0.245760 USD
-//	total 0.245910 USD x 1.4 margin x 1e9 credits/USD = 344,274,000
+//	total 0.245910 USD x 1e9 credits/USD              = 245,910,000
+//
+// No margin factor in that product: D-064 retired the 1.4 multiplier on
+// 2026-09-02, and the hold goes through the same CreditsForUpstreamCost the
+// charge does, so it lost the factor at the same moment the charge did.
 //
 // It is asserted as an exact figure rather than "not the endpoint default", so
 // a change to either bound or either ceiling fails here and has to be
 // re-derived rather than sliding through. It is nowhere near the flat endpoint
 // default (10000 in these fixtures), the token count, or the catalog's
 // whole-envelope hold (2e9), so a regression to any of those shapes fails too.
-const autoHoldForAnEmptyBody = 344_274_000
+const autoHoldForAnEmptyBody = 245_910_000
 
 // newRoutingMockVariable answers route selection with a variable-price alias.
 func newRoutingMockVariable() *httptest.Server {
@@ -180,12 +184,12 @@ func TestVariablePriceStreaming_SettlesAtTheReportedUpstreamCost(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a finalize on a normal completion; calls: %+v", rec.calls)
 	}
-	// 0.0123456 USD x 1.4 margin x 1e9 credits per USD = 17,283,840 exactly.
+	// 0.0123456 USD x 1e9 credits per USD = 12,345,600 exactly.
 	// Asserted against the KNOWN upstream cost. Note this is nowhere near the
 	// token count (1500) nor the hold (2e9), so a regression to either
 	// shape fails here rather than sliding past a non-zero check.
-	if actual, _ := body["actual_credits"].(float64); int64(actual) != 17_283_840 {
-		t.Errorf("actual_credits = %v, want 17283840 for a reported cost of 0.0123456 USD", body["actual_credits"])
+	if actual, _ := body["actual_credits"].(float64); int64(actual) != 12_345_600 {
+		t.Errorf("actual_credits = %v, want 12345600 for a reported cost of 0.0123456 USD", body["actual_credits"])
 	}
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); !confirmed {
 		t.Error("a charge derived from a real reported cost is measured truth and must be confirmed")
@@ -313,10 +317,10 @@ func TestResponsesStreamingSettlesAtTheReportedUpstreamCost(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a finalize on the responses path; calls: %+v", rec.calls)
 	}
-	// 0.0123456 x 1.4 x 1e9 = 17,283,840 exactly. If the capture is missing
-	// this reads the hold (2e9), because the cost was never seen.
-	if actual, _ := body["actual_credits"].(float64); int64(actual) != 17_283_840 {
-		t.Errorf("actual_credits = %v, want 17283840. The responses relay must capture the raw usage frame too.",
+	// 0.0123456 x 1e9 = 12,345,600 exactly. If the capture is missing this
+	// reads the hold (2e9), because the cost was never seen.
+	if actual, _ := body["actual_credits"].(float64); int64(actual) != 12_345_600 {
+		t.Errorf("actual_credits = %v, want 12345600. The responses relay must capture the raw usage frame too.",
 			body["actual_credits"])
 	}
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); !confirmed {

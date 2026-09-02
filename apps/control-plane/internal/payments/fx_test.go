@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"math/big"
 	"context"
 	"encoding/json"
 	"errors"
@@ -176,7 +177,12 @@ func TestFetchUSDToBDT_AllSourcesFailReturnsError(t *testing.T) {
 	}
 }
 
-func TestCreateSnapshot_ComputesEffectiveRateWith5PercentFee(t *testing.T) {
+// The fee is 2.5 percent since the 2026-09-02 ruling (D-066), folded into the
+// rate itself and never shown as a line item. The three assertions below are
+// deliberately taken together: mid_rate, fee_rate and effective_rate have to
+// agree ON THE ROW, because a stored rate that cannot be reproduced from its own
+// fields is what issue #1682 was filed about.
+func TestCreateSnapshot_ComputesEffectiveRateWithTheFXFee(t *testing.T) {
 	// Use admin override so no external calls needed
 	svc := NewFXService(http.DefaultClient, "acc", "key", nil)
 	svc.SetAdminOverride("110.00")
@@ -189,14 +195,29 @@ func TestCreateSnapshot_ComputesEffectiveRateWith5PercentFee(t *testing.T) {
 	if snap.MidRate != "110.00" {
 		t.Errorf("expected mid_rate 110.00, got %s", snap.MidRate)
 	}
-	// effectiveRate = 110.00 * 1.05 = 115.500000
-	if snap.EffectiveRate != "115.500000" {
-		t.Errorf("expected effective_rate 115.500000, got %s", snap.EffectiveRate)
+	// effectiveRate = 110.00 * 1.025 = 112.750000
+	if snap.EffectiveRate != "112.750000" {
+		t.Errorf("expected effective_rate 112.750000, got %s", snap.EffectiveRate)
 	}
 	if snap.SourceAPI != "admin_override" {
 		t.Errorf("expected source_api admin_override, got %s", snap.SourceAPI)
 	}
-	if snap.FeeRate != "0.05" {
-		t.Errorf("expected fee_rate 0.05, got %s", snap.FeeRate)
+	if snap.FeeRate != "0.025" {
+		t.Errorf("expected fee_rate 0.025, got %s", snap.FeeRate)
+	}
+	// And the row reproduces itself: mid x (1 + fee) is the effective rate that
+	// was stored, to the six decimal places it is stored at.
+	mid, ok := new(big.Rat).SetString(snap.MidRate)
+	if !ok {
+		t.Fatalf("stored mid_rate %q does not parse", snap.MidRate)
+	}
+	fee, ok := new(big.Rat).SetString(snap.FeeRate)
+	if !ok {
+		t.Fatalf("stored fee_rate %q does not parse", snap.FeeRate)
+	}
+	recomputed := new(big.Rat).Mul(mid, fee.Add(fee, new(big.Rat).SetInt64(1))).FloatString(6)
+	if recomputed != snap.EffectiveRate {
+		t.Errorf("effective_rate %s does not reproduce from mid_rate %s and fee_rate %s (recomputed %s)",
+			snap.EffectiveRate, snap.MidRate, snap.FeeRate, recomputed)
 	}
 }

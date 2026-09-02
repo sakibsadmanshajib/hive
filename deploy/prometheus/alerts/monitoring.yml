@@ -46,3 +46,19 @@ groups:
         annotations:
           summary: "Alertmanager is not being scraped"
           description: "Prometheus cannot reach Alertmanager, so no alert it evaluates can be routed anywhere."
+
+      # A target that stops being scraped takes every rule reading its series
+      # with it, and takes them quietly: an expression over a series that no
+      # longer exists matches nothing, which is indistinguishable from a
+      # condition that is not met. Alertmanager had this rule and edge-api did
+      # not, so every hive-critical rule in alerts.yml (the shim-key gauge, the
+      # provisioning sweep, the error rate) could go unevaluated with nothing
+      # saying so. Absence must be loud; it must never read as health.
+      - alert: EdgeAPITargetDown
+        expr: up{job="edge-api"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "edge-api is not being scraped"
+          description: "Prometheus cannot reach edge-api's /metrics, so every rule that reads an edge-api series is evaluating nothing and cannot fire. The gateway itself may be down, or only its metrics endpoint. Check `docker compose ps edge-api` and the prometheus target list at /targets."

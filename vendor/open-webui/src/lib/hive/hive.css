@@ -818,18 +818,38 @@ samp,
 }
 
 /*
- * The pack radiogroup (#1500), which replaced a static label plus its glyph.
- * It borrows .hv-mode and .hv-mode-segment wholesale from the Chat/Cowork
- * toggle, so the only thing left to say here is that it sits flush with the
- * row's own padding rather than carrying the toggle's leading margin, which
- * exists to separate that control from the plus button beside it.
+ * The inference disclosure and its correction (#1623), which replaced the pack
+ * radiogroup #1500 put here. Neither is a control the person has to answer
+ * before sending: the sentence reports what the last run was read as, and the
+ * button offers the other pack for the next one. On a fresh conversation both
+ * are absent and the row carries only the note.
+ *
+ * Deliberately not styled as a segmented control, and deliberately not
+ * borrowing .hv-mode-segment the way the old radiogroup did. Making a
+ * correction look like the toggle it replaced is how a person concludes there
+ * is still a choice to make up front.
  */
-.hv-cowork-packs {
-	margin-inline-start: 0;
-	/* `padding: 0` was here to sit flush with the row. It is dropped now that
-	 * `.hv-mode` has a ground, because at zero padding the thumb fills the
-	 * track edge to edge and the trough this control just gained would be
-	 * invisible on the one place that reuses it. */
+.hv-cowork-inference {
+	color: var(--hv-ink-muted);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.hv-cowork-override {
+	color: var(--hv-ink);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	white-space: nowrap;
+	background: none;
+	border: 0;
+	padding: 0;
+	cursor: pointer;
+}
+
+.hv-cowork-override:hover {
+	color: var(--hv-ink-strong, var(--hv-ink));
 }
 
 .hv-cowork-note {
@@ -842,8 +862,8 @@ samp,
 }
 
 @media (max-width: 640px) {
-	/* The note is the first thing to go on a narrow composer: the scope line
-	 * says what will run, the note only says where the result appears. */
+	/* The note is the first thing to go on a narrow composer: the disclosure
+	 * says what ran, the note only says where the result appears. */
 	.hv-cowork-note {
 		display: none;
 	}

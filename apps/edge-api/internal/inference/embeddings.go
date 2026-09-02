@@ -49,7 +49,7 @@ func handleEmbeddings(o *Orchestrator, w http.ResponseWriter, r *http.Request) {
 	const estimatedCredits int64 = DefaultHoldEmbeddings
 
 	o.executeSync(r.Context(), w, r, EndpointEmbeddings, body, req.Model, needFlags, estimatedCredits,
-		o.litellm.Embeddings, normalizeEmbeddings)
+		o.litellm.Embeddings, NormalizeEmbeddings)
 }
 
 // supportsDimensions returns true if the model alias supports custom dimensions.
@@ -61,8 +61,13 @@ func supportsDimensions(model string) bool {
 		strings.Contains(lower, "text-embedding-3")
 }
 
-// normalizeEmbeddings normalizes a LiteLLM embeddings response.
-func normalizeEmbeddings(respBody []byte, aliasID string) ([]byte, *UsageResponse, error) {
+// NormalizeEmbeddings normalizes a LiteLLM embeddings response.
+//
+// Exported for internal/embeddings, the JWT-session half of this endpoint
+// (issue #1696). Both halves answer the same customers on the same route, so
+// they normalize through one function rather than two that could disagree
+// about the alias rewrite or the usage identity.
+func NormalizeEmbeddings(respBody []byte, aliasID string) ([]byte, *UsageResponse, error) {
 	var resp EmbeddingsResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, nil, err

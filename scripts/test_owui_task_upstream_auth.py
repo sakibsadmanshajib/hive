@@ -601,15 +601,34 @@ def main() -> int:
     # has already shipped one live admin bypass by relaxing an auth check
     # (#1511, fixed in 9916c6ec5).
     unwrap = UNWRAP_GO.read_text(encoding="utf-8")
+    # Written as "every one of these paths is still listed" rather than as the
+    # whole function body verbatim. Removing a path is the shortcut this guards
+    # against; ADDING one narrows what the shim key may do on its own and is a
+    # fix rather than a regression, which is what issue #1696 did with
+    # /v1/embeddings. A frozen body could not tell those two apart and went red
+    # on the narrowing one.
+    predicate = unwrap.split("func requiresPerUserAuth(path string) bool {", 1)[-1].split("\n}", 1)[0]
     check(
-        'func requiresPerUserAuth(path string) bool {\n'
-        '\treturn path == "/v1/chat/completions" ||\n'
-        '\t\tpath == "/v1/agent/tasks" ||\n'
-        '\t\tstrings.HasPrefix(path, "/v1/agent/tasks/")\n'
-        "}" in unwrap,
+        all(
+            path in predicate
+            for path in (
+                '"/v1/chat/completions"',
+                '"/v1/embeddings"',
+                '"/v1/agent/tasks"',
+                '"/v1/agent/tasks/"',
+            )
+        ),
         "edge-api still requires a per-user token on /v1/chat/completions "
         "unconditionally: this fix supplies the credential, it does not widen "
         "who may go without one (#1511)",
+    )
+    # Presence of the four literals is not the whole property: an early
+    # `return false` inserted above the return statement would leave all four in
+    # the extracted body and satisfy the check above while exempting every path.
+    check(
+        "return false" not in predicate,
+        "and the predicate has no early exemption above its return, so the "
+        "literals above are the whole answer rather than dead text",
     )
     check(
         "\treturn rest == shimKey\n" in unwrap,

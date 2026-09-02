@@ -56,6 +56,16 @@ account boundary load-bearing. --account-slug defaults to the CI account,
 which the nightly OWUI job rotates on a schedule; a long-lived deployment
 MUST pass its own slug (for example --account-slug owui-shim-demo-box) so
 a scheduled CI run can never revoke the key that deployment depends on.
+That is enforced rather than merely documented (issue #560): see
+assert_account_scope, which refuses both a run on CI's rotated account
+that configures a long-lived consumer and a run on any other account that
+configures none, before anything is minted or revoked. The cleanup is
+also filtered to the account's own key nickname (key_nickname, derived
+from the slug), so a key minted by any other route and carried by
+who-knows-what is never revoked here. And when --env-file is the
+consumer, the revocation additionally requires that the file was carrying
+one of this account's keys before this run rewrote it, so a run pointed
+at a scratch path or at the wrong deployment's .env revokes nothing.
 Revocation of the old keys is also deferred until every configured
 consumer has been updated (see below), so a failed sync leaves the
 previous key working rather than stranding the deployment on a dead one.
@@ -139,6 +149,43 @@ SHIM_ACCOUNT_SLUG = "owui-e2e-shim"
 SHIM_ACCOUNT_NAME = "OWUI E2E Shim"
 SHIM_KEY_NICKNAME = "owui-e2e-shim-key"
 SHIM_ENV_VAR = "OWUI_SHIM_KEY"
+
+
+def is_ci_account(account_slug: str) -> bool:
+    """Whether this slug names the reserved account the nightly OWUI job rotates.
+
+    Case-insensitive on purpose. public.accounts.slug is `text not null unique`
+    and case sensitive (supabase/migrations/20260328_01_identity_foundation.sql),
+    so `--account-slug OWUI-E2E-SHIM` would otherwise miss the reserved arm of
+    assert_account_scope, be treated as a deployment account, and upsert a
+    near-duplicate row that nothing rotates. Only the comparison is folded; the
+    slug sent to PostgREST is still exactly what the caller passed."""
+    return account_slug.casefold() == SHIM_ACCOUNT_SLUG
+
+
+def key_nickname(account_slug: str) -> str:
+    """Nickname this script mints under, and the only nickname it will revoke.
+
+    Derived from the account rather than fixed, because a constant made the
+    boundary a coincidence rather than a property. The demo box's live key is
+    nicknamed `hive-demo-owui-shim-key` on account `hive-demo-owui-shim`, which
+    is why the constant spared it: it was minted by hand and simply did not
+    match. The first operator to follow the documented remedy would have minted
+    over it with SHIM_KEY_NICKNAME and destroyed that protection for good.
+
+    Derived, three things hold by construction instead of by history. CI's
+    cleanup can never match a deployment's key even if the two ever share an
+    account, because the two nicknames cannot collide. The documented remedy
+    reproduces `hive-demo-owui-shim-key`, so recovery preserves the box's
+    existing name rather than replacing it. And the remedy run then revokes the
+    key it just replaced, instead of leaving a superseded credential active
+    forever.
+
+    A key minted under any other name (by hand, by another tool) is still never
+    revoked here: this run has no idea who carries it. It stays active until an
+    operator revokes it deliberately, which .env.example and the
+    OWUIShimKeyUnusable alert both now say out loud."""
+    return SHIM_KEY_NICKNAME if is_ci_account(account_slug) else f"{account_slug}-key"
 # ponytail: no Go code branches on tenants.deployment today (grep confirmed
 # clean). ENTERPRISE_EDGE picked as the closer conceptual fit for a
 # self-hosted OWUI chat front-end; revisit if that ever becomes load-bearing.
@@ -409,7 +456,7 @@ def sync_owui_config(raw_secret: str) -> bool | None:
     # No hardcoded credential defaults. Local/demo test account already
     # documented in scripts/seed-demo-owner.py's header comment
     # (asdas@asdas.sda / asdas) if a caller wants to set these explicitly.
-    if not token and not (email and password):
+    if not owui_sync_configured():
         print(
             "owui config sync skipped: set OWUI_ADMIN_TOKEN (preferred) or "
             "OWUI_ADMIN_EMAIL/OWUI_ADMIN_PASSWORD to enable it",
@@ -451,6 +498,63 @@ def sync_owui_config(raw_secret: str) -> bool | None:
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
         warn(str(e))
         return False
+
+
+def read_env_assignment(path: str) -> str:
+    """Value of the first uncommented OWUI_SHIM_KEY assignment in a .env, or "".
+
+    Read before the rewrite below replaces it, because it is the only evidence
+    this run has about WHICH deployment the --env-file it was handed belongs
+    to. Returns "" for a missing file, a missing assignment or an empty one:
+    every one of those means this file was not carrying a key, which the caller
+    treats as "there is nothing here whose revocation this run has earned"."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return ""
+    for line in lines:
+        if line.lstrip().startswith("#"):
+            continue
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == SHIM_ENV_VAR:
+            return value.strip()
+    return ""
+
+
+def env_file_carried_this_accounts_key(rest, headers, account_id: str, previous_secret: str) -> bool:
+    """Whether the value --env-file held BEFORE this run is a key on this account.
+
+    --env-file proves that a file was rewritten, not that the file belongs to
+    the deployment carrying the key this run is about to revoke. `--env-file
+    /tmp/scratch.env`, or another deployment's .env, satisfies the scope guard
+    and the consumer-sync check just as well as the right one, and then the
+    revocation in step 7 takes the real holder down: the outage in issue #560,
+    reached through the arm the guard allows.
+
+    So the invariant this script states in prose gets a machine check. A key a
+    long-lived consumer carries may only ever be revoked by the run that just
+    replaced it in that consumer, and the proof that this run replaced it is
+    that the value it overwrote hashes to a key row on this very account. The
+    hash is the same sha256 of the raw secret that random_api_key computes and
+    api_keys.token_hash stores, so no secret is sent anywhere.
+
+    False on first-time setup (.env ships an empty OWUI_SHIM_KEY=, so there is
+    no previous key and nothing to revoke) and false on a wrong file, which are
+    the same answer for the same reason."""
+    if not previous_secret:
+        return False
+    digest = hashlib.sha256(previous_secret.encode()).hexdigest()
+    status, body = request(
+        rest, headers, "GET", "/api_keys",
+        params={
+            "account_id": f"eq.{account_id}",
+            "token_hash": f"eq.{digest}",
+            "select": "id",
+            "limit": "1",
+        },
+    )
+    return status == 200 and bool(body)
 
 
 def rewrite_env_file(path: str, raw_secret: str) -> bool:
@@ -583,6 +687,79 @@ def provision_tenant_member(
     return user_id, password
 
 
+def owui_sync_configured() -> bool:
+    """True when this run can push a newly minted key into Open WebUI's own
+    persisted config, which is one of the two long-lived consumers of the
+    value. Read by sync_owui_config below and by assert_account_scope, from
+    one place, so the guard and the sync can never disagree about whether a
+    consumer exists."""
+    token = os.environ.get("OWUI_ADMIN_TOKEN", "").strip()
+    email = os.environ.get("OWUI_ADMIN_EMAIL", "").strip()
+    password = os.environ.get("OWUI_ADMIN_PASSWORD", "").strip()
+    return bool(token or (email and password))
+
+
+def assert_account_scope(account_slug: str, env_file: str) -> None:
+    """Refuse the two configurations in which this script could revoke a
+    credential a long-lived deployment is still carrying (issue #560).
+
+    The account boundary was already the mechanism, but only as prose: the
+    docstring said a deployment must pass its own --account-slug, and nothing
+    enforced it. So the failure it describes stayed reachable in both
+    directions, and it is not hypothetical, it is what happened. Both are
+    refused here, before a network call is made, so no key is minted and none
+    is revoked on a configuration this script will not stand behind.
+
+    The invariant, stated once: a key that a long-lived consumer carries may
+    only ever be revoked by the run that just replaced it in that consumer.
+
+      * The reserved CI account is rotated on a schedule by a run that
+        configures no consumer and knows about none. Handing it a consumer is
+        how a deployment ends up on the rotated account, so it is refused.
+      * Any other account is a deployment's. A run that updates no consumer
+        there would revoke keys nobody told the deployment to stop using, so
+        it is refused too.
+
+    Exit code 2, not 1, so a caller can tell a refused configuration from a
+    failed operation."""
+    has_consumer = bool(env_file.strip()) or owui_sync_configured()
+    if not account_slug:
+        # An empty slug misses the reserved comparison below, so with any
+        # consumer configured it would pass the guard, upsert an account whose
+        # slug is the empty string, and hand the consumer a credential on a
+        # garbage account that nothing rotates and nobody owns.
+        print(
+            "error: --account-slug is empty. Pass the reserved CI account "
+            f"({SHIM_ACCOUNT_SLUG}) or this deployment's own slug; an empty "
+            "slug would mint a key on an account nothing rotates and nobody owns.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if is_ci_account(account_slug) and has_consumer:
+        print(
+            f"error: refusing to point a long-lived consumer at {SHIM_ACCOUNT_SLUG}, "
+            "the account the nightly OWUI job rotates on a schedule. That run "
+            "revokes this account's keys and cannot update your deployment, so "
+            "document RAG and text-to-speech would die there with no signal "
+            "(issue #560). Pass --account-slug <your-deployment> (and its own "
+            "--tenant-slug) instead, or drop --env-file and the OWUI_ADMIN_* "
+            "variables if you meant to rotate CI's key.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not is_ci_account(account_slug) and not has_consumer:
+        print(
+            f"error: refusing to rotate {account_slug}, a deployment account, "
+            "without updating anything that carries the key. Revoking here and "
+            "syncing nothing is exactly the outage in issue #560. Pass "
+            "--env-file <path to that deployment's compose .env>, and set "
+            "OWUI_BASE_URL with OWUI_ADMIN_TOKEN so Open WebUI's persisted "
+            "config is updated too.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -615,11 +792,23 @@ def parse_args() -> argparse.Namespace:
             "the newly minted key, before the previous key is revoked."
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    # Normalised once, here, so the scope guard below and the account upsert
+    # further down can never be comparing different strings. A padded
+    # " owui-e2e-shim" would otherwise miss the reserved-slug comparison AND
+    # create a second, near-identical account row that nothing rotates.
+    args.account_slug = args.account_slug.strip()
+    args.tenant_slug = args.tenant_slug.strip()
+    args.env_file = args.env_file.strip()
+    return args
 
 
 def main() -> None:
     args = parse_args()
+    # Before any credential is read and before the first request: a refused
+    # configuration must cost nothing, and in particular must not mint a key
+    # it then declines to finish wiring up.
+    assert_account_scope(args.account_slug, args.env_file)
     supabase_url = env("SUPABASE_URL").rstrip("/")
     service_key = env("SUPABASE_SERVICE_ROLE_KEY")
     headers = {
@@ -664,7 +853,7 @@ def main() -> None:
     # 4. Upsert the throwaway shim billing account (older accounts/api_keys
     # schema -- separate from the tenants/tenant_users rows above).
     account_slug = args.account_slug
-    account_name = SHIM_ACCOUNT_NAME if account_slug == SHIM_ACCOUNT_SLUG else f"OWUI Shim ({account_slug})"
+    account_name = SHIM_ACCOUNT_NAME if is_ci_account(account_slug) else f"OWUI Shim ({account_slug})"
     status, body = request(
         rest, headers, "POST", "/accounts",
         body={
@@ -699,7 +888,7 @@ def main() -> None:
         rest, headers, "POST", "/api_keys",
         body={
             "account_id": shim_account_id,
-            "nickname": SHIM_KEY_NICKNAME,
+            "nickname": key_nickname(account_slug),
             "token_hash": token_hash,
             "redacted_suffix": redacted_suffix,
             "status": "active",
@@ -726,7 +915,11 @@ def main() -> None:
     # CI, which materializes a fresh .env.ci and a fresh OWUI container per
     # run; both are the whole point on a long-lived deployment.
     consumer_failed = False
+    previous_env_secret = ""
     if args.env_file:
+        # Before the rewrite, not after: the value this file held is the only
+        # evidence that it belongs to the deployment whose keys step 7 revokes.
+        previous_env_secret = read_env_assignment(args.env_file)
         consumer_failed = not rewrite_env_file(args.env_file, raw_secret) or consumer_failed
     consumer_failed = sync_owui_config(raw_secret) is False or consumer_failed
 
@@ -743,11 +936,30 @@ def main() -> None:
     # different concurrency groups, so they can) used to revoke each other's key
     # mid-flight, which is the outage already recorded in .wolf/cerebrum.md.
     # A key minted minutes ago now survives any concurrent run.
+    # An --env-file this run rewrote but that was not carrying a key on this
+    # account is not proof of anything: the file may be a scratch path or
+    # another deployment's .env, and revoking here takes down whoever really
+    # holds this account's key. Checked only when --env-file is the consumer;
+    # the OWUI arm talks to a live Open WebUI, which is identity enough.
+    env_file_unproven = bool(args.env_file) and not env_file_carried_this_accounts_key(
+        rest, headers, shim_account_id, previous_env_secret,
+    )
     if consumer_failed:
         print(
             "error: leaving the previous shim key(s) active because a configured "
             "consumer was not updated; the deployment keeps working on the old key. "
             "Fix the failure above and re-run.",
+            file=sys.stderr,
+        )
+    elif env_file_unproven:
+        print(
+            f"note: leaving this account's older keys active. {args.env_file} was not "
+            f"carrying one of this account's keys before this run rewrote it, so this "
+            "run has not replaced anything there and has not earned the right to "
+            "revoke anything (issue #560). That is normal on first-time setup, where "
+            f"{SHIM_ENV_VAR} is empty and there is nothing to revoke. Otherwise the "
+            "path is the wrong deployment's .env: check it, and note that the new key "
+            "has already been written into it.",
             file=sys.stderr,
         )
     else:
@@ -756,6 +968,16 @@ def main() -> None:
             rest, headers, "DELETE", "/api_keys",
             params={
                 "account_id": f"eq.{shim_account_id}",
+                # Only keys minted under THIS account's nickname (see
+                # key_nickname: derived from the slug, so CI's cleanup and a
+                # deployment's can never name the same key even if the two ever
+                # shared an account). A key put on this account under any other
+                # name is left alone: this run has no idea who carries it, and
+                # revoking a credential nobody told the holder about is the
+                # whole of issue #560. It stays active until an operator revokes
+                # it deliberately, which .env.example and the alert both now
+                # tell them to do rather than leaving it to be discovered.
+                "nickname": f"eq.{key_nickname(account_slug)}",
                 "id": f"neq.{shim_key_id}",
                 "created_at": f"lt.{cutoff}",
             },

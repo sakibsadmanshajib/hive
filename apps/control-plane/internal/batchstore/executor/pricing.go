@@ -21,7 +21,8 @@ package executor
 // prompt_tokens and completion_tokens priced independently at their own
 // catalog rates (D-031, credits per million, one round half up at the end).
 // For an upstream_actual alias, no token quantity at all: the cost the
-// provider reported for that specific generation, times the standard margin.
+// provider reported for that specific generation, at the credit peg and with
+// no margin factor (D-064).
 // No token class that was previously unbilled starts being billed, which is
 // what D-055 requires; only the rate applied to the two classes changes.
 //
@@ -88,12 +89,6 @@ import (
 )
 
 const (
-	// marginNumerator / marginDenominator express the 1.4 margin exactly as a
-	// rational, never as a float. Mirrors inference.MarginNumerator /
-	// MarginDenominator.
-	marginNumerator   = 7
-	marginDenominator = 5
-
 	// creditsPerUSD mirrors payments.CreditsPerUSD (D-046, 1 USD =
 	// 1,000,000,000 credits since the 2026-08-23 rescale). Declared here
 	// rather than imported so this package keeps its deliberately small
@@ -234,10 +229,15 @@ func parseUpstreamCost(raw []byte) (upstreamCharge, error) {
 }
 
 // creditsForUpstreamCost converts a provider-reported USD cost into whole
-// credits: cost x 7/5 x creditsPerUSD, summed as one exact rational and
-// rounded half up exactly once (the same discipline D-031 applies to the
-// per-million path). A nonzero cost floors at one credit, so a line that cost
-// real money is never settled free.
+// credits: cost x creditsPerUSD, taken as one exact rational and rounded half
+// up exactly once (the same discipline D-031 applies to the per-million path).
+// A nonzero cost floors at one credit, so a line that cost real money is never
+// settled free.
+//
+// No margin factor, deliberately. D-064 retired the 1.4 multiplier from every
+// settlement path on 2026-09-02 and moved margin to the purchase price
+// (D-065); this function mirrors inference.CreditsForUpstreamCost, which no
+// longer carries one either.
 func creditsForUpstreamCost(costUSD *big.Rat) (int64, error) {
 	if costUSD == nil {
 		return 0, errUpstreamCostAbsent
@@ -248,7 +248,7 @@ func creditsForUpstreamCost(costUSD *big.Rat) (int64, error) {
 	case 0:
 		return 0, errUpstreamCostZero
 	}
-	scaled := new(big.Rat).Mul(costUSD, big.NewRat(marginNumerator*creditsPerUSD, marginDenominator))
+	scaled := new(big.Rat).Mul(costUSD, new(big.Rat).SetInt64(creditsPerUSD))
 	credits, ok := roundHalfUp(scaled)
 	if !ok {
 		return 0, fmt.Errorf("%w: does not fit in int64", errUpstreamCostImplausible)

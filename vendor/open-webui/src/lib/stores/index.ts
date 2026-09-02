@@ -90,20 +90,38 @@ export const TTSWorker = writable(null);
 export const composerMode: Writable<'chat' | 'cowork'> = writable('chat');
 
 /*
- * Which agent pack a Cowork submission runs as (#1500).
+ * A pending override of the pack a Cowork submission runs as (#1500, #1623).
+ *
+ * null, which is the default and the value it returns to after every
+ * submission, means "let Hive work it out from the instructions": the composer
+ * sends no pack and control-plane resolves one (agenttask.InferPack). A pack
+ * here is an explicit correction the person made after seeing what the last
+ * run was read as, and it applies to the next task only.
  *
  * Spelled out rather than imported as TaskPack, for the same reason
  * composerMode above is spelled out rather than imported as ComposerMode: this
  * module is reached by everything and importing lib/hive from it would invert
  * the dependency the other way round.
  *
- * Session scoped like the mode, and for a weaker version of the same reason: a
- * persisted pack would quietly apply a choice made days ago to a task the
- * person has not thought about since. The default matches what the composer
- * sent before this control existed, so ignoring it changes nothing.
+ * One shot rather than sticky on purpose. A correction that persisted would be
+ * the two-toggle composer this issue removes, restored by accident: one click
+ * and every later task in the session carries a choice the person made about a
+ * different request.
  */
-export const composerPack: Writable<'knowledge-work-pack' | 'coding-pack'> =
-	writable('knowledge-work-pack');
+export const composerPack: Writable<'knowledge-work-pack' | 'coding-pack' | null> =
+	writable(null);
+
+/*
+ * What the server decided for the most recent Cowork submission (#1623).
+ *
+ * The composer needs this to say what it did and to offer the other pack; the
+ * transcript keeps its own copy as a progress line, which is the durable
+ * record. Session scoped, exactly like composerMode above and for the same
+ * reason: it is a property of what you just did, not of the conversation, and
+ * it is never persisted.
+ */
+export const coworkLastPack: Writable<'knowledge-work-pack' | 'coding-pack' | null> =
+	writable(null);
 
 export const chatId = writable('');
 export const chatTitle = writable('');
