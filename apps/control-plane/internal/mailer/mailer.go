@@ -13,14 +13,11 @@ package mailer
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"mime"
-	"net"
 	"net/mail"
-	"net/smtp"
 	"os"
 	"strconv"
 	"strings"
@@ -149,51 +146,11 @@ func (s *SMTPSender) Send(ctx context.Context, msg Message) error {
 		return err
 	}
 
-	deadline := time.Now().Add(s.cfg.Timeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
-	}
-
-	addr := net.JoinHostPort(s.cfg.Host, strconv.Itoa(s.cfg.Port))
-	dialer := &net.Dialer{Deadline: deadline}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	client, err := s.connect(ctx)
 	if err != nil {
-		return fmt.Errorf("mailer: dial relay: %w", err)
-	}
-	// Covers every read and write for the rest of the dialogue, including the
-	// TLS handshake, so no stage can block past the deadline.
-	if err := conn.SetDeadline(deadline); err != nil {
-		conn.Close()
-		return fmt.Errorf("mailer: set deadline: %w", err)
-	}
-
-	client, err := smtp.NewClient(conn, s.cfg.Host)
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("mailer: greet relay: %w", err)
+		return err
 	}
 	defer client.Close()
-
-	starttls, _ := client.Extension("STARTTLS")
-	if starttls {
-		if err := client.StartTLS(&tls.Config{
-			ServerName: s.cfg.Host,
-			MinVersion: tls.VersionTLS12,
-		}); err != nil {
-			return fmt.Errorf("mailer: starttls: %w", err)
-		}
-	} else if s.cfg.Username != "" {
-		// Refusing beats downgrading. AUTH over a cleartext session hands the
-		// relay login to anything on the path, and a relay that will not offer
-		// STARTTLS on the submission port is a relay to fix, not to work around.
-		return errors.New("mailer: relay does not offer STARTTLS and credentials are configured")
-	}
-
-	if s.cfg.Username != "" {
-		if err := client.Auth(smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, s.cfg.Host)); err != nil {
-			return fmt.Errorf("mailer: authenticate: %w", err)
-		}
-	}
 
 	if err := client.Mail(s.cfg.FromAddress); err != nil {
 		return fmt.Errorf("mailer: sender refused: %w", err)

@@ -199,3 +199,73 @@ groups:
         annotations:
           summary: "OWUI_SHIM_KEY has not been checked successfully for over 30 minutes"
           description: "edge-api's shim-key probe has not reached a verdict in {{ $value | humanizeDuration }} (an age in years means it has never reached one since this edge-api started), so hive_owui_shim_key_usable is holding a value nothing has confirmed and OWUIShimKeyUnusable cannot fire on a key that died in the meantime. The probe writes this series only when it actually resolves the key, so this means the control plane has been unreachable from edge-api (see `docker compose logs edge-api | grep 'owui:'` for the transient warnings), or the probe goroutine is not running. Do not rotate the key over this: nothing here says the key is bad."
+
+      # The counterweight to what the /auth/v1/recover gateway route does.
+      #
+      # deploy/docker/Caddyfile.supabase synthesizes an identical 200 {} for
+      # GoTrue's 200, its 429 AND its 5xx on that route, so that no anonymous
+      # caller can read the account list off a status code, a header set or a
+      # response body. That trade is the right way round, and it has a price:
+      # when the relay breaks, every user is told to check an inbox nothing will
+      # arrive in, the response says nothing, and the only trace is a line in
+      # GoTrue's container log that nothing reads on a schedule. This rule is
+      # what reads it instead.
+      #
+      # It watches the relay rather than the route on purpose. The gateway
+      # cannot report the failure without reopening the oracle it just closed,
+      # and Caddy's own metrics are no help either: its request series carry the
+      # status Caddy WROTE, which is the synthesized 200, so the upstream 5xx is
+      # invisible there by construction (measured on caddy 2.11.3 against this
+      # exact config). The relay is the shared cause anyway --
+      # docker-compose.yml gives control-plane HIVE_SMTP_HOST from
+      # ENTERPRISE_SMTP_HOST, the same variable behind GOTRUE_SMTP_HOST and
+      # Alertmanager's smarthost -- so one series covers password recovery,
+      # workspace invitations, signup confirmation and email change together.
+      #
+      # for: 11m against a 10 minute probe interval means two consecutive failed
+      # probes, so one dropped connection does not page anybody.
+      #
+      # Deliberately not delivered-only-by-mail-dependent thinking: this alert
+      # fires over a broken relay, and Alertmanager's only receiver is that same
+      # relay, so the email will not arrive either. It is still visible in the
+      # Prometheus, Alertmanager and Grafana UIs, which is where an operator
+      # looks, and AlertDeliveryFailing in alerts/monitoring.yml fires alongside
+      # it for the same root cause. Adding a second, non-mail receiver is the
+      # standing gap that would make this page for real.
+      - alert: MailRelayUnusable
+        expr: |
+          hive_mail_relay_usable == 0
+        for: 11m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The outbound mail relay is refusing control-plane, so password recovery is silently sending nothing"
+          description: "The shared SMTP relay did not accept a connection, STARTTLS and AUTH on the last two probes. POST /auth/v1/recover still answers 200 {} because it must not reveal which addresses hold accounts, so every user asking for a password reset is being told to check an inbox that will receive nothing. Workspace invitations, signup confirmation and email change are failing with it. The cause is named in control-plane's log (`docker compose logs control-plane | grep 'mail:'`) and in GoTrue's (`docker compose logs supabase-auth | grep -i recovery`). Check ENTERPRISE_SMTP_HOST, _PORT, _USER and _PASS on the box and the relay account's own status; a suspended or unactivated relay account authenticates in some configurations and refuses the message in others, and only a real send shows that."
+
+      # The staleness half, and the reason the rule above can be trusted.
+      # hive_mail_relay_usable holds its last verdict and starts at 1, so a probe
+      # goroutine that never starts or one that wedges exports a healthy-looking
+      # 1 forever with nothing measured. This reads the companion series, which
+      # control-plane writes only when a probe actually reaches a verdict.
+      #
+      # 3600 is six probe intervals: long enough that a control-plane restart
+      # never trips it, short enough that "nothing has known whether this
+      # deployment can send mail for an hour" reaches somebody. The series is 0
+      # until the first verdict lands, which is an unbounded age and so fires
+      # this rather than passing it.
+      #
+      # A deployment with no relay configured registers NEITHER series, so this
+      # matches nothing there rather than paging a stack that sends no mail. That
+      # absence is announced at boot in control-plane's log instead.
+      #
+      # warning, not critical: nothing here says mail is broken, only that the
+      # check has stopped answering.
+      - alert: MailRelayVerdictStale
+        expr: |
+          time() - hive_mail_relay_last_verdict_seconds > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nothing has checked whether this deployment can send mail for over an hour"
+          description: "control-plane's mail-relay probe has not reached a verdict in {{ $value | humanizeDuration }} (an age in years means it has never reached one since this control-plane started), so hive_mail_relay_usable is holding a value nothing has confirmed and MailRelayUnusable cannot fire on a relay that died in the meantime. The probe writes this series on every verdict, healthy or not, so this means the goroutine is not running. Do not change the relay configuration over this: nothing here says the relay is bad."

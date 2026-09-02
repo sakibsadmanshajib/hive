@@ -27,9 +27,6 @@ COMPOSE = sorted((ROOT / "deploy" / "docker").glob("docker-compose*.yml"))
 ALLOWED = {
     # Tracked separately in issue #1442, the same posture question for Grafana.
     "docker-compose.yml:grafana": {"3001:3000"},
-    # PR #1749 narrows this one to 127.0.0.1:3005:80 as part of issue #1744.
-    # Drop this entry once that merges.
-    "docker-compose.yml:caddy-console": {"3005:80"},
     # The relay coordinator is reached by remote client devices by definition:
     # 8085 is the headscale listener clients register against and 3478/udp is
     # STUN. Its metrics port is already loopback bound.

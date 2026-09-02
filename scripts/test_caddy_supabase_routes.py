@@ -117,8 +117,21 @@ REQUIRED_PUBLIC_AUTH_PATHS = [
 INTERNAL_ONLY_PREFIXES = ["/rest/v1", "/storage/v1"]
 
 # The bucket key GoTrue is told to use, and the value it must carry.
+#
+# {client_ip}, not {remote_host}, since issue #1744. The peer of this listener
+# is always caddy-console, so keying on it gave the whole internet one bucket:
+# thirty requests from one host exhausted the deployment's hourly quota and
+# 429'd every other user's password reset. {client_ip} resolves to the first
+# untrusted hop of X-Forwarded-For, which is the address Cloudflare reported,
+# and it only does that because of TRUSTED_PROXIES below.
 RATE_LIMIT_HEADER = "X-Forwarded-For"
-RATE_LIMIT_VALUE = "{remote_host}"
+RATE_LIMIT_VALUE = "{client_ip}"
+# Without a trusted set Caddy treats every peer as untrusted and {client_ip}
+# collapses back to the peer address, silently restoring the single bucket.
+TRUSTED_PROXIES = "trusted_proxies static private_ranges"
+# Go duration syntax, which is what time.ParseDuration accepts: one or more
+# number+unit pairs, no spaces, no bare numbers.
+GO_DURATION = re.compile(r"(\d+(\.\d+)?(ns|us|\u00b5s|ms|s|m|h))+")
 # Read before the configured header by performRateLimiting, so it has to go.
 STRIPPED_HEADER = "Sb-Forwarded-For"
 
@@ -332,6 +345,37 @@ def check_public_snippet(public):
         )
 
 
+def without_response_handlers(text):
+    """Drop every `handle_response ... { ... }` body, braces balanced.
+
+    Text inside one describes a response Caddy builds itself, which is a
+    different thing from text that decorates a proxied response, and the two
+    cannot be told apart by substring."""
+    out = []
+    i = 0
+    while True:
+        at = text.find("handle_response", i)
+        if at < 0:
+            out.append(text[i:])
+            return "".join(out)
+        brace = text.find("{", at)
+        if brace < 0:
+            out.append(text[i:])
+            return "".join(out)
+        out.append(text[i:at])
+        depth = 0
+        j = brace
+        while j < len(text):
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        i = j + 1
+
+
 def check_cors_preflight(blocks, public, internal):
     """The /auth/v1 CORS preflight is terminated by the gateway, and its headers
     stay inside the preflight-only handle.
@@ -409,10 +453,19 @@ def check_cors_preflight(blocks, public, internal):
     for label, snippet in (("public", public), ("internal", internal)):
         if CORS_SNIPPET not in imports(snippet):
             fail("the " + label + " snippet no longer imports " + CORS_SNIPPET)
-        if "Access-Control-Allow-Origin" in snippet:
+        # handle_response bodies are excluded, and only those. The harm this
+        # rule exists for is a SECOND Access-Control-Allow-Origin landing beside
+        # the one GoTrue sets on a proxied response, which a browser rejects as
+        # hard as a missing one. A handle_response replaces the upstream
+        # response outright, discarding its headers, so there is nothing there
+        # to duplicate; the /auth/v1/recover route relies on that to answer a
+        # real and an unknown address with one identical header set (#1744).
+        # Anywhere else in the snippet the old rule still bites.
+        if "Access-Control-Allow-Origin" in without_response_handlers(snippet):
             fail(
-                "the " + label + " snippet sets Access-Control-Allow-Origin itself; the one "
-                "place that may is the preflight-only handle in " + CORS_SNIPPET
+                "the " + label + " snippet sets Access-Control-Allow-Origin outside a "
+                "handle_response; the places that may are the preflight-only handle in "
+                + CORS_SNIPPET + " and a handler that replaces the upstream response"
             )
 
     # Order inside the public snippet: after the admin refusal, so an OPTIONS to
@@ -526,6 +579,110 @@ def check_rate_limit_agreement():
         )
 
 
+def check_trusted_proxies(text):
+    """{client_ip} is only the client's address when Caddy has a trusted set.
+    With none configured every peer is untrusted, {client_ip} is the peer, and
+    the deployment is back to one rate-limit bucket for the whole internet with
+    nothing failing."""
+    if TRUSTED_PROXIES not in text:
+        fail(
+            "the global block no longer sets '" + TRUSTED_PROXIES + "', so {client_ip} "
+            "resolves to the caddy-console peer and every caller shares one GoTrue "
+            "rate-limit bucket again (issue #1744)"
+        )
+
+
+def check_recover_refusal_is_indistinguishable(public):
+    """A 429 on /auth/v1/recover is an account-existence oracle.
+
+    GoTrue answers that route 200 {} for an address it has never seen. Both
+    limits that can refuse it -- the per-IP limiter and the per-address
+    GOTRUE_SMTP_MAX_FREQUENCY check -- answer 429, and the per-address one can
+    only fire for an address that HAS a user row. So an honest status here
+    reads the account list two requests at a time. The route rewrites every 429
+    back to the endpoint's own 200 {}."""
+    if not re.search(r"@recover\s*\{[^}]*\bpath\s+/auth/v1/recover\b", public):
+        fail(
+            "the public snippet no longer routes /auth/v1/recover on its own, so a "
+            "rate-limited reset answers 429 while an unknown address answers 200, which "
+            "tells an attacker which addresses hold accounts (issue #1744)"
+        )
+        return
+    # Both outcomes synthesized from one handler, not one proxied and one
+    # rewritten. Two paths that agree on status and body still differed in
+    # their header set (Vary, Server, the Via hop count), and GoTrue puts
+    # X-Sb-Error-Code: over_email_send_rate_limit on the 429 and on nothing an
+    # unknown address ever receives, so copying upstream headers through is not
+    # an option either.
+    # POST-only, or the exact path outranks the preflight handle's /auth/v1/*
+    # (handle blocks sort by path specificity, not source order) and the
+    # browser's OPTIONS goes to GoTrue, which answers it with no
+    # Access-Control-* headers and so blocks the POST that follows.
+    if not re.search(r"@recover\s*\{[^}]*\bmethod\s+POST\b", public):
+        fail(
+            "the /auth/v1/recover matcher no longer restricts itself to POST, so it also "
+            "takes the CORS preflight away from the handle that answers it and a browser "
+            "cannot send the request at all (issue #1744)"
+        )
+    # 5xx is the cheapest of the three oracles: GoTrue reaches its mail send
+    # only for an address that has a user row, so a broken relay answers a real
+    # address 500 and an unknown one 200, in one request, with no window to arm.
+    if "@sameanswer status 200 429 5xx" not in public:
+        fail(
+            "the /auth/v1/recover route no longer answers 200, 429 and 5xx from ONE "
+            "handler. Two paths differ in their headers even when status and body match, and "
+            "dropping 5xx hands back the one-request oracle a stopped mail relay opens "
+            "(issue #1744)"
+        )
+    if 'respond "{}" 200' not in public:
+        fail(
+            "the /auth/v1/recover route no longer answers the endpoint's own 200 {}, so a "
+            "refusal distinguishes a real address from an unknown one (issue #1744)"
+        )
+    if "copy_response_headers" in public:
+        fail(
+            "the public snippet copies upstream response headers; on /auth/v1/recover that "
+            "carries GoTrue's X-Sb-Error-Code straight to the caller, which names the refusal "
+            "and so names the account (issue #1744)"
+        )
+
+
+def check_per_address_cap():
+    """The four GOTRUE_RATE_LIMIT_* values are keyed on the caller's address, so
+    a botnet multiplies every one of them. GOTRUE_SMTP_MAX_FREQUENCY is keyed on
+    the recipient's user row and is the only cap that survives that."""
+    compose = strip_comments(COMPOSE.read_text())
+    m = re.search(
+        r"GOTRUE_SMTP_MAX_FREQUENCY:\s*\$\{ENTERPRISE_SMTP_MAX_FREQUENCY:-([^}]*)\}", compose
+    )
+    if not m:
+        fail(
+            "GOTRUE_SMTP_MAX_FREQUENCY is gone from the enterprise compose file, so the "
+            "only per-RECIPIENT cap on auth mail falls back to GoTrue's 1m default and "
+            "one address can be mailed 60 times an hour from enough source addresses "
+            "(issue #1744)"
+        )
+        return
+    # The runtime harness pins its own value, so it proves GoTrue honours a
+    # duration, never that this file supplies a usable one. GoTrue parses this
+    # with time.ParseDuration and then treats a zero as unset, falling back to
+    # its 1m default, so a bare number or a 0 ships the default while every
+    # other check here stays green.
+    value = m.group(1).strip()
+    if not GO_DURATION.fullmatch(value):
+        fail(
+            "GOTRUE_SMTP_MAX_FREQUENCY defaults to " + repr(value) + ", which is not a Go "
+            "duration. GoTrue parses this with time.ParseDuration, so a bare number is not "
+            "a shorter window, it is a boot failure (issue #1744)"
+        )
+    elif re.fullmatch(r"0+(\.0+)?[a-z\u00b5]+", value):
+        fail(
+            "GOTRUE_SMTP_MAX_FREQUENCY defaults to " + repr(value) + ", and GoTrue treats a "
+            "zero duration as unset and substitutes its own 1m default, so the per-recipient "
+            "cap silently reverts (issue #1744)"
+        )
+
+
 def main():
     text = strip_comments(CADDYFILE.read_text())
     blocks = parse_blocks(text)
@@ -540,6 +697,9 @@ def main():
             fail("the internal snippet no longer routes " + prefix + ", which in-stack callers need")
     check_sites(blocks)
     check_rate_limit_agreement()
+    check_trusted_proxies(text)
+    check_recover_refusal_is_indistinguishable(public)
+    check_per_address_cap()
 
     check_unmatched_host_catch_alls(text)
     if failures:
