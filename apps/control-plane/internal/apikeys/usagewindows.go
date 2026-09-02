@@ -73,10 +73,14 @@ func (r *UsageWindowReader) Read(ctx context.Context, accountID uuid.UUID, limit
 		return UsageWindows{}, ErrUsageWindowsUnavailable
 	}
 	now := r.now().UTC()
-	anchor := limits.WeeklyAnchorAt
-	if anchor.IsZero() {
-		anchor = time.Unix(0, 0).UTC()
-	}
+	// ONE anchor rule, shared with the edge limiter that writes these counters
+	// (ratewindows.ResolveWeeklyAnchor). Sharing the key FORMAT was not enough:
+	// the anchor is an input to the key, and while this side fell back to the
+	// epoch on a zero time with no future guard and the limiter fell back on
+	// three different conditions, the two read different Redis keys and this
+	// display reported zero percent used for a window the gateway was actively
+	// refusing on.
+	anchor, anchorUsable := ratewindows.ResolveWeeklyAnchor(limits.WeeklyAnchorAt, now)
 
 	out := UsageWindows{AccountID: accountID, ReadAt: now.Format(time.RFC3339)}
 	for _, w := range []struct {
@@ -94,6 +98,14 @@ func (r *UsageWindowReader) Read(ctx context.Context, accountID uuid.UUID, limit
 		if w.limit == nil || *w.limit <= 0 {
 			out.Windows = append(out.Windows, window)
 			continue
+		}
+		// A configured anchored window with no usable anchor is UNAVAILABLE,
+		// not zero. There is no fallback grid to read: the limiter refuses to
+		// invent one for exactly the same reason, and a bar reading zero
+		// percent is a claim about the customer's consumption that nothing
+		// here can support.
+		if w.shape.Anchored && !anchorUsable {
+			return UsageWindows{}, ErrUsageWindowsUnavailable
 		}
 
 		used, err := r.sum(ctx, ratewindows.AccountPrefix(accountID.String()), w.shape, anchor, now)

@@ -138,6 +138,7 @@ func TestCheckWithNoConfiguredLimitsNeverRunsAWindow(t *testing.T) {
 			longCalls++
 			return longWindowResult{}, errors.New("long window must not have been consulted")
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 
 	unlimited := &RatePolicy{FreeTokenWeightTenths: 1}

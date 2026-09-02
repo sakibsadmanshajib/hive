@@ -35,6 +35,7 @@ func newLiveLimiter(t *testing.T, now func() time.Time) *Limiter {
 	}
 	limiter.runSlidingWindow = limiter.defaultRunSlidingWindow
 	limiter.runLongWindow = limiter.defaultRunLongWindow
+	limiter.commitLongWindows = limiter.defaultCommitLongWindows
 	return limiter
 }
 
@@ -314,16 +315,205 @@ func TestRefusalDistinguishesOversizedFromExhausted(t *testing.T) {
 func TestLongWindowRefusalDoesNotForgeAPerMinuteHeader(t *testing.T) {
 	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
 	headers := RateLimitHeaders(LimitResult{
-		Reason:              "session_limit_exceeded",
-		Window:              ratewindows.Session,
-		ResetAt:             now.Add(4 * time.Hour),
-		RequestResetSeconds: 14400,
-		Session:             WindowState{Configured: true, Limit: 1000, Used: 1000, ResetAt: now.Add(4 * time.Hour), ResetSeconds: 14400},
+		Reason:            "session_limit_exceeded",
+		Window:            ratewindows.Session,
+		ResetAt:           now.Add(4 * time.Hour),
+		RetryAfterSeconds: 14400,
+		Session:           WindowState{Configured: true, Limit: 1000, Used: 1000, ResetAt: now.Add(4 * time.Hour), ResetSeconds: 14400},
 	})
 	if headers["x-ratelimit-limit-requests"] != "" || headers["x-ratelimit-reset-requests"] != "" {
 		t.Fatalf("a long-window refusal forged per-minute request headers: %v", headers)
 	}
 	if headers["retry-after"] != "14400" {
 		t.Fatalf("retry-after %q, want 14400", headers["retry-after"])
+	}
+
+	// And with a per-minute limit ALSO in play, its reset stays its own. The
+	// long window's four hour wait belongs in retry-after and nowhere else.
+	both := RateLimitHeaders(LimitResult{
+		Reason:              "session_limit_exceeded",
+		Window:              ratewindows.Session,
+		ResetAt:             now.Add(4 * time.Hour),
+		RetryAfterSeconds:   14400,
+		RequestLimit:        60,
+		RequestRemaining:    59,
+		RequestResetSeconds: 30,
+		Session:             WindowState{Configured: true, Limit: 1000, Used: 1000, ResetAt: now.Add(4 * time.Hour), ResetSeconds: 14400},
+	})
+	if both["x-ratelimit-reset-requests"] != "30" {
+		t.Fatalf("per-minute reset %q, want 30: a long window overwrote the requests-per-minute reset", both["x-ratelimit-reset-requests"])
+	}
+	if both["retry-after"] != "14400" {
+		t.Fatalf("retry-after %q, want the long window's 14400", both["retry-after"])
+	}
+}
+
+// windowSnapshotWithKey configures BOTH scopes. Every other test in this file
+// leaves KeyRatePolicy unconfigured, which is why the account-to-key merge had
+// no coverage at all.
+func windowSnapshotWithKey(accountSession, accountWeekly, keySession, keyWeekly int64, anchor time.Time) AuthSnapshot {
+	snapshot := windowSnapshot(accountSession, accountWeekly, anchor)
+	snapshot.KeyRatePolicy = &RatePolicy{
+		RollingFiveHourLimit:  keySession,
+		WeeklyLimit:           keyWeekly,
+		FreeTokenWeightTenths: 1,
+	}
+	return snapshot
+}
+
+// TestRefusedRequestSpendsNoWindow is the one that matters for a subscriber's
+// bill of allowance: a request that receives a 429 must not have spent the
+// windows that admitted before the one that refused.
+//
+// Before this, window_score.lua INCRBYed on its own admit path, and the loop
+// ran session before weekly, so a weekly refusal had already charged the
+// session window. A client obeying the retry-after it was handed drained the
+// session allowance on every attempt, and the component doing the charging was
+// the component doing the refusing.
+func TestRefusedRequestSpendsNoWindow(t *testing.T) {
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	anchor := now.Add(-24 * time.Hour)
+	limiter := newLiveLimiter(t, func() time.Time { return now })
+
+	refused, err := limiter.Check(context.Background(), windowSnapshot(1000, 200, anchor), "hive-default", 300, 0, 0)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if refused.Allowed {
+		t.Fatal("the weekly window admitted a request larger than its allowance")
+	}
+	if refused.Reason != "weekly_limit_exceeded" {
+		t.Fatalf("reason %q, want weekly_limit_exceeded", refused.Reason)
+	}
+	if refused.Session.Used != 0 {
+		t.Fatalf("the session window reports %d used on a refused request; nothing was admitted", refused.Session.Used)
+	}
+
+	// Now let the same spend through, with only the weekly window relaxed. If
+	// the refused request had been charged, this window would already be
+	// holding 300 and would report 600.
+	allowed, err := limiter.Check(context.Background(), windowSnapshot(1000, 0, anchor), "hive-default", 300, 0, 0)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !allowed.Allowed {
+		t.Fatalf("refused unexpectedly: %+v", allowed)
+	}
+	if allowed.Session.Used != 300 {
+		t.Fatalf("session used %d, want 300: the refused request was charged against a window that admitted it", allowed.Session.Used)
+	}
+}
+
+// TestKeyRefusalDoesNotSpendTheAccountWindow is the same defect one level up:
+// the account scope is scored in full before the key scope is consulted.
+func TestKeyRefusalDoesNotSpendTheAccountWindow(t *testing.T) {
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	anchor := now.Add(-24 * time.Hour)
+	limiter := newLiveLimiter(t, func() time.Time { return now })
+
+	refused, err := limiter.Check(context.Background(), windowSnapshotWithKey(1000, 0, 100, 0, anchor), "hive-default", 300, 0, 0)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if refused.Allowed {
+		t.Fatal("the key's session window admitted a request three times its allowance")
+	}
+	// The reported window is the one that actually refused, not the account's
+	// roomier view of the same window merged over the top of it.
+	if refused.Session.Limit != 100 {
+		t.Fatalf("session limit %d, want the refusing key scope's 100", refused.Session.Limit)
+	}
+
+	allowed, err := limiter.Check(context.Background(), windowSnapshotWithKey(1000, 0, 1000, 0, anchor), "hive-default", 300, 0, 0)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !allowed.Allowed {
+		t.Fatalf("refused unexpectedly: %+v", allowed)
+	}
+	if allowed.Session.Used != 300 {
+		t.Fatalf("account session used %d, want 300: a key refusal charged the account window", allowed.Session.Used)
+	}
+}
+
+// TestTighterScopeBindsOnSuccess covers the merge on an allowed check, which no
+// test exercised because every one of them left the key policy unconfigured.
+func TestTighterScopeBindsOnSuccess(t *testing.T) {
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	anchor := now.Add(-24 * time.Hour)
+	limiter := newLiveLimiter(t, func() time.Time { return now })
+
+	result, err := limiter.Check(context.Background(), windowSnapshotWithKey(1000, 0, 500, 0, anchor), "hive-default", 100, 0, 0)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !result.Allowed {
+		t.Fatalf("refused unexpectedly: %+v", result)
+	}
+	if result.Session.Limit != 500 {
+		t.Fatalf("session limit %d, want the tighter key scope's 500", result.Session.Limit)
+	}
+	// Post-charge on both sides, so the two are the same quantity and the
+	// comparison that picked this one was a real comparison.
+	if result.Session.Used != 100 || result.Session.Remaining != 400 {
+		t.Fatalf("session state %+v, want 100 used and 400 remaining", result.Session)
+	}
+	if result.Session.UsedPercent() != 20 {
+		t.Fatalf("session used %d percent, want 20", result.Session.UsedPercent())
+	}
+}
+
+// TestNoAnchorSkipsTheWeeklyWindowRatherThanCountingElsewhere is the deploy-skew
+// case: a new edge-api reading a snapshot an older control-plane cached, which
+// carries no weekly_anchor_at at all.
+//
+// The old code fell back to the Unix epoch, so those requests counted into a
+// bucket keyed off epoch while the console read the bucket keyed off the
+// account's real anchor. The counts were not merely unenforced, they were
+// permanently invisible.
+func TestNoAnchorSkipsTheWeeklyWindowRatherThanCountingElsewhere(t *testing.T) {
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	anchor := now.Add(-24 * time.Hour)
+	limiter := newLiveLimiter(t, func() time.Time { return now })
+
+	stale := windowSnapshot(0, 500, anchor)
+	stale.AccountRatePolicy.WeeklyAnchorAt = nil
+
+	result, err := limiter.Check(context.Background(), stale, "hive-default", 400, 0, 0)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !result.Allowed {
+		t.Fatalf("an anchorless snapshot refused a request: %+v", result)
+	}
+	if result.Weekly.Configured {
+		t.Fatalf("the weekly window reported a state it could not count: %+v", result.Weekly)
+	}
+
+	// And nothing was written to any grid, so the account's real weekly bucket
+	// still has its whole allowance once the anchor is back.
+	restored, err := limiter.Check(context.Background(), windowSnapshot(0, 500, anchor), "hive-default", 500, 0, 0)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !restored.Allowed {
+		t.Fatalf("the anchorless request was counted somewhere: %+v", restored.Weekly)
+	}
+}
+
+// TestFutureAnchorIsRefusedRatherThanCountedElsewhere: the writer rejects one,
+// and if a future anchor reaches the limiter anyway it must not silently move
+// the account onto a second grid.
+func TestFutureAnchorIsRefusedRatherThanCountedElsewhere(t *testing.T) {
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	limiter := newLiveLimiter(t, func() time.Time { return now })
+
+	future := windowSnapshot(0, 500, now.Add(48*time.Hour))
+	result, err := limiter.Check(context.Background(), future, "hive-default", 400, 0, 0)
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if result.Weekly.Configured {
+		t.Fatalf("a future anchor produced a counted weekly window: %+v", result.Weekly)
 	}
 }

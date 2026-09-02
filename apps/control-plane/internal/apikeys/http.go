@@ -551,12 +551,40 @@ func accountRateLimitsResponse(limits AccountRateLimits) map[string]interface{} 
 	return body
 }
 
+// windowTargetAccount resolves WHICH account a platform admin is configuring.
+//
+// Defaults to the account the admin is currently in; ?account_id=<uuid> names
+// another. Without it these two routes could only ever configure the caller's
+// own account, which for a platform-admin-only lever means Hive could not set
+// an allowance on a subscriber at all, and the feature would be unreachable in
+// production however correct the storage underneath it was.
+//
+// No extra authorization decision is taken here: both callers have already
+// required PermPlatformAdmin, which is the permission to administer any
+// account's allowance.
+func windowTargetAccount(w http.ResponseWriter, r *http.Request, current uuid.UUID) (uuid.UUID, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("account_id"))
+	if raw == "" {
+		return current, true
+	}
+	parsed, err := uuid.Parse(raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_id must be a UUID"})
+		return uuid.Nil, false
+	}
+	return parsed, true
+}
+
 func (h *Handler) handleGetAccountRateLimits(w http.ResponseWriter, r *http.Request) {
 	vc, ok := h.resolveViewerContext(w, r, authz.PermPlatformAdmin)
 	if !ok {
 		return
 	}
-	limits, err := h.svc.GetAccountRateLimits(r.Context(), vc.CurrentAccount.ID)
+	accountID, ok := windowTargetAccount(w, r, vc.CurrentAccount.ID)
+	if !ok {
+		return
+	}
+	limits, err := h.svc.GetAccountRateLimits(r.Context(), accountID)
 	if err != nil {
 		handleKeyError(w, err)
 		return
@@ -571,6 +599,10 @@ func (h *Handler) handleGetAccountRateLimits(w http.ResponseWriter, r *http.Requ
 // weekly allowance would not have one.
 func (h *Handler) handleUpdateAccountRateLimits(w http.ResponseWriter, r *http.Request) {
 	vc, ok := h.resolveViewerContext(w, r, authz.PermPlatformAdmin)
+	if !ok {
+		return
+	}
+	accountID, ok := windowTargetAccount(w, r, vc.CurrentAccount.ID)
 	if !ok {
 		return
 	}
@@ -590,7 +622,13 @@ func (h *Handler) handleUpdateAccountRateLimits(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	current, err := h.svc.GetAccountRateLimits(r.Context(), vc.CurrentAccount.ID)
+	// Read, modify, write. Not atomic: two administrators writing the same
+	// account at the same instant can lose one of the two edits. Left as is
+	// deliberately -- the caller set is platform admins acting on one account
+	// at a time, and the alternative is expressing "leave an omitted field
+	// alone" in the upsert itself, which trades a rare lost edit for SQL that
+	// has to encode the absent/null distinction a second time.
+	current, err := h.svc.GetAccountRateLimits(r.Context(), accountID)
 	if err != nil {
 		handleKeyError(w, err)
 		return
@@ -635,8 +673,15 @@ func (h *Handler) handleUpdateAccountRateLimits(w http.ResponseWriter, r *http.R
 		input.WeeklyAnchorAt = &anchor
 	}
 
-	limits, err := h.svc.UpdateAccountRateLimits(r.Context(), vc.CurrentAccount.ID, input)
+	limits, err := h.svc.UpdateAccountRateLimits(r.Context(), accountID, input)
 	if err != nil {
+		if errIs(err, ErrAnchorNotUsable) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+				"error": "weekly_anchor_at must be an instant in the past; a future anchor puts the limiter and the consumption display on different counters",
+				"code":  "weekly_anchor_not_usable",
+			})
+			return
+		}
 		if errIs(err, ErrLimitsOutOfRange) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
 				"error": "a window limit must be a positive number of credits, or null for no limit; zero is not a limit of zero",

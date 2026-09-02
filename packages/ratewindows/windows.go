@@ -140,3 +140,55 @@ func (s Shape) BucketKeys(scopePrefix string, now, accountAnchor time.Time) []st
 	}
 	return keys
 }
+
+// ResolveWeeklyAnchor is the ONE rule for turning a stored weekly anchor into
+// the instant the weekly bucket grid is measured from. Both sides of the
+// system call it: the edge limiter, which writes the counters, and
+// control-plane's consumption reader, which displays them.
+//
+// It exists because sharing the key FORMAT was not enough. The anchor is an
+// input to the key, and it used to be derived twice under two different rules:
+// the limiter fell back to the epoch on a nil, unparseable or future anchor,
+// and the reader fell back only on the zero time with no future guard at all.
+// Where those two disagreed they read different Redis keys, so the console
+// reported zero percent used for a window the gateway was actively refusing on.
+//
+// ok is false when the anchor is unusable: the zero time, or an instant in the
+// future. There is deliberately no fallback value. An epoch fallback is what
+// produced the divergence in the first place, and silently counting into a
+// grid nobody reads back is worse than not counting: those counts are
+// permanently invisible. A caller that gets ok false must skip the weekly
+// window entirely and say so, rather than substitute a grid of its own.
+func ResolveWeeklyAnchor(anchor, now time.Time) (time.Time, bool) {
+	if anchor.IsZero() {
+		return time.Time{}, false
+	}
+	if anchor.After(now) {
+		// A future anchor puts the account in a bucket before its own week
+		// zero. The writer rejects one (control-plane's
+		// UpdateAccountRateLimits), so this is the second of two guards
+		// rather than the only one.
+		return time.Time{}, false
+	}
+	return anchor.UTC(), true
+}
+
+// ParseWeeklyAnchor is ResolveWeeklyAnchor over the RFC3339 wire form the edge
+// receives on its cached auth snapshot.
+//
+// A nil pointer is the deploy-skew case and is not an error: a new edge-api
+// reads snapshots an older control-plane cached, for up to the snapshot TTL,
+// and those carry no anchor field at all. It returns ok false for exactly the
+// same reason as an unusable anchor, and the caller skips the weekly window
+// for that minute rather than counting into the epoch grid, where the counts
+// would never be seen again by anything.
+func ParseWeeklyAnchor(raw *string, now time.Time) (time.Time, bool) {
+	if raw == nil {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, *raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return ResolveWeeklyAnchor(parsed, now)
+}

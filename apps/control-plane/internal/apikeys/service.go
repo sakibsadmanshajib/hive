@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/sakibsadmanshajib/hive/packages/ratewindows"
 )
 
 // SnapshotCache invalidates cached auth snapshots for API keys.
@@ -586,6 +588,18 @@ func (s *Service) UpdateAccountRateLimits(ctx context.Context, accountID uuid.UU
 	repo, ok := s.repo.(AccountRateLimitsRepository)
 	if !ok {
 		return AccountRateLimits{}, fmt.Errorf("apikeys: update account rate limits: %w", ErrNotSupported)
+	}
+	// A future anchor is refused here, at the one writer, rather than guarded
+	// for by every reader afterwards. The weekly bucket key is derived from
+	// this instant, so an anchor ahead of now puts the limiter and this
+	// service's own consumption reader on two different grids: the gateway
+	// refuses while the console shows zero percent used, permanently. The
+	// shared rule (ratewindows.ResolveWeeklyAnchor) is what both readers apply,
+	// and this is what keeps it from ever having to.
+	if input.WeeklyAnchorAt != nil {
+		if _, usable := ratewindows.ResolveWeeklyAnchor(*input.WeeklyAnchorAt, time.Now().UTC()); !usable {
+			return AccountRateLimits{}, fmt.Errorf("apikeys: update account rate limits: %w", ErrAnchorNotUsable)
+		}
 	}
 	limits, err := repo.UpsertAccountRateLimits(ctx, accountID, input)
 	if err != nil {

@@ -58,3 +58,34 @@ func TestSessionWindowCoversFiveHours(t *testing.T) {
 		t.Fatalf("bucket keys are not distinct: %q", keys[0])
 	}
 }
+
+// TestWeeklyAnchorRuleIsOneRule pins the shared rule both sides derive the
+// weekly bucket key from. When these were two rules with two different fallback
+// conditions, the limiter and the console read different Redis keys and the
+// console reported zero percent used for a window the gateway was refusing on.
+func TestWeeklyAnchorRuleIsOneRule(t *testing.T) {
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	past := now.Add(-72 * time.Hour)
+
+	if got, ok := ratewindows.ResolveWeeklyAnchor(past, now); !ok || !got.Equal(past) {
+		t.Fatalf("a past anchor was rejected: %s %v", got, ok)
+	}
+	if _, ok := ratewindows.ResolveWeeklyAnchor(time.Time{}, now); ok {
+		t.Fatal("the zero time was accepted as an anchor")
+	}
+	if _, ok := ratewindows.ResolveWeeklyAnchor(now.Add(time.Hour), now); ok {
+		t.Fatal("a future anchor was accepted; it puts the account in a bucket before its own week zero")
+	}
+
+	text := past.Format(time.RFC3339)
+	if got, ok := ratewindows.ParseWeeklyAnchor(&text, now); !ok || !got.Equal(past) {
+		t.Fatalf("the wire form did not round trip: %s %v", got, ok)
+	}
+	if _, ok := ratewindows.ParseWeeklyAnchor(nil, now); ok {
+		t.Fatal("an absent anchor was accepted; a stale auth snapshot carries none")
+	}
+	garbage := "not-a-time"
+	if _, ok := ratewindows.ParseWeeklyAnchor(&garbage, now); ok {
+		t.Fatal("an unparseable anchor was accepted")
+	}
+}

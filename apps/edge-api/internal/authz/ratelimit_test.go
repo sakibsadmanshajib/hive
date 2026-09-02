@@ -42,8 +42,10 @@ func TestLimiterUsesSeparateAccountAndKeyThresholds(t *testing.T) {
 			return true, limit - 1, 30, nil
 		},
 		runLongWindow: func(_ context.Context, familyPrefix string, shape ratewindows.Shape, _ time.Time, limit int64, score int64, now time.Time) (longWindowResult, error) {
-			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score, ResetAt: now.Add(300 * time.Second)}, nil
+			// Pre-charge, matching the real script: the charge is a second pass.
+			return longWindowResult{Allowed: true, Remaining: limit, Used: 0, ResetAt: now.Add(300 * time.Second)}, nil
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 
 	snapshot := AuthSnapshot{
@@ -112,8 +114,10 @@ func TestWindowScoreUsesWeightedFreeTokens(t *testing.T) {
 				score:        score,
 				bucketCount:  shape.Buckets,
 			})
-			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score, ResetAt: now.Add(300 * time.Second)}, nil
+			// Pre-charge, matching the real script: the charge is a second pass.
+			return longWindowResult{Allowed: true, Remaining: limit, Used: 0, ResetAt: now.Add(300 * time.Second)}, nil
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 
 	snapshot := AuthSnapshot{

@@ -25,6 +25,12 @@ type Authorizer interface {
 type AuthResult struct {
 	AccountID string
 	APIKeyID  string
+
+	// RateLimitHeaders carries the limiter's view of this account on the
+	// SUCCESS path, so this surface ships the same pacing metadata the
+	// inference routes do. Discarding it here is why images, audio, files and
+	// batches saw rate-limit headers only on a 429 (issue #1725).
+	RateLimitHeaders map[string]string
 }
 
 // StorageBackend is the interface for blob storage operations.
@@ -115,6 +121,9 @@ func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) (AuthResult,
 		apierrors.WriteError(w, http.StatusUnauthorized, "invalid_request_error", "Invalid API key.", &code)
 		return AuthResult{}, false
 	}
+	// Rate-limit metadata on the success path too, so a caller can pace itself
+	// before it is refused (issue #1725).
+	apierrors.ApplyHeaders(w, result.RateLimitHeaders)
 	return result, true
 }
 

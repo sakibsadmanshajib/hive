@@ -3,6 +3,19 @@
 --
 -- Returns {allowed, remaining, retry_after_ms, full_reset_ms, used}.
 --
+-- This script SCORES ONLY. It does not write. The charge is a separate pass in
+-- Go (Limiter.commitLongWindows), run once every window in every scope has
+-- admitted, because when the two were one script the account's session window
+-- was already INCRBYed before the account's weekly window was consulted, and
+-- both were before the key's -- so a request refused by any later window had
+-- spent the allowance of every earlier one, and a client obeying its own
+-- retry-after burned the rest down on every attempt.
+--
+-- remaining and used are therefore always PRE-charge: limit - total, and total.
+-- The two scopes' views of one window are then the same quantity and can be
+-- compared, which "limit - projected on admit, limit - total on refuse" was
+-- not.
+--
 -- retry_after_ms and full_reset_ms are different questions and issue #1725 was
 -- filed partly because the old script answered neither. It returned
 -- "milliseconds until the current bucket rolls", which for the weekly window
@@ -21,8 +34,8 @@
 -- boundaries are never customer visible; the account's own anchor for the
 -- weekly window, so its reset lands on the instant the customer was told.
 
-local current_key = KEYS[1]
-
+-- KEYS[1] is the current bucket, declared so the key is routed to the right
+-- Redis Cluster slot. This script no longer writes to it; the charge pass does.
 local key_prefix = ARGV[1]
 local current_bucket = tonumber(ARGV[2])
 local bucket_ms = tonumber(ARGV[3])
@@ -72,12 +85,9 @@ if projected > limit then
   return {0, remaining, retry_after_ms, full_reset_ms, total}
 end
 
-redis.call("INCRBY", current_key, score)
-redis.call("PEXPIRE", current_key, bucket_ms * (bucket_count + 1))
-
-local remaining = limit - projected
+local remaining = limit - total
 if remaining < 0 then
   remaining = 0
 end
 
-return {1, remaining, 0, full_reset_ms, projected}
+return {1, remaining, 0, full_reset_ms, total}

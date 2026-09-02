@@ -110,6 +110,12 @@ var ErrNotFound = errors.New("apikeys: not found")
 // which is the failure mode this whole issue is about.
 var ErrNotSupported = errors.New("apikeys: operation not supported by this repository")
 
+// ErrAnchorNotUsable reports a weekly anchor the system cannot count from: the
+// zero time, or an instant in the future. Refused at the writer because the
+// weekly Redis bucket key is derived from it, so an unusable anchor is not a
+// cosmetic problem but two subsystems counting in two different places.
+var ErrAnchorNotUsable = errors.New("apikeys: weekly anchor must be a past instant")
+
 // ErrNotAgentTaskKey is returned when RevokeAgentTaskKey is handed an id that
 // resolves to a key of some other kind. Never silently ignored: it means the
 // caller's premise about what that id identifies is wrong.

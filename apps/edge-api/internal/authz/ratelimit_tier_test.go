@@ -21,8 +21,9 @@ func TestCheckWithTierEnforcesMinKeyOrTierRPM(t *testing.T) {
 			return true, limit - 1, 30, nil
 		},
 		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
-			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
+			return longWindowResult{Allowed: true, Remaining: limit, Used: 0}, nil
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 
 	snapshot := AuthSnapshot{
@@ -64,8 +65,9 @@ func TestCheckWithTierUsesKeyLimitWhenTighter(t *testing.T) {
 			return true, 1000, 30, nil
 		},
 		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
-			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
+			return longWindowResult{Allowed: true, Remaining: limit, Used: 0}, nil
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 
 	snapshot := AuthSnapshot{
@@ -103,8 +105,9 @@ func TestCheckWithTierTierOverridesWinOverEnvDefaults(t *testing.T) {
 			return true, 1000, 30, nil
 		},
 		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
-			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
+			return longWindowResult{Allowed: true, Remaining: limit, Used: 0}, nil
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 
 	snapshot := AuthSnapshot{
@@ -146,8 +149,9 @@ func TestCheckWithTierShortCircuitsOnKeyDeny(t *testing.T) {
 			return true, limit - 1, 30, nil
 		},
 		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
-			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
+			return longWindowResult{Allowed: true, Remaining: limit, Used: 0}, nil
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 
 	snapshot := AuthSnapshot{
@@ -177,8 +181,9 @@ func TestCheckWithTierZeroTierLimitsAllowed(t *testing.T) {
 			return true, limit - 1, 30, nil
 		},
 		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
-			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
+			return longWindowResult{Allowed: true, Remaining: limit, Used: 0}, nil
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 	snapshot := AuthSnapshot{
 		KeyID:             "key-5",

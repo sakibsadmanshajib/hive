@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -105,6 +106,13 @@ type LimitResult struct {
 	TokenRemaining      int
 	TokenResetSeconds   int
 
+	// RetryAfterSeconds is how long the caller should wait before retrying,
+	// whichever limit refused. Separate from RequestResetSeconds on purpose:
+	// that one names the requests-per-minute window, and a long-window refusal
+	// writing a four hour reset into it produced an x-ratelimit-reset-requests
+	// header that reads as a per-minute limiter with no idea what a minute is.
+	RetryAfterSeconds int
+
 	// Window names the long window that refused, empty when none did.
 	Window string
 	// ResetAt is the real reset instant for the refusal: the moment enough
@@ -141,6 +149,10 @@ type Limiter struct {
 	now              func() time.Time
 	runSlidingWindow func(ctx context.Context, keys []string, limit int, amount int64, now time.Time) (bool, int, int, error)
 	runLongWindow    func(ctx context.Context, familyPrefix string, shape ratewindows.Shape, anchor time.Time, limit int64, score int64, now time.Time) (longWindowResult, error)
+	// commitLongWindows charges the windows that admitted. Separate from
+	// runLongWindow, which now only scores, so that a request refused by any
+	// window is charged against none of them.
+	commitLongWindows func(ctx context.Context, charges []pendingCharge) error
 }
 
 // NewLimiter creates a Redis-backed edge limiter.
@@ -158,6 +170,7 @@ func NewLimiter(redisURL string) (*Limiter, error) {
 	}
 	limiter.runSlidingWindow = limiter.defaultRunSlidingWindow
 	limiter.runLongWindow = limiter.defaultRunLongWindow
+	limiter.commitLongWindows = limiter.defaultCommitLongWindows
 	return limiter, nil
 }
 
@@ -179,11 +192,12 @@ func (l *Limiter) CheckWithTier(
 	freeTokens int64,
 ) (LimitResult, error) {
 	// Run the existing account+key path first. If it denies, return immediately.
-	if result, err := l.Check(ctx, snapshot, aliasID, estimatedCredits, billableTokens, freeTokens); err != nil || !result.Allowed {
-		return result, err
+	base, err := l.Check(ctx, snapshot, aliasID, estimatedCredits, billableTokens, freeTokens)
+	if err != nil || !base.Allowed {
+		return base, err
 	}
 	if l == nil || tier == "" {
-		return LimitResult{Allowed: true}, nil
+		return base, nil
 	}
 
 	// Layer the tier-scoped bucket. Effective per-dimension limit is
@@ -207,7 +221,7 @@ func (l *Limiter) CheckWithTier(
 	effectiveTPM := MinPositive(keyTPM, tierLimits.TPM)
 
 	if effectiveRPM <= 0 && effectiveTPM <= 0 {
-		return LimitResult{Allowed: true}, nil
+		return base, nil
 	}
 
 	l.ensureDefaults()
@@ -226,6 +240,7 @@ func (l *Limiter) CheckWithTier(
 				RequestLimit:        effectiveRPM,
 				RequestRemaining:    maxInt(remaining, 0),
 				RequestResetSeconds: maxInt(reset, 0),
+				RetryAfterSeconds:   maxInt(reset, 0),
 			}, nil
 		}
 	}
@@ -242,11 +257,16 @@ func (l *Limiter) CheckWithTier(
 				TokenLimit:        effectiveTPM,
 				TokenRemaining:    maxInt(remaining, 0),
 				TokenResetSeconds: maxInt(reset, 0),
+				RetryAfterSeconds: maxInt(reset, 0),
 			}, nil
 		}
 	}
 
-	return LimitResult{Allowed: true}, nil
+	// The account and key windows have already been charged by Check, so a
+	// refusal here still spends them. Nothing outside tests calls this method
+	// (see tier.go), and wiring it would mean threading the charge pass out of
+	// Check; the honest note is cheaper than the machinery until it is wired.
+	return base, nil
 }
 
 // Check enforces account and key rate limits independently.
@@ -279,55 +299,87 @@ func (l *Limiter) Check(ctx context.Context, snapshot AuthSnapshot, aliasID stri
 	// The weekly anchor is the ACCOUNT's, for both scopes. A per-key anchor
 	// would let one account's week end at several different instants, which is
 	// unexplainable on a customer surface and unenforceable as one allowance.
-	anchor := weeklyAnchor(snapshot.AccountRatePolicy, now)
+	//
+	// One rule, in one place, shared with the control-plane reader that draws
+	// the consumption bar (ratewindows.ParseWeeklyAnchor). There is no epoch
+	// fallback any more: an anchor the two sides resolve differently means two
+	// different Redis keys, and the counts written to the one nobody reads back
+	// are gone for good.
+	anchor, anchored := ratewindows.ParseWeeklyAnchor(snapshot.AccountRatePolicy.WeeklyAnchorAt, now)
+	if !anchored && (snapshot.AccountRatePolicy.WeeklyLimit > 0 || snapshot.KeyRatePolicy.WeeklyLimit > 0) {
+		// The deploy-skew case: a new edge-api reading an auth snapshot an
+		// older control-plane cached, which carries no anchor field at all.
+		// Under-enforcing the weekly window for the snapshot TTL is the same
+		// trade this subsystem already makes for a stale limit VALUE, and it
+		// is strictly better than counting into a grid the console never
+		// reads. Loud, because the alternative is a silent absence.
+		slog.Warn("weekly usage window skipped: auth snapshot carries no usable weekly anchor",
+			"account_id", snapshot.AccountID,
+			"key_id", snapshot.KeyID)
+	}
 
-	accountResult, err := l.checkScope(ctx, accountScope, accountWindows, snapshot.AccountRatePolicy, anchor, estimatedCredits, billableTokens, freeTokens, now)
+	accountResult, accountPending, err := l.scoreScope(ctx, accountScope, accountWindows, snapshot.AccountRatePolicy, anchor, anchored, estimatedCredits, billableTokens, freeTokens, now)
 	if err != nil || !accountResult.Allowed {
 		return accountResult, err
 	}
-	keyResult, err := l.checkScope(ctx, keyScope, keyWindows, snapshot.KeyRatePolicy, anchor, estimatedCredits, billableTokens, freeTokens, now)
+	keyResult, keyPending, err := l.scoreScope(ctx, keyScope, keyWindows, snapshot.KeyRatePolicy, anchor, anchored, estimatedCredits, billableTokens, freeTokens, now)
 	if err != nil {
 		return LimitResult{}, err
 	}
 	if !keyResult.Allowed {
-		// Report the account's windows alongside the key's refusal where the
-		// key leaves a window unconfigured, so a header set is never blank
-		// just because the tighter scope happened to be silent about it.
-		keyResult.Session = tighterWindow(accountResult.Session, keyResult.Session)
-		keyResult.Weekly = tighterWindow(accountResult.Weekly, keyResult.Weekly)
+		// Nothing has been charged: both scopes were SCORED, and the charge
+		// below only happens when every window admitted. Fill in the windows
+		// the key scope left unconfigured so a header set is never blank, but
+		// never overwrite the refusing scope's own state with the other
+		// scope's -- a 429 that names the session window has to carry the
+		// session numbers of the scope that actually refused.
+		keyResult.Session = fillWindow(keyResult.Session, accountResult.Session)
+		keyResult.Weekly = fillWindow(keyResult.Weekly, accountResult.Weekly)
 		return keyResult, nil
 	}
 
-	return LimitResult{
+	// Every window in both scopes admitted, so the request may be charged.
+	//
+	// Scoring and charging are two passes on purpose. When they were one, the
+	// account's session window INCRBYed before the account's weekly window was
+	// consulted at all, and the account's windows before the key's, so a
+	// request refused by any later window had already spent the allowance of
+	// every earlier one -- and a client obeying the retry-after it was handed
+	// burned the rest down on every attempt. The component that refused the
+	// request was the component charging for it.
+	//
+	// The cost of the split is that the score and the charge are no longer one
+	// atomic script, so N requests scoring concurrently against the same
+	// window can each admit and overshoot the allowance by up to N-1 requests'
+	// worth of score. That is bounded, self-correcting on the next request,
+	// and on the generous side of the customer; charging for refusals is
+	// neither.
+	pending := append(append([]pendingCharge(nil), accountPending...), keyPending...)
+	if len(pending) > 0 {
+		if err := l.commitLongWindows(ctx, pending); err != nil {
+			return LimitResult{}, err
+		}
+		applyCharges(&accountResult, accountPending)
+		applyCharges(&keyResult, keyPending)
+	}
+
+	merged := LimitResult{
 		Allowed: true,
 		Session: tighterWindow(accountResult.Session, keyResult.Session),
 		Weekly:  tighterWindow(accountResult.Weekly, keyResult.Weekly),
-	}, nil
-}
-
-// weeklyAnchor is the instant the account's week rolls over. Absent or
-// unparseable, it falls back to the Unix epoch, which is deterministic and
-// shared by every scope rather than drifting with process start time.
-func weeklyAnchor(policy *RatePolicy, now time.Time) time.Time {
-	epoch := time.Unix(0, 0).UTC()
-	if policy == nil || policy.WeeklyAnchorAt == nil {
-		return epoch
 	}
-	parsed, err := time.Parse(time.RFC3339, *policy.WeeklyAnchorAt)
-	if err != nil {
-		return epoch
-	}
-	if parsed.After(now) {
-		// A future anchor would put the account in a bucket before its own
-		// week zero. Nothing writes one today (the column defaults to now()
-		// at insert), so this is a guard rather than a code path.
-		return epoch
-	}
-	return parsed.UTC()
+	mergePerMinute(&merged, accountResult, keyResult)
+	return merged, nil
 }
 
 // tighterWindow picks the binding of two scopes' views of the same window: the
 // configured one, or the one with less left.
+//
+// Only ever called on an ALLOWED check, where both sides have been charged and
+// so both Remaining values are the same quantity. It used to be called on the
+// refusal path too, where one side had been charged and the other had not, so
+// "less remaining wins" compared a post-spend number against a pre-spend one
+// and could hand a 429 the wrong scope's percentages.
 func tighterWindow(a, b WindowState) WindowState {
 	switch {
 	case !a.Configured:
@@ -341,6 +393,41 @@ func tighterWindow(a, b WindowState) WindowState {
 	}
 }
 
+// fillWindow substitutes the fallback only where the primary scope has nothing
+// to say. It never picks between two configured windows.
+func fillWindow(primary, fallback WindowState) WindowState {
+	if primary.Configured {
+		return primary
+	}
+	return fallback
+}
+
+// mergePerMinute carries the per-minute limits onto an allowed result.
+//
+// They used to be populated on the refusal branches only, so a 200 shipped no
+// x-ratelimit-*-requests headers at all and a caller with an RPM configured
+// still could not pace against it until it was refused -- which is the
+// complaint issue #1725 opens with. The binding scope is the one with less
+// left, the same rule the long windows use.
+func mergePerMinute(into *LimitResult, a, b LimitResult) {
+	switch {
+	case a.RequestLimit <= 0:
+		into.RequestLimit, into.RequestRemaining, into.RequestResetSeconds = b.RequestLimit, b.RequestRemaining, b.RequestResetSeconds
+	case b.RequestLimit <= 0 || a.RequestRemaining <= b.RequestRemaining:
+		into.RequestLimit, into.RequestRemaining, into.RequestResetSeconds = a.RequestLimit, a.RequestRemaining, a.RequestResetSeconds
+	default:
+		into.RequestLimit, into.RequestRemaining, into.RequestResetSeconds = b.RequestLimit, b.RequestRemaining, b.RequestResetSeconds
+	}
+	switch {
+	case a.TokenLimit <= 0:
+		into.TokenLimit, into.TokenRemaining, into.TokenResetSeconds = b.TokenLimit, b.TokenRemaining, b.TokenResetSeconds
+	case b.TokenLimit <= 0 || a.TokenRemaining <= b.TokenRemaining:
+		into.TokenLimit, into.TokenRemaining, into.TokenResetSeconds = a.TokenLimit, a.TokenRemaining, a.TokenResetSeconds
+	default:
+		into.TokenLimit, into.TokenRemaining, into.TokenResetSeconds = b.TokenLimit, b.TokenRemaining, b.TokenResetSeconds
+	}
+}
+
 func (l *Limiter) ensureDefaults() {
 	if l.now == nil {
 		l.now = time.Now
@@ -351,16 +438,32 @@ func (l *Limiter) ensureDefaults() {
 	if l.runLongWindow == nil {
 		l.runLongWindow = l.defaultRunLongWindow
 	}
+	if l.commitLongWindows == nil {
+		l.commitLongWindows = l.defaultCommitLongWindows
+	}
 }
 
-func (l *Limiter) checkScope(ctx context.Context, slidingScope string, windowPrefix string, policy *RatePolicy, anchor time.Time, estimatedCredits int64, billableTokens int64, freeTokens int64, now time.Time) (LimitResult, error) {
+// scoreScope decides one scope without charging it.
+//
+// The per-minute sliding windows still count on the way past: they are a
+// throughput guard rather than a subscription allowance, they have behaved
+// this way since v1.0, and a slot spent on a refusal is back within the
+// minute. The long windows are the ones carrying a customer's paid allowance,
+// so they are only SCORED here; the charge is a second pass in Check, once
+// every window in every scope has admitted. The returned pendingCharges are
+// what that pass applies.
+func (l *Limiter) scoreScope(ctx context.Context, slidingScope string, windowPrefix string, policy *RatePolicy, anchor time.Time, anchored bool, estimatedCredits int64, billableTokens int64, freeTokens int64, now time.Time) (LimitResult, []pendingCharge, error) {
 	totalTokens := billableTokens + freeTokens
+	result := LimitResult{Allowed: true}
 
 	if policy.RateLimitRPM > 0 {
 		allowed, remaining, reset, err := l.runSlidingWindow(ctx, slidingWindowKeys(slidingScope, "rpm"), policy.RateLimitRPM, 1, now)
 		if err != nil {
-			return LimitResult{}, err
+			return LimitResult{}, nil, err
 		}
+		result.RequestLimit = policy.RateLimitRPM
+		result.RequestRemaining = maxInt(remaining, 0)
+		result.RequestResetSeconds = maxInt(reset, 0)
 		if !allowed {
 			return LimitResult{
 				Allowed:             false,
@@ -368,16 +471,20 @@ func (l *Limiter) checkScope(ctx context.Context, slidingScope string, windowPre
 				RequestLimit:        policy.RateLimitRPM,
 				RequestRemaining:    maxInt(remaining, 0),
 				RequestResetSeconds: maxInt(reset, 0),
+				RetryAfterSeconds:   maxInt(reset, 0),
 				ResetAt:             now.Add(time.Duration(maxInt(reset, 0)) * time.Second),
-			}, nil
+			}, nil, nil
 		}
 	}
 
 	if policy.RateLimitTPM > 0 {
 		allowed, remaining, reset, err := l.runSlidingWindow(ctx, slidingWindowKeys(slidingScope, "tpm"), policy.RateLimitTPM, totalTokens, now)
 		if err != nil {
-			return LimitResult{}, err
+			return LimitResult{}, nil, err
 		}
+		result.TokenLimit = policy.RateLimitTPM
+		result.TokenRemaining = maxInt(remaining, 0)
+		result.TokenResetSeconds = maxInt(reset, 0)
 		if !allowed {
 			return LimitResult{
 				Allowed:           false,
@@ -385,14 +492,15 @@ func (l *Limiter) checkScope(ctx context.Context, slidingScope string, windowPre
 				TokenLimit:        policy.RateLimitTPM,
 				TokenRemaining:    maxInt(remaining, 0),
 				TokenResetSeconds: maxInt(reset, 0),
+				RetryAfterSeconds: maxInt(reset, 0),
 				ResetAt:           now.Add(time.Duration(maxInt(reset, 0)) * time.Second),
-			}, nil
+			}, nil, nil
 		}
 	}
 
 	score := weightedWindowScore(*policy, estimatedCredits, billableTokens, freeTokens)
 
-	result := LimitResult{Allowed: true}
+	var pending []pendingCharge
 	for _, window := range []struct {
 		shape ratewindows.Shape
 		limit int64
@@ -417,16 +525,28 @@ func (l *Limiter) checkScope(ctx context.Context, slidingScope string, windowPre
 		if window.limit <= 0 {
 			continue
 		}
-
-		run, err := l.runLongWindow(ctx, ratewindows.FamilyPrefix(windowPrefix, window.shape.Name), window.shape, anchor, window.limit, score, now)
-		if err != nil {
-			return LimitResult{}, err
+		// An anchored window with no usable anchor is not evaluated at all.
+		// Counting it against the epoch grid, which is what the old fallback
+		// did, writes into a key the console never reads back: the enforcement
+		// and the display would disagree permanently, and the counts would be
+		// invisible for good. Check has already logged this.
+		if window.shape.Anchored && !anchored {
+			continue
 		}
+
+		familyPrefix := ratewindows.FamilyPrefix(windowPrefix, window.shape.Name)
+		run, err := l.runLongWindow(ctx, familyPrefix, window.shape, anchor, window.limit, score, now)
+		if err != nil {
+			return LimitResult{}, nil, err
+		}
+		// Used and Remaining are PRE-charge on both branches, so the two
+		// scopes' views of the same window are the same quantity and can be
+		// compared. Check charges the admitted ones afterwards.
 		*window.state = WindowState{
 			Name:         window.shape.Name,
 			Configured:   true,
 			Limit:        window.limit,
-			Used:         run.Used,
+			Used:         maxInt64(run.Used, 0),
 			Remaining:    maxInt64(run.Remaining, 0),
 			ResetAt:      run.ResetAt,
 			ResetSeconds: secondsUntil(now, run.ResetAt),
@@ -436,12 +556,58 @@ func (l *Limiter) checkScope(ctx context.Context, slidingScope string, windowPre
 			result.Reason = window.shape.Name + "_limit_exceeded"
 			result.Window = window.shape.Name
 			result.ResetAt = run.RetryAfter
-			result.RequestResetSeconds = secondsUntil(now, run.RetryAfter)
-			return result, nil
+			// RetryAfterSeconds, not RequestResetSeconds: that one names the
+			// requests-per-minute window, and filling it with a reset four
+			// hours out reads as a per-minute limiter that has lost its mind.
+			result.RetryAfterSeconds = secondsUntil(now, run.RetryAfter)
+			return result, nil, nil
+		}
+		if score > 0 {
+			pending = append(pending, pendingCharge{
+				key:    ratewindows.BucketKey(familyPrefix, ratewindows.Bucket(now, window.shape.EffectiveAnchor(anchor), window.shape.BucketSize)),
+				score:  score,
+				ttl:    window.shape.BucketSize * time.Duration(window.shape.Buckets+1),
+				window: window.shape.Name,
+			})
 		}
 	}
 
-	return result, nil
+	return result, pending, nil
+}
+
+// pendingCharge is one long window that admitted at scoring time and has not
+// been charged yet.
+//
+// It names its window rather than pointing at a WindowState, because the
+// LimitResult it came from is returned by value and a pointer into the callee's
+// local would be aimed at a dead copy.
+type pendingCharge struct {
+	key    string
+	score  int64
+	ttl    time.Duration
+	window string
+}
+
+// applyCharges moves the reported state from pre-charge to post-charge, so the
+// success headers describe each window as it stands after this request rather
+// than as it stood before it.
+func applyCharges(result *LimitResult, charges []pendingCharge) {
+	for _, charge := range charges {
+		switch charge.window {
+		case ratewindows.Session:
+			chargeWindow(&result.Session, charge.score)
+		case ratewindows.Weekly:
+			chargeWindow(&result.Weekly, charge.score)
+		}
+	}
+}
+
+func chargeWindow(state *WindowState, score int64) {
+	if !state.Configured {
+		return
+	}
+	state.Used += score
+	state.Remaining = maxInt64(state.Limit-state.Used, 0)
 }
 
 // secondsUntil is the retry-after value for a reset instant, rounded up so a
@@ -530,6 +696,29 @@ func (l *Limiter) defaultRunLongWindow(ctx context.Context, familyPrefix string,
 		RetryAfter: now.Add(time.Duration(numbers[2]) * time.Millisecond),
 		ResetAt:    now.Add(time.Duration(numbers[3]) * time.Millisecond),
 	}, nil
+}
+
+// defaultCommitLongWindows charges every window that admitted, in one round
+// trip. Plain INCRBY and PEXPIRE rather than a script: the scoring pass has
+// already read and decided, so there is nothing left to compute, and the two
+// scopes' keys live on different Redis Cluster slots, which a single script
+// could not span anyway.
+func (l *Limiter) defaultCommitLongWindows(ctx context.Context, charges []pendingCharge) error {
+	if len(charges) == 0 {
+		return nil
+	}
+	if l.redis == nil {
+		return errors.New("authz: limiter long-window commit unavailable")
+	}
+	pipe := l.redis.Pipeline()
+	for _, charge := range charges {
+		pipe.IncrBy(ctx, charge.key, charge.score)
+		pipe.PExpire(ctx, charge.key, charge.ttl)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("authz: charge long windows: %w", err)
+	}
+	return nil
 }
 
 func slidingWindowKeys(scope string, metric string) []string {

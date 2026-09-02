@@ -343,7 +343,7 @@ func resetClause(result LimitResult) string {
 	}
 	return fmt.Sprintf(" It resets at %s (in %s).",
 		result.ResetAt.UTC().Format(time.RFC3339),
-		humanizeDuration(result.RequestResetSeconds))
+		humanizeDuration(retryAfterSeconds(result)))
 }
 
 // humanizeDuration renders whole seconds as the coarsest sensible unit.
@@ -458,15 +458,28 @@ func RateLimitHeaders(result LimitResult) map[string]string {
 		headers["ratelimit-policy"] = strings.Join(policies, ", ")
 	}
 
-	retryAfter := result.RequestResetSeconds
-	if retryAfter <= 0 {
-		retryAfter = result.TokenResetSeconds
-	}
-	if retryAfter > 0 && !result.Allowed {
+	if retryAfter := retryAfterSeconds(result); retryAfter > 0 && !result.Allowed {
 		headers["retry-after"] = strconv.Itoa(retryAfter)
 	}
 
 	return headers
+}
+
+// retryAfterSeconds is how long the caller is told to wait.
+//
+// RetryAfterSeconds first, because a long-window refusal carries its wait
+// there rather than in RequestResetSeconds: that field names the
+// requests-per-minute window, and the per-minute headers are now emitted on
+// success too, so a session refusal writing into it would both forge a
+// per-minute reset and lose the real one.
+func retryAfterSeconds(result LimitResult) int {
+	if result.RetryAfterSeconds > 0 {
+		return result.RetryAfterSeconds
+	}
+	if result.RequestResetSeconds > 0 {
+		return result.RequestResetSeconds
+	}
+	return result.TokenResetSeconds
 }
 
 // bindingWindow is the long window the IETF aliases describe.
