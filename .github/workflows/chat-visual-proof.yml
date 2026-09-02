@@ -461,7 +461,17 @@ jobs:
           # may be pre-empted by set -e: a grep returns 1 when the line it wants
           # is absent, which under pipefail would kill the step at the
           # assignment rather than at the check.
-          if ! out=$(python3 scripts/seed-owui-e2e-user.py --account-slug chat-proof-shim --tenant-slug chat-proof); then
+          # No --account-slug and no --tenant-slug, so this lands on the
+          # reserved CI account and tenant. That reads like the wrong choice for
+          # a job that mints and revokes keys and is not the nightly, and it is
+          # the right one here: the account is a row in a database created
+          # minutes earlier by this job and destroyed with the runner, so the
+          # slug names nothing shared and there is no key anywhere for a
+          # revocation to strand. assert_account_scope (issue #560, PR #1734)
+          # refuses any OTHER slug from a run that configures no consumer,
+          # precisely because a custom slug means a real deployment; measured on
+          # run 33673078162, which passed one and was refused by name.
+          if ! out=$(python3 scripts/seed-owui-e2e-user.py); then
             echo "::error::seed-owui-e2e-user.py failed; its stderr is above"
             exit 1
           fi
