@@ -143,16 +143,22 @@ func main() {
 	}
 	authorizer := authz.NewAuthorizer(authzClient, limiter, authz.WithFailOpen(failOpen))
 
+	// Initialize Prometheus metrics registry for edge-api.
+	edgeMetrics, promRegistry := proxy.NewEdgeMetrics()
+
 	// Open WebUI authenticates its own upstream calls with OWUI_SHIM_KEY alone
 	// (model listing, text-to-speech and speech-to-text; its embeddings now
 	// carry a per-user token too, see issue #1696 at the /v1/embeddings wiring
 	// below). All of them fail silently or with a misleading invalid-key error
 	// when that key does not resolve, so probe it here and keep probing. See
 	// watchOWUIShimKey.
+	//
+	// Registered before the probe starts, and after the registry exists, so the
+	// verdict has somewhere to land on the very first pass: the gauge is what an
+	// alert fires on, and the log line beside it is what nobody is watching at
+	// 03:00 (issue #560).
+	registerOWUIShimKeyMetric(promRegistry, os.Getenv("OWUI_SHIM_KEY"))
 	go watchOWUIShimKey(rootCtx, authzClient, os.Getenv("OWUI_SHIM_KEY"), owuiShimKeyProbeInterval)
-
-	// Initialize Prometheus metrics registry for edge-api.
-	edgeMetrics, promRegistry := proxy.NewEdgeMetrics()
 
 	// Create the main mux. routeRecorder (route_recorder.go) records every
 	// pattern registered through it, so the boot-time assertMatrixCoverage
@@ -1532,6 +1538,46 @@ func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 	return nil
 }
 
+// owuiShimKeyUsable is the machine-readable half of the probe above, and the
+// half a human actually finds out through. The log line names the cause and the
+// remedy, which is what an operator needs once they are already looking; it is
+// not a signal, because nothing reads a container log on a schedule. This gauge
+// is scraped by the box's Prometheus (job edge-api, deploy/prometheus/
+// prometheus.yml) and read by the OWUIShimKeyUnusable rule in
+// deploy/prometheus/alerts.yml, which routes through Alertmanager to the ops
+// mailbox. That is the path by which a revoked key becomes an email instead of
+// a customer complaint.
+//
+// Package-level for the same reason apps/edge-api/internal/inference's counters
+// are: one Go object regardless of who sets it, registered once at startup, and
+// a Set on an unregistered gauge is a harmless no-op, so a test that never
+// registers it observes nothing.
+var owuiShimKeyUsable = prometheus.NewGauge(prometheus.GaugeOpts{
+	Name: "hive_owui_shim_key_usable",
+	Help: "1 when OWUI_SHIM_KEY resolves to an active, tenant-provisioned Hive API key allowed at least one model, 0 when it does not. Open WebUI's document RAG embeddings and text-to-speech authenticate as that key and nothing else, so 0 means both are down while every visible surface still looks healthy (issue #560). Held at its last value while the control plane is unreachable, because that is not a verdict on the key.",
+})
+
+// registerOWUIShimKeyMetric exports the gauge, and only when a shim key is
+// actually configured.
+//
+// The absence is deliberate and load bearing. A deployment with no Open WebUI
+// front-end never probes anything, and a gauge sitting at its zero value there
+// would read as "the key is dead" to every alert and dashboard, which is a
+// false page on a stack that has no shim key to break. No series at all lets
+// absent() distinguish "not measured here" from "measured and failing".
+//
+// The initial value is 1 rather than 0 for the mirror-image reason: the first
+// probe lands within milliseconds, but if it happens to time out, a gauge that
+// started at 0 would page for an unreachable control plane, which is the exact
+// false alarm the transient branch below exists to avoid.
+func registerOWUIShimKeyMetric(reg prometheus.Registerer, shimKey string) {
+	if strings.TrimSpace(shimKey) == "" {
+		return
+	}
+	owuiShimKeyUsable.Set(1)
+	reg.MustRegister(owuiShimKeyUsable)
+}
+
 // watchOWUIShimKey probes the configured OWUI shim key at boot and every
 // interval after that, logging every transition between usable and unusable.
 // Logging only on change keeps a healthy deployment quiet while making a
@@ -1584,6 +1630,18 @@ func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 			state = owuiShimKeyHealthy
 		case errors.Is(err, authz.ErrUpstreamUnavailable):
 			state = owuiShimKeyTransient
+		}
+
+		// Every probe, not only the transitions: the log deduplicates because a
+		// repeated line is noise, while a gauge that stops being written is a
+		// gauge an alert cannot trust. The transient case deliberately writes
+		// nothing and leaves the last real verdict standing, so an unreachable
+		// control plane does not page anyone to rotate a working key.
+		switch state {
+		case owuiShimKeyHealthy:
+			owuiShimKeyUsable.Set(1)
+		case owuiShimKeyDead:
+			owuiShimKeyUsable.Set(0)
 		}
 
 		if !reported || state != lastState {

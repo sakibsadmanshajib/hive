@@ -56,6 +56,12 @@ account boundary load-bearing. --account-slug defaults to the CI account,
 which the nightly OWUI job rotates on a schedule; a long-lived deployment
 MUST pass its own slug (for example --account-slug owui-shim-demo-box) so
 a scheduled CI run can never revoke the key that deployment depends on.
+That is enforced rather than merely documented (issue #560): see
+assert_account_scope, which refuses both a run on CI's rotated account
+that configures a long-lived consumer and a run on any other account that
+configures none, before anything is minted or revoked. The cleanup is
+also filtered to this script's own key nickname, so a key minted by any
+other route and carried by who-knows-what is never revoked here.
 Revocation of the old keys is also deferred until every configured
 consumer has been updated (see below), so a failed sync leaves the
 previous key working rather than stranding the deployment on a dead one.
@@ -409,7 +415,7 @@ def sync_owui_config(raw_secret: str) -> bool | None:
     # No hardcoded credential defaults. Local/demo test account already
     # documented in scripts/seed-demo-owner.py's header comment
     # (asdas@asdas.sda / asdas) if a caller wants to set these explicitly.
-    if not token and not (email and password):
+    if not owui_sync_configured():
         print(
             "owui config sync skipped: set OWUI_ADMIN_TOKEN (preferred) or "
             "OWUI_ADMIN_EMAIL/OWUI_ADMIN_PASSWORD to enable it",
@@ -583,6 +589,67 @@ def provision_tenant_member(
     return user_id, password
 
 
+def owui_sync_configured() -> bool:
+    """True when this run can push a newly minted key into Open WebUI's own
+    persisted config, which is one of the two long-lived consumers of the
+    value. Read by sync_owui_config below and by assert_account_scope, from
+    one place, so the guard and the sync can never disagree about whether a
+    consumer exists."""
+    token = os.environ.get("OWUI_ADMIN_TOKEN", "").strip()
+    email = os.environ.get("OWUI_ADMIN_EMAIL", "").strip()
+    password = os.environ.get("OWUI_ADMIN_PASSWORD", "").strip()
+    return bool(token or (email and password))
+
+
+def assert_account_scope(account_slug: str, env_file: str) -> None:
+    """Refuse the two configurations in which this script could revoke a
+    credential a long-lived deployment is still carrying (issue #560).
+
+    The account boundary was already the mechanism, but only as prose: the
+    docstring said a deployment must pass its own --account-slug, and nothing
+    enforced it. So the failure it describes stayed reachable in both
+    directions, and it is not hypothetical, it is what happened. Both are
+    refused here, before a network call is made, so no key is minted and none
+    is revoked on a configuration this script will not stand behind.
+
+    The invariant, stated once: a key that a long-lived consumer carries may
+    only ever be revoked by the run that just replaced it in that consumer.
+
+      * The reserved CI account is rotated on a schedule by a run that
+        configures no consumer and knows about none. Handing it a consumer is
+        how a deployment ends up on the rotated account, so it is refused.
+      * Any other account is a deployment's. A run that updates no consumer
+        there would revoke keys nobody told the deployment to stop using, so
+        it is refused too.
+
+    Exit code 2, not 1, so a caller can tell a refused configuration from a
+    failed operation."""
+    has_consumer = bool(env_file.strip()) or owui_sync_configured()
+    if account_slug == SHIM_ACCOUNT_SLUG and has_consumer:
+        print(
+            f"error: refusing to point a long-lived consumer at {SHIM_ACCOUNT_SLUG}, "
+            "the account the nightly OWUI job rotates on a schedule. That run "
+            "revokes this account's keys and cannot update your deployment, so "
+            "document RAG and text-to-speech would die there with no signal "
+            "(issue #560). Pass --account-slug <your-deployment> (and its own "
+            "--tenant-slug) instead, or drop --env-file and the OWUI_ADMIN_* "
+            "variables if you meant to rotate CI's key.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if account_slug != SHIM_ACCOUNT_SLUG and not has_consumer:
+        print(
+            f"error: refusing to rotate {account_slug}, a deployment account, "
+            "without updating anything that carries the key. Revoking here and "
+            "syncing nothing is exactly the outage in issue #560. Pass "
+            "--env-file <path to that deployment's compose .env>, and set "
+            "OWUI_BASE_URL with OWUI_ADMIN_TOKEN so Open WebUI's persisted "
+            "config is updated too.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -620,6 +687,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    # Before any credential is read and before the first request: a refused
+    # configuration must cost nothing, and in particular must not mint a key
+    # it then declines to finish wiring up.
+    assert_account_scope(args.account_slug, args.env_file)
     supabase_url = env("SUPABASE_URL").rstrip("/")
     service_key = env("SUPABASE_SERVICE_ROLE_KEY")
     headers = {
@@ -756,6 +827,14 @@ def main() -> None:
             rest, headers, "DELETE", "/api_keys",
             params={
                 "account_id": f"eq.{shim_account_id}",
+                # Only keys this script minted. A key put on this account by
+                # any other route (minted by hand for a deployment, say) is
+                # left alone: this run has no idea who carries it, and
+                # revoking a credential nobody told the holder about is the
+                # whole of issue #560. It stays active until an operator
+                # revokes it deliberately, which is the safer of the two
+                # wrong answers available here.
+                "nickname": f"eq.{SHIM_KEY_NICKNAME}",
                 "id": f"neq.{shim_key_id}",
                 "created_at": f"lt.{cutoff}",
             },

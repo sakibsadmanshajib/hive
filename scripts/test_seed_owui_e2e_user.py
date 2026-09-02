@@ -8,6 +8,7 @@ rotation from revoking a deployment's key. No framework, no network: mocks
 urllib.request.urlopen and exercises the functions directly.
 Run: python3 scripts/test_seed_owui_e2e_user.py
 """
+import ast
 import datetime
 import importlib.util
 import io
@@ -517,6 +518,156 @@ def test_sweep_is_a_no_op_without_a_run_key() -> None:
     print("ok: sweep is inert without a run key")
 
 
+# --- account scope: a seeding run may not touch a deployment's credential ---
+#
+# Issue #560. The account boundary above is the mechanism that keeps the
+# nightly rotation off a long-lived deployment's key, but until these guards it
+# was a convention stated in prose: nothing stopped a run from rotating the CI
+# account while a deployment carried a key on it, and nothing stopped a run
+# from revoking keys on a deployment account without updating that deployment.
+# Both are refused now, before anything is minted or revoked.
+
+def _scope_env(**overrides) -> dict:
+    """Snapshot and set the three OWUI admin variables the guard reads."""
+    saved = {k: os.environ.pop(k, None) for k in
+             ("OWUI_ADMIN_TOKEN", "OWUI_ADMIN_EMAIL", "OWUI_ADMIN_PASSWORD")}
+    for k, v in overrides.items():
+        os.environ[k] = v
+    return saved
+
+
+def _restore_scope_env(saved: dict) -> None:
+    for k, v in saved.items():
+        os.environ.pop(k, None)
+        if v is not None:
+            os.environ[k] = v
+
+
+def test_ci_account_refuses_a_long_lived_consumer() -> None:
+    """A deployment may not be put on the account CI rotates nightly. This is
+    the configuration that produced the outage: one account, rotated on a
+    schedule by a run that knows nothing about the deployment carrying it."""
+    saved = _scope_env()
+    try:
+        for env_file, sync in (("/tmp/.env", {}), ("", {"OWUI_ADMIN_TOKEN": "t"}),
+                               ("", {"OWUI_ADMIN_EMAIL": "a@b.c", "OWUI_ADMIN_PASSWORD": "pw"})):
+            _restore_scope_env(saved)
+            _scope_env(**sync)
+            err = io.StringIO()
+            stderr, sys.stderr = sys.stderr, err
+            try:
+                seed_owui_e2e_user.assert_account_scope("owui-e2e-shim", env_file)
+            except SystemExit as exc:
+                assert exc.code != 0, exc.code
+            else:
+                raise AssertionError(f"expected a refusal for env_file={env_file!r} sync={sync!r}")
+            finally:
+                sys.stderr = stderr
+            assert "--account-slug" in err.getvalue(), err.getvalue()
+    finally:
+        _restore_scope_env(saved)
+    print("ok: the CI rotation account refuses a long-lived consumer")
+
+
+def test_deployment_account_refuses_a_run_that_updates_nothing() -> None:
+    """The other half: revocation on a non-CI account is only ever allowed to
+    the run that also replaces the value every consumer carries."""
+    saved = _scope_env()
+    err = io.StringIO()
+    stderr, sys.stderr = sys.stderr, err
+    try:
+        seed_owui_e2e_user.assert_account_scope("hive-demo-owui-shim", "")
+    except SystemExit as exc:
+        assert exc.code != 0, exc.code
+    else:
+        raise AssertionError("expected a refusal")
+    finally:
+        sys.stderr = stderr
+        _restore_scope_env(saved)
+    assert "--env-file" in err.getvalue(), err.getvalue()
+    print("ok: a deployment account refuses a run with no consumer to update")
+
+
+def test_the_two_supported_shapes_are_allowed() -> None:
+    """CI's shape (the rotation account, no consumer) and a deployment's shape
+    (its own account, a consumer this run updates) both pass."""
+    saved = _scope_env()
+    try:
+        seed_owui_e2e_user.assert_account_scope("owui-e2e-shim", "")
+        seed_owui_e2e_user.assert_account_scope("hive-demo-owui-shim", "/tmp/.env")
+        _scope_env(OWUI_ADMIN_TOKEN="t")
+        seed_owui_e2e_user.assert_account_scope("hive-demo-owui-shim", "")
+    finally:
+        _restore_scope_env(saved)
+    print("ok: both supported shapes pass the scope guard")
+
+
+def test_scope_is_asserted_before_any_network_call() -> None:
+    """The guard is worth nothing if it runs after the mint. Drives main()
+    itself with a refused configuration and asserts nothing was requested."""
+    def explode(*args, **kwargs):
+        raise AssertionError("main() reached the network on a refused configuration")
+
+    saved = _scope_env()
+    argv, stderr = sys.argv, sys.stderr
+    original = patch_urlopen(explode)
+    saved_url = os.environ.get("SUPABASE_URL")
+    saved_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    os.environ["SUPABASE_URL"] = "http://supabase.invalid"
+    os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "service-role"
+    sys.argv = ["seed-owui-e2e-user.py", "--account-slug", "owui-e2e-shim", "--env-file", "/tmp/.env"]
+    sys.stderr = io.StringIO()
+    try:
+        seed_owui_e2e_user.main()
+    except SystemExit as exc:
+        assert exc.code != 0, exc.code
+    else:
+        raise AssertionError("expected main() to refuse")
+    finally:
+        restore_urlopen(original)
+        sys.argv, sys.stderr = argv, stderr
+        _restore_scope_env(saved)
+        for name, value in (("SUPABASE_URL", saved_url), ("SUPABASE_SERVICE_ROLE_KEY", saved_key)):
+            os.environ.pop(name, None)
+            if value is not None:
+                os.environ[name] = value
+    print("ok: the scope guard runs before anything is minted or revoked")
+
+
+def test_revocation_only_ever_targets_keys_this_script_minted() -> None:
+    """Third layer, and the one that survives a key minted by hand: the cleanup
+    filters on the nickname this script writes, so a foreign key sharing the
+    account is never revoked by a rotation that knows nothing about it."""
+    source = (Path(__file__).parent / "seed-owui-e2e-user.py").read_text()
+    tree = ast.parse(source)
+    deletes = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name) and node.func.id == "request"
+        and any(isinstance(a, ast.Constant) and a.value == "DELETE" for a in node.args)
+        and any(isinstance(a, ast.Constant) and a.value == "/api_keys" for a in node.args)
+    ]
+    assert len(deletes) == 1, f"expected exactly one api_keys deletion, found {len(deletes)}"
+    params = next((kw.value for kw in deletes[0].keywords if kw.arg == "params"), None)
+    assert params is not None, "the api_keys deletion passes no params at all"
+    keys = {k.value for k in params.keys if isinstance(k, ast.Constant)}
+    assert "nickname" in keys, f"the deletion is not filtered by nickname: {sorted(keys)}"
+    assert "account_id" in keys, f"the deletion is not filtered by account: {sorted(keys)}"
+    print("ok: key revocation is filtered to this script's own nickname")
+
+
+def test_the_nightly_workflow_still_names_the_ci_account() -> None:
+    """A static guard on the caller, not the callee. The nightly is the run that
+    rotates on a schedule; pointing it at a deployment account is the edit that
+    reopens issue #560, and the guard above would only catch it if that run also
+    configured a consumer, which a GitHub runner never does."""
+    workflow = (Path(__file__).parent.parent / ".github/workflows/owui-nightly.yml").read_text()
+    assert "seed-owui-e2e-user.py --account-slug owui-e2e-shim" in workflow, (
+        "the nightly no longer passes the reserved CI account slug explicitly"
+    )
+    print("ok: the nightly rotates the reserved CI account and nothing else")
+
+
 def main() -> None:
     os.environ["OWUI_ADMIN_EMAIL"] = "admin@example.com"
     os.environ["OWUI_ADMIN_PASSWORD"] = "pw"
@@ -544,6 +695,12 @@ def main() -> None:
     test_stale_key_cutoff_is_backdated_not_now()
     test_sweep_only_deletes_stale_run_scoped_fixture_users()
     test_sweep_is_a_no_op_without_a_run_key()
+    test_ci_account_refuses_a_long_lived_consumer()
+    test_deployment_account_refuses_a_run_that_updates_nothing()
+    test_the_two_supported_shapes_are_allowed()
+    test_scope_is_asserted_before_any_network_call()
+    test_revocation_only_ever_targets_keys_this_script_minted()
+    test_the_nightly_workflow_still_names_the_ci_account()
 
     del os.environ["OWUI_ADMIN_EMAIL"]
     del os.environ["OWUI_ADMIN_PASSWORD"]

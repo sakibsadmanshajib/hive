@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	edgecatalog "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/catalog"
@@ -1431,4 +1434,131 @@ func TestParseRAGMaxUploadBytes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- the machine-readable half of the probe (issue #560) -------------------
+//
+// The log line above is the human-readable verdict, and on its own it is a
+// check nobody reads: it is one line in a container log on a box nobody tails,
+// so a revocation at 03:00 is still discovered by a customer. These cover the
+// series an alert can fire on, and the alert rule that reads it. Both halves
+// are asserted, because a metric no rule consumes is the same silence wearing
+// a nicer hat (issue #1728).
+
+const owuiShimKeyUsableSeries = "hive_owui_shim_key_usable"
+
+func TestOWUIShimKeyGaugeGoesToZeroOnADeadKey(t *testing.T) {
+	captureLog(t)
+	reg := prometheus.NewRegistry()
+	registerOWUIShimKeyMetric(reg, testOWUIShimKey)
+	if got := testutil.ToFloat64(owuiShimKeyUsable); got != 1 {
+		t.Fatalf("a freshly registered gauge must read usable until the first probe says otherwise, got %v", got)
+	}
+
+	resolver := &stubShimKeyResolver{err: errors.New("authz: resolve status 404: not found")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		watchOWUIShimKey(ctx, resolver, testOWUIShimKey, time.Hour)
+		close(done)
+	}()
+	waitFor(t, func() bool { return testutil.ToFloat64(owuiShimKeyUsable) == 0 })
+	cancel()
+	<-done
+
+	// Through a real Gather, not the collector: a value that never reaches
+	// /metrics is not a signal Prometheus can alert on.
+	if got := gaugeFromRegistry(t, reg, owuiShimKeyUsableSeries); got != 0 {
+		t.Fatalf("%s scraped %v, want 0 for a key that does not resolve", owuiShimKeyUsableSeries, got)
+	}
+}
+
+func TestOWUIShimKeyGaugeHoldsThroughATransientProbeFailure(t *testing.T) {
+	captureLog(t)
+	reg := prometheus.NewRegistry()
+	registerOWUIShimKeyMetric(reg, testOWUIShimKey)
+
+	// A control-plane that cannot be reached is not a verdict on the key, and
+	// paging an operator to rotate a working credential over a cold container
+	// is the false alarm that gets an alert muted (it nearly happened live on
+	// 2026-08-14). The gauge holds its last real value instead.
+	resolver := &stubShimKeyResolver{
+		err:  fmt.Errorf("authz: fetch: %w: %w", authz.ErrUpstreamUnavailable, context.DeadlineExceeded),
+		seen: make(chan struct{}, 1),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		watchOWUIShimKey(ctx, resolver, testOWUIShimKey, time.Millisecond)
+		close(done)
+	}()
+	waitFor(t, func() bool { return resolver.calls.Load() >= 3 })
+	if got := gaugeFromRegistry(t, reg, owuiShimKeyUsableSeries); got != 1 {
+		t.Fatalf("%s = %v after transient probe failures, want it held at 1", owuiShimKeyUsableSeries, got)
+	}
+
+	// And a genuinely dead key after the transient window still lands.
+	resolver.set(authz.AuthSnapshot{}, errors.New("authz: resolve status 404: not found"))
+	waitFor(t, func() bool { return gaugeFromRegistry(t, reg, owuiShimKeyUsableSeries) == 0 })
+
+	// Recovery clears it, so the alert resolves rather than needing a restart.
+	resolver.set(authz.AuthSnapshot{Status: "active", AllowAllModels: true, TenantID: uuid.New().String()}, nil)
+	waitFor(t, func() bool { return gaugeFromRegistry(t, reg, owuiShimKeyUsableSeries) == 1 })
+	cancel()
+	<-done
+}
+
+func TestOWUIShimKeyGaugeIsAbsentWithoutAShimKey(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	registerOWUIShimKeyMetric(reg, "   ")
+
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() == owuiShimKeyUsableSeries {
+			t.Fatalf("a deployment with no Open WebUI front-end must export no %s series at all, "+
+				"or absent() cannot tell 'not measured' from 'measured and fine'", owuiShimKeyUsableSeries)
+		}
+	}
+}
+
+// TestOWUIShimKeyGaugeIsReadByAnAlertRule is the half that makes the metric
+// worth exporting. deploy/prometheus/alerts.yml is mounted into the box's
+// Prometheus and every alert name in it is verified present in /api/v1/rules by
+// the deploy workflow, so a rule here is a rule that reaches the ops mailbox
+// through Alertmanager.
+func TestOWUIShimKeyGaugeIsReadByAnAlertRule(t *testing.T) {
+	const path = "../../../../deploy/prometheus/alerts.yml"
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.Contains(string(raw), owuiShimKeyUsableSeries) {
+		t.Fatalf("%s exports %s and no alert rule reads it; an unread metric is the same "+
+			"silent outage this probe exists to end", path, owuiShimKeyUsableSeries)
+	}
+}
+
+// gaugeFromRegistry reads one gauge series out of a real Gather.
+func gaugeFromRegistry(t *testing.T, reg *prometheus.Registry, name string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, f := range families {
+		if f.GetName() != name {
+			continue
+		}
+		if len(f.GetMetric()) != 1 {
+			t.Fatalf("%s exported %d series, want 1", name, len(f.GetMetric()))
+		}
+		return f.GetMetric()[0].GetGauge().GetValue()
+	}
+	t.Fatalf("series %s was not exported by the registry", name)
+	return 0
 }
