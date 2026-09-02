@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sessionbilling/billingtest"
 )
 
@@ -364,6 +366,61 @@ func TestEnterprisePostureServesWebToolsUnbilled(t *testing.T) {
 	}
 	if holds, released := acct.Counts(); holds != 0 || released != 0 {
 		t.Errorf("holds = %d, released = %d on an Enterprise tenant, want 0 and 0", holds, released)
+	}
+}
+
+// A tenant on the hosted deployment with no billing account is told exactly
+// that, with its own code and a 403, rather than being collapsed into the
+// generic "billing is down" 503 that tells an SDK to retry something that can
+// never succeed. This is also what pins the reason strings this package reads
+// off a sessionbilling refusal: rename one and this goes red.
+func TestWebToolRefusesWhenTheWorkspaceHasNoBillingAccount(t *testing.T) {
+	acct := &billingtest.Accounting{}
+	search := &stubSearcher{hits: okHits()}
+	deps := Deps{
+		Search: search,
+		Billing: &Billing{
+			Accounting: acct.Client(t),
+			Resolver: billingtest.Resolver{State: metering.TenantBillingState{
+				AccountID: uuid.Nil, Found: false, Deployment: metering.DeploymentHiveCloud,
+			}},
+			Pricer: catalogPricer(),
+		},
+	}
+	h := newTestHandler(t, deps)
+
+	rr := post(t, h, "/v1/tools/web_search", "turn-1", map[string]any{"query": "who won"})
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403, body = %s", rr.Code, rr.Body)
+	}
+	if env := decodeEnvelope(t, rr); env["code"] != CodeBillingNotConfigured {
+		t.Errorf("code = %v, want %q", env["code"], CodeBillingNotConfigured)
+	}
+	if search.calls != 0 {
+		t.Errorf("backend called %d times for a workspace with no billing account, want 0", search.calls)
+	}
+	if holds, _ := acct.Counts(); holds != 0 {
+		t.Errorf("took %d holds for a workspace with no billing account, want 0", holds)
+	}
+}
+
+// The charge is settled AFTER the response is written, so a slow control-plane
+// cannot add its settlement latency to a tool result that is already finished.
+// Asserted by holding the accounting fake open until the recorder has a body.
+func TestWebToolSettlesAfterTheResponseIsWritten(t *testing.T) {
+	acct := &billingtest.Accounting{}
+	deps := billableDeps(t, acct, catalogPricer())
+	deps.Search = &stubSearcher{hits: okHits()}
+	h := newTestHandler(t, deps)
+
+	rr := post(t, h, "/v1/tools/web_search", "turn-1", map[string]any{"query": "who won"})
+	if rr.Code != http.StatusOK || rr.Body.Len() == 0 {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body)
+	}
+	// The deferred settle has run by the time ServeHTTP returns, which is what
+	// keeps the charge from being lost, while still following the write.
+	if charges := acct.Finalized(); len(charges) != 1 {
+		t.Fatalf("charges settled = %d, want 1", len(charges))
 	}
 }
 

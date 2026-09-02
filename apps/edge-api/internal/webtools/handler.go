@@ -241,21 +241,25 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Settled exactly once, after the response has been written. Charged unless
+	// an exit path below refuses; see toolCharge.settle for why that is the
+	// safe default here.
+	defer charge.settle()
 
 	hits, dropped, err := h.search.Search(r.Context(), query, count)
 	if err != nil {
 		// Logged with the real cause, answered without it. Not charged: an
 		// errored search is not a delivered one.
-		charge.refund("search_failed")
+		charge.refuse("search_failed")
 		log.Printf("webtools: web_search failed: %v", err)
 		writeEnvelope(w, http.StatusBadGateway, NewError(CodeSearchUnavailable, msgSearchDown, dropped))
 		return
 	}
 	if len(hits) == 0 {
-		// Charged. The query reached SearXNG and consumed exactly what SearXNG
-		// costs, which is one query; results are what it returns, not what it
-		// bills for. This is a delivered call that found nothing, not a failure.
-		charge.commit()
+		// Charged, by falling through to the deferred settle. The query reached
+		// SearXNG and consumed exactly what SearXNG costs, which is one query;
+		// results are what it returns, not what it bills for. This is a
+		// delivered call that found nothing, not a failure.
 		writeEnvelope(w, http.StatusOK, EmptySearchResult(query, dropped))
 		return
 	}
@@ -265,12 +269,11 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		// The constructor refused what the backend produced. That is a bug
 		// in the backend adapter, and it is reported as a failure rather
 		// than papered over with a shorter list.
-		charge.refund("envelope_refused")
+		charge.refuse("envelope_refused")
 		log.Printf("webtools: web_search envelope refused: %v", err)
 		writeEnvelope(w, http.StatusBadGateway, NewError(CodeSearchUnavailable, msgSearchDown, dropped+len(hits)))
 		return
 	}
-	charge.commit()
 	writeEnvelope(w, http.StatusOK, envelope)
 }
 
@@ -344,12 +347,13 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	defer charge.settle()
 
 	result, err := h.fetch.Fetch(r.Context(), admitted.String(), focus)
 	if err != nil {
 		// Logged with the real cause, answered without it. Not charged: a
 		// page that could not be read is not a delivered fetch.
-		charge.refund("fetch_failed")
+		charge.refuse("fetch_failed")
 		log.Printf("webtools: web_fetch failed: %v", err)
 		code := fetchCode(err)
 		writeEnvelope(w, fetchStatus(code), NewError(code, fetchMessage(code, err), 0))
@@ -367,13 +371,12 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 	// pipeline is written in a later slice by someone who will reasonably
 	// assume the envelope cannot lie, so the check belongs on this side.
 	if result.Status != StatusOK || len(result.Parts) == 0 {
-		charge.refund("nonconforming_envelope")
+		charge.refuse("nonconforming_envelope")
 		log.Printf("webtools: web_fetch pipeline returned a non-conforming envelope (status=%q parts=%d)",
 			result.Status, len(result.Parts))
 		writeEnvelope(w, http.StatusBadGateway, NewError(CodeExtractEmpty, msgFetchFailed, result.Dropped))
 		return
 	}
-	charge.commit()
 	writeEnvelope(w, http.StatusOK, result)
 }
 

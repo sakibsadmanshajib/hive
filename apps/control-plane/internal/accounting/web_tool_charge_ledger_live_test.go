@@ -188,3 +188,42 @@ func TestWebToolCallChargeMovesTheLedger_Live(t *testing.T) {
 			charges["hive-web-fetch"], charges["hive-web-search"])
 	}
 }
+
+// The two price carriers must not be invokable as models, and that has to hold
+// against the DATABASE rather than against an argument.
+//
+// It matters because public.model_aliases is read unfiltered in one place that
+// widens an authorization list: apikeys.Service.ResolveSnapshot expands an
+// AllowAllModels key into every alias_id in the table, visibility included. So
+// these two rows do land in such a key's allowed_aliases. They are inert there,
+// and this test is what says so rather than assuming it: routing.SelectRoute
+// refuses them twice over, once on entitlement (catalog.AliasVisibleToTenant
+// returns false for any class that is not public, preview or an explicitly
+// granted restricted row) and once on candidates (there are none), and either
+// refusal alone is sufficient.
+func TestWebToolAliasesCannotBeInvokedAsModels_Live(t *testing.T) {
+	pool := newAccountingTestPool(t)
+	ctx := context.Background()
+
+	for _, alias := range []string{"hive-web-search", "hive-web-fetch"} {
+		var visibility string
+		if err := pool.QueryRow(ctx,
+			`SELECT visibility FROM public.model_aliases WHERE alias_id = $1`, alias,
+		).Scan(&visibility); err != nil {
+			t.Fatalf("%s: reading visibility: %v", alias, err)
+		}
+		if visibility != "internal" {
+			t.Errorf("%s: visibility = %q, want internal so no tenant is ever entitled to it", alias, visibility)
+		}
+
+		var routes int
+		if err := pool.QueryRow(ctx,
+			`SELECT count(*) FROM public.provider_routes WHERE alias_id = $1`, alias,
+		).Scan(&routes); err != nil {
+			t.Fatalf("%s: counting routes: %v", alias, err)
+		}
+		if routes != 0 {
+			t.Errorf("%s: has %d provider_routes rows, want 0: a price carrier dispatches to nothing", alias, routes)
+		}
+	}
+}

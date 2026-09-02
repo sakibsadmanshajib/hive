@@ -140,12 +140,19 @@ func (p *CatalogPricer) AliasPrice(ctx context.Context, aliasID string) (AliasPr
 	}, nil
 }
 
-// aliasForTool maps a tool name to the catalog row that prices it.
-func aliasForTool(tool string) string {
-	if tool == ToolWebFetch {
-		return AliasWebFetch
+// aliasForTool maps a tool name to the catalog row that prices it. An unknown
+// tool has no alias and no price, and it says so rather than falling back to
+// one of the two: a silent fallback would charge a future third tool at
+// whichever price happened to be the default.
+func aliasForTool(tool string) (string, bool) {
+	switch tool {
+	case ToolWebSearch:
+		return AliasWebSearch, true
+	case ToolWebFetch:
+		return AliasWebFetch, true
+	default:
+		return "", false
 	}
-	return AliasWebSearch
 }
 
 // creditsForCall converts one call into whole credits at the catalog rate, or
@@ -186,29 +193,51 @@ func creditsForCall(price AliasPrice) (int64, bool) {
 type toolCharge struct {
 	settlement *sessionbilling.Settlement
 	credits    int64
-	tool       string
+	// refundReason, when set, makes settle hand the hold back instead of
+	// charging it. Empty means the call was delivered.
+	refundReason string
 }
 
-// commit charges the call. A charge that cannot land hands the hold back
-// instead, so the reservation is terminal exactly once either way (#616).
-func (c *toolCharge) commit() {
+// refuse records that this call must not be charged. It talks to nobody: the
+// single terminal call is settle, so a path that refuses and then also settles
+// cannot produce two.
+func (c *toolCharge) refuse(reason string) {
+	if c == nil {
+		return
+	}
+	c.refundReason = reason
+}
+
+// settle ends the reservation, exactly once, charged or released (#616).
+//
+// DEFERRED by both handlers, so it runs after the response has been written.
+// That ordering is deliberate and matches every other settling surface in this
+// repo: a settlement is a control-plane round trip with a 30 second timeout and
+// one retry behind it, and running it before the write would put up to a minute
+// of accounting latency in front of a tool result that is already finished. It
+// costs nothing to defer, because every settlement call runs on its own fresh
+// background context and so is untouched by the request ending.
+//
+// Charging is the DEFAULT and refusing is the exception, which is the safe
+// direction here specifically because the hold is taken immediately before the
+// backend call: every exit path below it is post-backend, so an exit added
+// later without a refuse is a call that really did run. The opposite default
+// would make a forgotten call site strand a hold, which locks a customer's
+// credits until someone intervenes by hand (#616, #626).
+func (c *toolCharge) settle() {
 	if c == nil || c.settlement == nil {
+		return
+	}
+	if c.refundReason != "" {
+		c.settlement.Release(c.refundReason)
 		return
 	}
 	// Zero tokens on every component: this is a per-call charge and the row
-	// should say so rather than imply a token count nobody metered.
-	// Confirmed, because one call is measured truth rather than an estimate.
+	// should say so rather than imply a token count nobody metered. Confirmed,
+	// because one call is measured truth rather than an estimate.
 	if !c.settlement.Finalize(c.credits, true, 0, 0, 0, 0) {
 		c.settlement.Release("finalize_failed")
 	}
-}
-
-// refund hands the whole hold back for a call that was never delivered.
-func (c *toolCharge) refund(reason string) {
-	if c == nil || c.settlement == nil {
-		return
-	}
-	c.settlement.Release(reason)
 }
 
 // beginCharge prices this call from the catalog and takes the hold, or writes
@@ -227,7 +256,16 @@ func (h *Handler) beginCharge(ctx context.Context, w http.ResponseWriter, user *
 		return nil, false
 	}
 
-	alias := aliasForTool(tool)
+	alias, known := aliasForTool(tool)
+	if !known {
+		slog.Error("web tool has no catalog alias to price it, refusing call", "tool", tool)
+		writeEnvelope(w, http.StatusServiceUnavailable, NewError(CodeBillingUnavailable, msgBillingUnavailable, 0))
+		return nil, false
+	}
+	// ponytail: one catalog lookup per call, uncached. A tool call already
+	// makes an outbound HTTP request of its own and is capped at
+	// TenantCallsPerMinute, so this is noise beside it. Cache it behind a short
+	// TTL if the alias-price endpoint ever shows up in control-plane's load.
 	price, err := h.billing.Pricer.AliasPrice(ctx, alias)
 	if err != nil {
 		// The price is unknown, not known-absent. Serving anyway is how free
@@ -262,7 +300,7 @@ func (h *Handler) beginCharge(ctx context.Context, w http.ResponseWriter, user *
 	// A nil settlement with no refusal is the Enterprise posture: no prepaid
 	// relationship, so the call is served unheld and unbilled by decision
 	// (D-027), not by omission.
-	return &toolCharge{settlement: settlement, credits: credits, tool: tool}, true
+	return &toolCharge{settlement: settlement, credits: credits}, true
 }
 
 // writeBillingRefusal renders a sessionbilling verdict in this surface's own
