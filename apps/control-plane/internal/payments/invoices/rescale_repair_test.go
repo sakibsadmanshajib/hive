@@ -448,3 +448,48 @@ func TestWithinLedgerTolerance(t *testing.T) {
 		})
 	}
 }
+
+// TestRepairPreRescaleInvoices_RefusesARowWithNoRate holds the boundary between
+// the two passes. This one writes no rate, so a row that carries none has
+// nothing to denominate its corrected taka at: converting at a freshly resolved
+// rate would store taka the write then cannot explain, in a row the unconverted
+// pass still selects as holding credits. Refused rather than resolved.
+func TestRepairPreRescaleInvoices_RefusesARowWithNoRate(t *testing.T) {
+	t.Parallel()
+
+	repo := newFakeRepo()
+	repo.rescaleAppliedAt = testRescaleBoundary
+	storage := newFakeStorage()
+
+	ws := uuid.New()
+	seeded := seedRepairedInvoice(t, repo, ws, julyPeriod(), preRescaleStoredCredits, 1)
+	rateless := seeded
+	rateless.USDBDTRate = ""
+	rateless.USDBDTRateSource = ""
+	repo.byID[seeded.ID] = rateless
+	repo.byWorkspaceMonth[wsMonthKey(rateless.WorkspaceID, rateless.PeriodStart)] = rateless
+	repo.seedLedger(ws, julyPeriod().Start, preRescaleLedgerCredits)
+
+	svc := NewService(repo, storage, &stubPDF{}, &fakeAccess{}, &fakeNamer{}, nil)
+	repaired, err := svc.RepairPreRescaleInvoices(context.Background())
+	if err != nil {
+		t.Fatalf("pass reported an error for one refused row: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("repaired %d rate-less rows, want 0", repaired)
+	}
+
+	got, err := repo.GetByID(context.Background(), seeded.ID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got.TotalCredits.Cmp(big.NewInt(preRescaleStoredCredits)) != 0 {
+		t.Fatalf("a rate-less row was rewritten to %s credits", got.TotalCredits)
+	}
+	if got.TotalBDTSubunits.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("a rate-less row's taka moved to %s", got.TotalBDTSubunits)
+	}
+	if repo.rescaleUpdates != 0 || len(storage.uploads) != 0 {
+		t.Fatalf("wrote %d rows and %d PDFs for a refused row", repo.rescaleUpdates, len(storage.uploads))
+	}
+}

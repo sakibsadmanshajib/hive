@@ -433,13 +433,18 @@ func (r *pgxRepository) CreditRescaleAppliedAt(ctx context.Context) (time.Time, 
 //
 // This is a bounded historical set, not a growing one: the rescale happened
 // once, in the past, so no invoice generated from here on can enter it.
+//
+// period_end is a date and the boundary is a timestamptz, so the comparison is
+// pinned to UTC rather than left to promote at whatever the session TimeZone
+// happens to be. Every period in this table starts and ends at UTC midnight,
+// which is what the cron writes, so this is the comparison the data means.
 func (r *pgxRepository) ListPreRescale(ctx context.Context, appliedAt time.Time, limit int) ([]Invoice, error) {
 	sql := `
 		SELECT id, workspace_id, period_start, period_end,
 		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
 		       usd_bdt_rate::text, total_credits, usd_bdt_rate_source
 		FROM public.invoices
-		WHERE period_end <= $1
+		WHERE (period_end::timestamp AT TIME ZONE 'UTC') <= $1
 		  AND total_credits IS NOT NULL
 		ORDER BY period_start ASC, id ASC`
 	args := []any{appliedAt}

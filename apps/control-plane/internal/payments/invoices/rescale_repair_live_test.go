@@ -245,6 +245,14 @@ type liveJulyRow struct {
 // It exists because the numbers, not the shape, are what went wrong: the
 // generic fixtures above would still pass if the rescale factor were off, and
 // these will not.
+//
+// The single line item per row is the live shape, not a convenience.
+// convertLines rounds per line and then sums, so a row carrying several model
+// buckets can land a paisa or two away from the figure a single-bucket
+// conversion gives, and a replay with the wrong shape would assert the wrong
+// total. Checked against the box on 2026-09-02: all three rows carry exactly
+// one line item, bucketed under `unknown`, because the generator that wrote
+// them had no model metadata to group by.
 func TestRepairPreRescaleInvoices_ReplaysTheThreeLiveRows_Live(t *testing.T) {
 	pool := newInvoicesTestPool(t)
 	repo := NewPgxRepository(pool)

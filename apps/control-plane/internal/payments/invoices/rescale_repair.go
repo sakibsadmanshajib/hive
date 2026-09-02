@@ -192,12 +192,19 @@ func (s *Service) repairPreRescaleOne(ctx context.Context, inv Invoice) error {
 		return errRowAlreadyAtLedgerScale
 	}
 
-	// The rate already on the row, not a fresh resolution. This pass corrects a
-	// quantity, and re-denominating a closed period at whatever rate resolves
-	// today would be a second, unasked-for change to stored money.
-	rate, err := s.rateOnRow(ctx, inv)
+	// The rate already on the row, and only that. This pass corrects a quantity
+	// and writes no rate, so a row that carries none has nothing to denominate
+	// its corrected taka at: resolving one here would convert at a rate the
+	// write then discards, leaving taka in a row that pass one still selects as
+	// holding credits. Refused rather than resolved, so that outcome is
+	// unreachable by construction instead of by ListPreRescale's separate
+	// `total_credits IS NOT NULL` predicate happening to exclude it.
+	if inv.USDBDTRate == "" {
+		return fmt.Errorf("invoices: row %s carries no rate, so its corrected taka has nothing to convert at; the unconverted pass owns it", inv.ID)
+	}
+	rate, err := payments.ParseUSDBDTRate(inv.USDBDTRate, inv.USDBDTRateSource)
 	if err != nil {
-		return err
+		return fmt.Errorf("invoices: row %s carries an unusable rate: %w", inv.ID, err)
 	}
 
 	items, total, totalCredits, err := convertLines(repairedLines(inv, factor), rate.Rate)
@@ -251,19 +258,6 @@ func (s *Service) repairPreRescaleOne(ctx context.Context, inv Invoice) error {
 		"rate", rate.Display,
 	)
 	return nil
-}
-
-// rateOnRow returns the rate a stored row was denominated at, resolving one
-// only for a row that carries none.
-func (s *Service) rateOnRow(ctx context.Context, inv Invoice) (payments.USDBDTRate, error) {
-	if inv.USDBDTRate == "" {
-		return s.resolveRate(ctx, inv.WorkspaceID, Period{Start: inv.PeriodStart, End: inv.PeriodEnd})
-	}
-	rate, err := payments.ParseUSDBDTRate(inv.USDBDTRate, inv.USDBDTRateSource)
-	if err != nil {
-		return payments.USDBDTRate{}, fmt.Errorf("invoices: row %s carries an unusable rate: %w", inv.ID, err)
-	}
-	return rate, nil
 }
 
 // repairedLines reads the credit quantities off an already-converted row and
