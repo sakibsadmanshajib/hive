@@ -262,10 +262,31 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
   const bootstrapPage = await bootstrapContext.newPage();
   await bootstrapPage.goto(OWUI_URL);
   await signInWithHive(bootstrapPage, bootstrapEmail, bootstrapPassword, owuiOrigin);
+  // Either outcome, because on a FRESH instance this account is deliberately
+  // stuck at the activation screen and cannot reach chat at all.
+  //
+  // utils/oauth.py's get_user_role returns DEFAULT_USER_ROLE early when
+  // `user_count == 0`, above the point where
+  // deploy/docker/owui-patches/tenant_role_from_db.py splices Hive's own
+  // membership lookup in, and issue #748 deleted the post-insert promotion that
+  // upstream used to repair the first account with. On this deployment
+  // DEFAULT_USER_ROLE is "pending", so the very first account ever seen by a
+  // container gets "Account Activation Pending" no matter what tenant
+  // membership it holds. That is the intended posture for an instance shared by
+  // every tenant: nothing self-promotes.
+  //
+  // Which outcome appears therefore depends only on whether the container's
+  // volume is fresh, which is not something this fixture controls and not
+  // something it is testing. What it IS testing is unchanged and asserted by
+  // both arms: a full OAuth round trip completed, and the instance now holds an
+  // account that is not the fixture user. Demanding chat here made this step
+  // fail on every freshly created container, which is every CI run
+  // (run 33673391630).
   await expect(
     bootstrapPage
       .getByRole("button", { name: /new chat/i })
       .or(bootstrapPage.getByRole("link", { name: /new chat/i }))
+      .or(bootstrapPage.getByText(/activation pending/i))
       .first(),
   ).toBeVisible({ timeout: 60_000 });
   await bootstrapContext.close();

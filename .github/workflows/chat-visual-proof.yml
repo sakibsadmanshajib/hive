@@ -831,11 +831,25 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: chat-visual-proof-logs-${{ github.run_id }}
+          # Traces, videos and index.html are excluded, and this repository is
+          # public, so anyone with a run URL can download what is left. The
+          # setup project walks a full OAuth journey: a trace holds every
+          # request header, every sb-*-auth-token cookie, and the callback URL
+          # whose query string carries code=. index.html carries the same
+          # material by another route, because the HTML reporter base64-inlines
+          # the whole payload into it, and a waitForURL timeout enumerates every
+          # URL it navigated. Neither is inspectable by a text linter. The
+          # failure screenshots and the error text remain, which is what a
+          # reader actually needs. Same exclusion list, and the same reasoning,
+          # as owui-nightly.yml.
           path: |
             /tmp/compose.log
             /tmp/console-redacted.log
             /tmp/gotrue.log
             apps/web-console/playwright-report-owui
+            !apps/web-console/playwright-report-owui/**/*.zip
+            !apps/web-console/playwright-report-owui/**/*.webm
+            !apps/web-console/playwright-report-owui/index.html
           if-no-files-found: ignore
           retention-days: 5
 
