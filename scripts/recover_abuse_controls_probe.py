@@ -9,6 +9,13 @@ after the fix a refusal on /auth/v1/recover is indistinguishable from a send,
 because a distinguishable one would tell an attacker which addresses hold
 accounts. What is left to measure is whether the message actually went out, and
 MailHog answers that.
+
+"Indistinguishable" is compared as status, body AND the full response header
+list, not status and body. The first version of this file compared only status
+and body, and reported 14 green on a config whose two answers still differed in
+`Vary`, `Server` and the `Via` hop count -- the same oracle at the same cost as
+the status code it had just closed. A guard that cannot see the property it
+guards is worse than no guard, because it also stops anyone else looking.
 """
 
 from __future__ import annotations
@@ -63,7 +70,13 @@ def service_role_jwt() -> str:
     return f"{header}.{payload}.{b64(sig)}"
 
 
-def post(url: str, body: dict, headers: dict) -> tuple[int, str]:
+def post(url: str, body: dict, headers: dict) -> tuple[int, list[tuple[str, str]], str]:
+    """Returns the response headers as a LIST, not a dict.
+
+    A dict silently collapses repeated headers, and `Via` is repeated once per
+    proxy hop: the difference between a proxied answer and a synthesized one is
+    exactly one `Via`, so a dict here would hide half of what this file checks.
+    """
     req = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
@@ -72,9 +85,25 @@ def post(url: str, body: dict, headers: dict) -> tuple[int, str]:
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return resp.status, resp.read().decode()
+            return resp.status, list(resp.headers.items()), resp.read().decode()
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read().decode()
+        return exc.code, list(exc.headers.items()), exc.read().decode()
+
+
+def answer(response: tuple[int, list[tuple[str, str]], str]) -> tuple:
+    """Everything about a response a caller can see, minus what legitimately
+    varies per request. Date is the only such header here: Content-Length stays
+    in, because two answers of different lengths are two distinguishable
+    answers."""
+    status, headers, body = response
+    seen = sorted((k.lower(), v) for k, v in headers if k.lower() != "date")
+    return (status, tuple(seen), body.strip())
+
+
+def describe(response: tuple[int, list[tuple[str, str]], str]) -> str:
+    status, headers, body = response
+    names = ", ".join(sorted(k.lower() for k, _ in headers if k.lower() != "date"))
+    return f"{status} {body.strip()!r} [{names}]"
 
 
 def get_json(url: str) -> dict:
@@ -82,7 +111,7 @@ def get_json(url: str) -> dict:
         return json.loads(resp.read().decode())
 
 
-def recover_via_console(email: str, client_ip: str | None) -> tuple[int, str]:
+def recover_via_console(email: str, client_ip: str | None) -> tuple[int, list[tuple[str, str]], str]:
     """POST /auth/v1/recover the way a browser does, through both Caddies.
 
     client_ip is what Cloudflare would have reported. None omits the header,
@@ -95,7 +124,7 @@ def recover_via_console(email: str, client_ip: str | None) -> tuple[int, str]:
     return post(f"{CONSOLE_URL}/auth/v1/recover", {"email": email}, headers)
 
 
-def recover_direct(email: str, forwarded_for: str) -> tuple[int, str]:
+def recover_direct(email: str, forwarded_for: str) -> tuple[int, list[tuple[str, str]], str]:
     """Same request against GoTrue itself, past the gateway.
 
     This is the only way to see what GoTrue actually answered, since the
@@ -105,7 +134,7 @@ def recover_direct(email: str, forwarded_for: str) -> tuple[int, str]:
 
 
 def create_user(email: str) -> None:
-    status, body = post(
+    status, _, body = post(
         f"{GOTRUE_URL}/admin/users",
         {"email": email, "password": "harness-password-1744", "email_confirm": True},
         {"Authorization": "Bearer " + service_role_jwt()},
@@ -136,24 +165,34 @@ def main() -> int:
         create_user(email)
 
     print("\n1. the 200-either-way property, which both changes have to preserve")
-    status, body = recover_via_console("nobody-at-all@example.test", "203.0.113.1")
-    known_before = (status, body.strip())
-    check(status == 200 and body.strip() == "{}", f"unknown address answers 200 {{}} (got {status} {body.strip()!r})")
-
-    status, body = recover_via_console(users[0], "203.0.113.2")
+    unknown = recover_via_console("nobody-at-all@example.test", "203.0.113.1")
+    known_before = answer(unknown)
     check(
-        (status, body.strip()) == known_before,
-        f"a real address answers identically (got {status} {body.strip()!r})",
+        unknown[0] == 200 and unknown[2].strip() == "{}",
+        f"unknown address answers 200 {{}} (got {describe(unknown)})",
+    )
+
+    real = recover_via_console(users[0], "203.0.113.2")
+    check(
+        answer(real) == known_before,
+        f"a real address answers identically, headers included (got {describe(real)})",
     )
     settle()
     check(mail_count(users[0]) == 1, "and the real address was actually mailed")
+    # The gateway restates GoTrue's CORS headers on this route because it
+    # synthesizes the response rather than proxying it. Two of them would be
+    # worse than none: a browser rejects a duplicated
+    # Access-Control-Allow-Origin exactly as hard as a missing one, and the
+    # structural check in test_caddy_supabase_routes.py can only read text.
+    acao = [v for k, v in unknown[1] if k.lower() == "access-control-allow-origin"]
+    check(acao == ["*"], f"exactly one Access-Control-Allow-Origin reaches the caller (got {acao})")
 
     print("\n2. the per-address cap holds across source addresses")
     for ip in ("203.0.113.3", "203.0.113.4", "203.0.113.5"):
-        status, body = recover_via_console(users[0], ip)
+        throttled = recover_via_console(users[0], ip)
         check(
-            (status, body.strip()) == known_before,
-            f"a throttled address answers identically from {ip} (got {status} {body.strip()!r})",
+            answer(throttled) == known_before,
+            f"a throttled address answers identically from {ip} (got {describe(throttled)})",
         )
     settle()
     check(
@@ -165,21 +204,32 @@ def main() -> int:
     noisy, quiet = "198.51.100.10", "198.51.100.20"
     for _ in range(BURST + 1):
         recover_via_console(users[1], noisy)
-    status, body = recover_via_console(users[2], quiet)
+    served = recover_via_console(users[2], quiet)
     check(
-        (status, body.strip()) == known_before,
-        f"a second caller is still served after the first burned {BURST + 1} requests (got {status})",
+        answer(served) == known_before,
+        f"a second caller is still served after the first burned {BURST + 1} requests "
+        f"(got {describe(served)})",
     )
     settle()
     check(mail_count(users[2]) == 1, "and that second caller's mail was actually sent")
 
     print("\n4. the first caller really was refused, and the gateway really hides it")
-    status, _ = recover_direct(users[3], noisy)
-    check(status == 429, f"GoTrue itself refuses the exhausted caller (got {status})")
-    status, body = recover_via_console(users[3], noisy)
+    raw = recover_direct(users[3], noisy)
+    check(raw[0] == 429, f"GoTrue itself refuses the exhausted caller (got {raw[0]})")
     check(
-        (status, body.strip()) == known_before,
-        f"the same refusal reaches the browser as 200 {{}} (got {status} {body.strip()!r})",
+        any(k.lower() == "x-sb-error-code" for k, _ in raw[1]),
+        "and names the reason in a header, which is why the rewrite cannot copy "
+        "upstream headers through",
+    )
+    masked = recover_via_console(users[3], noisy)
+    check(
+        not any(k.lower() == "x-sb-error-code" for k, _ in masked[1]),
+        "and that header does not reach the browser",
+    )
+    check(
+        answer(masked) == known_before,
+        f"the same refusal reaches the browser byte for byte as the unknown-address "
+        f"answer (got {describe(masked)})",
     )
     settle()
     check(mail_count(users[3]) == 0, "and no mail was sent, so the 200 is not a send")

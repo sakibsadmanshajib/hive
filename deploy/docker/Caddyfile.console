@@ -20,12 +20,21 @@
 # users actually arrive on, same pattern as Caddyfile.owui.
 # Who is allowed to tell this Caddy who the client is.
 #
-# This listener is published on a host port and reached from the Cloudflare
-# Tunnel, which runs on the host, so its direct peer is always a private
-# address: the Docker bridge gateway for tunnel traffic, another container for
-# in-network traffic. Nothing on the public internet is ever the peer. Trusting
-# the private ranges therefore trusts exactly the set that can already reach
-# port 3005, and no more.
+# Whoever is in the trusted set below chooses their own bucket, so the set has
+# to be small and the reason has to be checkable rather than asserted. What
+# makes it small is a line in docker-compose.yml, not this paragraph: the
+# service publishes 127.0.0.1:3005:80, so the only peers that can reach this
+# listener are the Cloudflare Tunnel (cloudflared runs on the host and dials
+# localhost:3005) and other containers on the compose network. Both are private
+# addresses. A public peer cannot occur, and if one somehow did its forwarded
+# headers would be ignored and {client_ip} would be the peer address.
+#
+# That binding is the control. An earlier version of this comment claimed the
+# same property while the port was published on every interface, which made it
+# false on two paths at once: a direct caller bypassing Cloudflare, and an
+# external connection arriving through docker-proxy with the bridge gateway as
+# its peer, inside the trusted set. Change the binding and this comment is
+# wrong again.
 #
 # Cf-Connecting-Ip is preferred because Cloudflare SETS it on every request,
 # overwriting whatever the browser sent, so an internet caller cannot choose

@@ -990,7 +990,17 @@ services:
       - chat
       - enterprise
     ports:
-      - "3005:80"
+      # Loopback only, since issue #1744. cloudflared runs on the host and
+      # dials http://localhost:3005 (deploy/cloudflare/tunnel-ingress.json), so
+      # nothing needs this bound to every interface, and world-binding it was
+      # load bearing in the wrong direction: Caddyfile.console trusts its
+      # direct peer to name the client address, and a caller reaching this port
+      # without going through Cloudflare either bypasses the edge outright or,
+      # on a docker-proxy path where the bridge gateway becomes the peer, lands
+      # inside the trusted set and picks its own rate-limit bucket. Docker
+      # publishes past ufw's default deny, so the firewall was never the
+      # control here. This is.
+      - "127.0.0.1:3005:80"
     environment:
       CONSOLE_DOMAIN: ${CONSOLE_DOMAIN:-console.localhost}
       CONSOLE_EXTERNAL_SCHEME: ${CONSOLE_EXTERNAL_SCHEME:-http}

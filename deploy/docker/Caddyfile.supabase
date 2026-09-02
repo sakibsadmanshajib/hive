@@ -237,8 +237,7 @@
 	# proxy for the reason the snippet documents.
 	import supabase_auth_cors_preflight
 	# Password recovery is routed on its own so ONE thing about it can differ
-	# from the shared proxy below: what a refusal looks like. Everything else,
-	# upstream and headers included, is deliberately identical.
+	# from the shared proxy below: what the caller is allowed to learn.
 	#
 	# GoTrue answers POST /recover with 200 {} whether or not the address holds
 	# an account, which is deliberate account-existence protection. It stops
@@ -247,10 +246,39 @@
 	# sendPasswordRecovery, which is reached only for an address that HAS a
 	# user row, so its 429 means "this address is real" while an unknown
 	# address goes on answering 200. Two requests then read the account list.
+	# The per-IP limiter has the same shape from the caller's side.
 	#
-	# Rewriting every 429 on this one route back to the endpoint's own 200 {}
-	# closes that, and takes nothing from a caller that the endpoint's contract
-	# ever promised: the contract is already "we tell you nothing".
+	# So BOTH outcomes are synthesized here, from one handler, rather than one
+	# being proxied and the other rewritten. That is not fussiness. The first
+	# version of this block rewrote only the 429, and the two responses still
+	# differed in their header set (`Vary`, `Server`, and the `Via` hop count),
+	# which is the same oracle at the same cost as the status code was. Two
+	# paths that agree today are one upstream change away from not agreeing;
+	# one path cannot disagree with itself.
+	#
+	# Concretely, what proxying the 429 through would have leaked: GoTrue puts
+	# `X-Sb-Error-Code: over_email_send_rate_limit` on it, and on nothing an
+	# unknown address ever receives. Copying upstream headers is therefore not
+	# an option here either, with or without an exclusion list.
+	#
+	# The Access-Control-* and Vary values below are exactly what GoTrue itself
+	# answers on this route, restated because a synthesized response carries no
+	# upstream header at all. They widen nothing: /recover takes no credential
+	# and returns no data, and the same three values reach the browser today.
+	#
+	# Matcher is the single path form on purpose, unlike @admin above. The
+	# variants that got past that matcher were checked here and do not apply:
+	# POST /auth/v1/recover/ and POST /auth/v1/RECOVER both fall through to the
+	# shared proxy and 404 at GoTrue, which routes /recover exactly.
+	#
+	# This lives in (supabase_public) and not in (supabase_internal), so
+	# /auth/v1/recover on the in-network listener still answers a raw 429. That
+	# is deliberate rather than an oversight: anything on the compose network
+	# can dial supabase-auth:9999 directly and get the same 429, so a rewrite
+	# there would be a control an attacker walks around, not a boundary. If a
+	# server-side caller is ever pointed at the internal listener for password
+	# recovery, it needs this treatment or the public origin, not the internal
+	# route as it stands.
 	#
 	# ponytail: the price is that a throttled reset is indistinguishable from a
 	# sent one, so a user who asks twice inside the window sees success and
@@ -258,6 +286,13 @@
 	# blind. If that becomes a support cost, the fix is a cooldown on the reset
 	# form, not an informative status here -- an informative status is the
 	# oracle.
+	#
+	# ponytail: identical bytes, not identical timing. A real address costs a
+	# synchronous SMTP send (140-160ms measured locally) and an unknown one
+	# does not (39-62ms), so the wall clock still separates them. Closing that
+	# needs the send moved off the request path, which is GoTrue's to do, not
+	# this gateway's. It is a slower and far noisier oracle than a status code
+	# or a header set, and it is the residual this route does NOT close.
 	@recover path /auth/v1/recover
 	handle @recover {
 		uri strip_prefix /auth/v1
@@ -265,9 +300,12 @@
 			header_up X-Forwarded-For {client_ip}
 			header_up -Sb-Forwarded-For
 
-			@throttled status 429
-			handle_response @throttled {
+			@sameanswer status 200 429
+			handle_response @sameanswer {
 				header Content-Type application/json
+				header Access-Control-Allow-Origin "*"
+				header Access-Control-Allow-Credentials true
+				header Vary Origin
 				respond "{}" 200
 			}
 		}
