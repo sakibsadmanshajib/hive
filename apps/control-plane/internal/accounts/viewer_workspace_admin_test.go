@@ -3,6 +3,7 @@ package accounts_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -224,5 +225,40 @@ func TestViewerHandler_EmitsWorkspaceAdmin(t *testing.T) {
 				t.Errorf("workspace_admin: want %v got %v", tc.want, got)
 			}
 		})
+	}
+}
+
+// A store failure denies the flag and leaves the rest of the viewer intact.
+// This is the branch that decides whether a transient database fault costs the
+// customer two nav entries or the entire console: GET /api/v1/viewer feeds
+// billing, API keys, usage, members and settings, so it must still answer.
+func TestEnsureViewerContext_TenantRoleLookupError_DeniesWithoutFailingTheViewer(t *testing.T) {
+	repo := newStubRepo()
+	userID := uuid.New()
+	accountID := uuid.New()
+	seedOwnerOfAccount(repo, userID, accountID)
+
+	svc := accounts.NewService(repo).WithTenantRoleService(
+		platform.NewTenantRoleService(&stubTenantRoleStore{err: errors.New("tenant_users read failed")}),
+	)
+
+	vc, err := svc.EnsureViewerContext(context.Background(), auth.Viewer{
+		UserID:        userID,
+		TenantID:      uuid.New(),
+		Email:         "lookup-error@example.com",
+		EmailVerified: true,
+	}, accountID)
+	if err != nil {
+		t.Fatalf("a tenant role lookup failure must not fail the viewer read: %v", err)
+	}
+	if vc.WorkspaceAdmin {
+		t.Error("WorkspaceAdmin must be false when the tenant role lookup fails")
+	}
+	// The rest of the response is what proves the console still boots.
+	if vc.CurrentAccount.ID != accountID {
+		t.Errorf("current account: want %s got %s", accountID, vc.CurrentAccount.ID)
+	}
+	if len(vc.Permissions) == 0 {
+		t.Error("permissions must still be resolved when only the tenant role read failed")
 	}
 }

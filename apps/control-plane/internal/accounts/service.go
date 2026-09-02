@@ -186,13 +186,26 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 	// guards: the platform-admin overlay first, then an ACTIVE OWNER row in
 	// public.tenant_users on the tenant this caller has selected. Nothing here
 	// consults account_memberships, which is the conflation issue #1660 fixes.
+	//
+	// A failed lookup denies the flag and does not fail the request. This
+	// field is a user-interface hint, while permissions[] beside it is what
+	// the console authorizes on, and GET /api/v1/viewer feeds every console
+	// page: billing, API keys, usage, members and settings all collapse if it
+	// answers 500. The authority on the two surfaces this flag hides is
+	// WorkspaceAdminGate, which performs the same read on those routes and
+	// answers 500 there if it fails, so a transient fault costs the customer
+	// two nav entries rather than the whole console. Denying on an
+	// unresolvable read is the invariant the rest of this path already keeps
+	// (auth.Client.WithMembershipCheck collapses to uuid.Nil the same way).
 	workspaceAdmin := isAdmin
 	if !workspaceAdmin && s.tenantRoleSvc != nil && viewer.TenantID != uuid.Nil {
 		isTenantOwner, err := s.tenantRoleSvc.IsTenantOwner(ctx, viewer.UserID, viewer.TenantID)
 		if err != nil {
-			return ViewerContext{}, fmt.Errorf("accounts: tenant owner lookup: %w", err)
+			log.Printf("accounts: tenant owner lookup failed user=%s tenant=%s: %v",
+				viewer.UserID, viewer.TenantID, err)
+		} else {
+			workspaceAdmin = isTenantOwner
 		}
-		workspaceAdmin = isTenantOwner
 	}
 
 	return ViewerContext{
