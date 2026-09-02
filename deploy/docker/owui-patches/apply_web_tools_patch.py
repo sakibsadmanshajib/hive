@@ -33,7 +33,11 @@ Four edits, all inside utils/middleware.py.
    is how #776 shipped inert. `assert_selection_gate` below parses the patched
    module and fails unless the chain of statements enclosing the call is
    exactly that one `if`, so a second condition added at the same indentation
-   fails the image build instead of quietly narrowing the feature.
+   fails the image build instead of quietly narrowing the feature. An early
+   `return` above the call, inside that same branch, fails it too: the chain
+   by itself does not prove the call is reached, and
+   scripts/test_owui_task_upstream_auth.py pins that same shape one file over
+   for the same reason.
 
 2 and 3. The citation gate in the native tool loop. Upstream extracts citation
    sources only for tools it recognises BY NAME, and Hive's names are not
@@ -205,12 +209,44 @@ def handler_body(text: str) -> str:
 ONLY_PERMITTED_GATE = "payload_tools is None"
 
 
-def selection_gates(text: str) -> list:
-    """The statements enclosing the Hive selection call, outermost first.
+# Statements that open a scope of their own. A `return` inside one of these
+# belongs to that function, not to the path through the handler: upstream's own
+# `tool_function` closure sits above the splice and returns twice.
+NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 
-    Rendered as source: an `if` becomes its test, anything else becomes its
-    node type, so an unexpected `try` or `for` is as visible as an unexpected
-    condition.
+
+def early_returns(body: list, call) -> list:
+    """Every `return` that would run before `call` does, in `call`'s own branch.
+
+    An exit above the splice leaves the enclosing chain untouched and the call
+    dead, so the chain by itself does not prove the call is reached. Nested
+    scopes are skipped, and so is everything at or below `call`.
+    """
+    found = []
+    for node in body:
+        if node is call:
+            break
+        if isinstance(node, NESTED_SCOPES):
+            continue
+        if isinstance(node, ast.Return):
+            found.append(node)
+        for field in ("body", "orelse", "finalbody", "handlers"):
+            inner = getattr(node, field, None)
+            if isinstance(inner, list) and inner:
+                found += early_returns(inner, call)
+    return found
+
+
+def selection_gates(text: str) -> list:
+    """What stands between process_chat_payload being entered and the Hive
+    selection call running, outermost first.
+
+    Two kinds of entry, in one list, because either alone decides whether a
+    model is told the tools exist. The statements ENCLOSING the call, rendered
+    as source (an `if` becomes its test, anything else becomes its node type,
+    so an unexpected `try` or `for` is as visible as an unexpected condition),
+    and any `return` that would run BEFORE it inside the same branch, rendered
+    as `Return`.
     """
     tree = ast.parse(text)
     handler = next(
@@ -229,7 +265,7 @@ def selection_gates(text: str) -> list:
             # contains it: unparsing an `if` yields its whole block, which
             # would report the call as sitting outside its own gate.
             if isinstance(node, ast.Assign) and "_hive_select_tools(" in ast.unparse(node.value):
-                return chain
+                return chain + early_returns(body, node)
             for field in ("body", "orelse", "finalbody", "handlers"):
                 inner = getattr(node, field, None)
                 if isinstance(inner, list) and inner:
@@ -244,7 +280,8 @@ def selection_gates(text: str) -> list:
 
 
 def assert_selection_gate(text: str) -> None:
-    """Fail unless the selection's only gate is upstream's own `payload_tools`.
+    """Fail unless the selection runs unconditionally inside upstream's own
+    `payload_tools` branch.
 
     The guard #776 did not have. Its mechanism was real code that a deployment
     flag switched off, and every test it shipped with still passed.
@@ -257,14 +294,19 @@ def assert_selection_gate(text: str) -> None:
     condition added beside it. Anything else in the chain, at any depth, fails
     the image build: no toggle, flag, role or capability may decide whether a
     model is told these tools exist.
+
+    An early `return` above the call, inside that same branch, fails it too. It
+    leaves the chain reading exactly right while the call never runs, which is
+    the one shape parsing the chain alone does not catch.
     """
     gates = selection_gates(text)
     assert gates == [ONLY_PERMITTED_GATE], (
-        "the hive web tool selection is gated on something other than "
-        f"`{ONLY_PERMITTED_GATE}`: {gates}. It must run for every chat request "
-        "whose tools this deployment resolves, because the whole point of "
-        "issue #1718 is that no toggle, flag or user setting decides whether a "
-        "model is told these tools exist."
+        "the hive web tool selection does not run unconditionally inside "
+        f"upstream's own `{ONLY_PERMITTED_GATE}` branch: {gates}. Anything "
+        "beyond that one entry is either a second gate around the call or an "
+        "early exit above it, and both let some condition decide whether a "
+        "model is told these tools exist. The whole point of issue #1718 is "
+        "that none may."
     )
 
 

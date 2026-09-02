@@ -37,6 +37,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -148,6 +149,46 @@ def test_a_second_gate_on_the_splice_fails_the_build() -> None:
     except AssertionError:
         return
     raise AssertionError("a second condition around the selection did not fail the assertion")
+
+
+def test_an_early_return_above_the_splice_fails_the_build() -> None:
+    """The residual hole in comparing the gate chain alone. An exit above the
+    call, inside the one permitted branch, leaves that chain reading exactly
+    right while the call never runs. scripts/test_owui_task_upstream_auth.py
+    pins the same shape one file over: it checks the predicate's literals AND
+    that no `return false` above them makes those literals dead text."""
+    dead = PATCHED.replace(
+        patch_module.CALL,
+        "        if _flag:\n            return form_data\n" + patch_module.CALL,
+        1,
+    )
+    assert dead != PATCHED
+    assert patch_module.selection_gates(dead) == ["payload_tools is None", "Return"], (
+        patch_module.selection_gates(dead)
+    )
+    try:
+        patch_module.assert_selection_gate(dead)
+    except AssertionError:
+        return
+    raise AssertionError("an early return above the selection did not fail the assertion")
+
+
+def test_a_return_inside_a_nested_function_is_not_mistaken_for_an_early_exit() -> None:
+    """A `return` in a closure belongs to that closure, not to the path through
+    the handler. Upstream builds exactly such a closure above the splice
+    (`tool_function`, which returns twice), so a check that counted those would
+    fail the image build on unmodified upstream."""
+    assert "return tool_function" in PATCHED, (
+        "upstream's own nested closure above the splice is gone, so only the "
+        "synthetic case below still exercises this exclusion"
+    )
+    nested = PATCHED.replace(
+        patch_module.CALL,
+        "        def _helper():\n            return None\n\n" + patch_module.CALL,
+        1,
+    )
+    assert nested != PATCHED
+    patch_module.assert_selection_gate(nested)
 
 
 def test_the_selection_runs_before_the_tools_are_published() -> None:
@@ -770,6 +811,104 @@ def loop_execute(tools: dict, name: str, arguments: dict):
     allowed = tool.get("spec", {}).get("parameters", {}).get("properties", {}).keys()
     params = {k: v for k, v in arguments.items() if k in allowed}
     return asyncio.run(tool["callable"](**params))
+
+
+def _call_web_search(timeout_seconds: int = 5):
+    """One `_call_tool` coroutine, with the environment it reads already set."""
+    os.environ.update(environ_for("http://127.0.0.1:9/v1"))
+    return web_tools._call_tool(
+        object(), FakeUser(), {"message_id": "assistant-turn-1"}, web_tools.WEB_SEARCH, {}, timeout_seconds
+    )
+
+
+def test_web_tool_calls_never_run_on_the_processes_shared_thread_pool() -> None:
+    """`asyncio.to_thread` would put them on the event loop's default executor,
+    which is min(32, cpu + 4) workers shared with every other to_thread caller
+    in Open WebUI. On a four core box that is eight workers in total, so a
+    bound of eight there would be the whole pool rather than a share of it,
+    held for up to FETCH_TIMEOUT_SECONDS per fetch."""
+    assert web_tools._call_executor._max_workers == web_tools.MAX_CONCURRENT_CALLS, (
+        "the module's own executor is not sized by its own bound"
+    )
+    source = MODULE.read_text(encoding="utf-8")
+    body = source[source.index("async def _call_tool") :]
+    body = body[: body.index("\ndef ")]
+    assert "asyncio.to_thread" not in body, (
+        "a tool call is back on the shared default executor, where its bound "
+        "is a share of a pool it does not own"
+    )
+    assert "_call_executor" in body
+
+
+def test_web_tool_calls_are_bounded_and_a_saturated_tool_refuses() -> None:
+    """Both halves of the bound, in one event loop, because an asyncio
+    primitive binds to the first loop that contends on it and the container has
+    exactly one loop for the process's life.
+
+    The executor caps the THREADS: no more than MAX_CONCURRENT_CALLS calls hold
+    one at a time, whatever the box's core count. The semaphore caps the WAIT:
+    a call that finds every slot busy is refused within SLOT_WAIT_SECONDS with
+    the same provider blind message every other failure mode here produces,
+    rather than queueing behind a ninety second fetch with nothing said to the
+    model or shown to the user."""
+    live = {"now": 0, "peak": 0}
+    counter = threading.Lock()
+
+    def slow_request(method, url, headers, body, timeout_seconds):
+        with counter:
+            live["now"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+        time.sleep(0.05)
+        with counter:
+            live["now"] -= 1
+        return 200, {"status": "ok", "results": []}
+
+    async def drive():
+        served = await asyncio.gather(
+            *[_call_web_search() for _ in range(web_tools.MAX_CONCURRENT_CALLS * 3)]
+        )
+        # Every slot taken, so the next call has nothing to wait for. The wait
+        # is shortened only now: the burst above must run under the real one,
+        # or its own queueing would be read as saturation.
+        web_tools.SLOT_WAIT_SECONDS = 0.05
+        for _ in range(web_tools.MAX_CONCURRENT_CALLS):
+            await web_tools._call_slots.acquire()
+        try:
+            started = time.monotonic()
+            try:
+                # Bounded here too: without the module's own cap this awaits
+                # forever, and a test that hangs is worse than one that fails.
+                refused = await asyncio.wait_for(_call_web_search(), 5)
+            except (asyncio.TimeoutError, TimeoutError):
+                raise AssertionError(
+                    "a call with no free slot never came back, so saturation is "
+                    "an unbounded silent wait rather than a refusal"
+                )
+            return served, refused, time.monotonic() - started
+        finally:
+            for _ in range(web_tools.MAX_CONCURRENT_CALLS):
+                web_tools._call_slots.release()
+
+    real_request = web_tools._request
+    real_wait = web_tools.SLOT_WAIT_SECONDS
+    web_tools._request = slow_request
+    try:
+        served, refused, waited = asyncio.run(drive())
+    finally:
+        web_tools._request = real_request
+        web_tools.SLOT_WAIT_SECONDS = real_wait
+
+    assert all(isinstance(result, dict) for result in served), served
+    assert live["peak"] > 1, "the calls never overlapped, so the bound was not exercised at all"
+    assert live["peak"] <= web_tools.MAX_CONCURRENT_CALLS, (
+        f"{live['peak']} calls held a thread at once, over the bound of "
+        f"{web_tools.MAX_CONCURRENT_CALLS}"
+    )
+    assert refused == web_tools.MSG_TOOL_UNAVAILABLE, refused
+    assert waited < 1, f"the refused call waited {waited:.2f}s for a slot"
+    assert web_tools._call_slots._value == web_tools.MAX_CONCURRENT_CALLS, (
+        "a refused call did not give its slot back, so the bound leaks"
+    )
 
 
 def test_a_search_the_model_calls_is_executed_and_comes_back_into_the_turn() -> None:

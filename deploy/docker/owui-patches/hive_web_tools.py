@@ -64,6 +64,7 @@ staying on a native path with nothing on it; see `prefer_legacy`.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -193,19 +194,28 @@ SEARCH_TIMEOUT_SECONDS = 30
 FETCH_TIMEOUT_SECONDS = 90
 DESCRIPTOR_TIMEOUT_SECONDS = 10
 
-# How many tool calls may hold a worker thread at once, process wide.
+# How many tool calls may be in flight at once, process wide, and how long a
+# call waits for one of those slots before giving up.
 #
-# `asyncio.to_thread` runs on the event loop's default ThreadPoolExecutor,
-# which is min(32, cpu + 4) workers and is shared with every other
-# `to_thread` and `run_in_executor` caller in Open WebUI. A fetch holds one of
-# those workers for up to FETCH_TIMEOUT_SECONDS, so without a bound, three
-# fetches a turn times enough concurrent users starves the pool and the damage
-# shows up as unrelated slowness elsewhere in the process rather than as a slow
-# tool call. This caps the share this module can take.
+# The threads are this module's OWN, not the event loop's. `asyncio.to_thread`
+# would run on the default ThreadPoolExecutor, which is min(32, cpu + 4)
+# workers shared with every other `to_thread` and `run_in_executor` caller in
+# Open WebUI: on a four core box that is eight workers in total, so a bound of
+# eight there is not a share of the pool, it is the pool, and a fetch holds a
+# worker for up to FETCH_TIMEOUT_SECONDS. A dedicated executor makes this
+# number a local decision that cannot starve unrelated work at any core count.
 #
-# ponytail: a fixed count, not a fraction of the executor. Raise it, or make it
-# an environment knob, only if a real deployment is measured waiting on it.
+# The semaphore is not redundant beside the executor. The executor bounds the
+# threads; the semaphore bounds the WAIT, because `run_in_executor` queues
+# silently and without limit. A call that finds every slot busy waits at most
+# SLOT_WAIT_SECONDS and is then refused with the same provider blind message
+# every other failure mode here produces. Saturation that says so beats a turn
+# that hangs behind a ninety second fetch with nothing shown to the user.
+#
+# ponytail: fixed counts, not environment knobs. Make them configurable only if
+# a real deployment is measured refusing calls at this bound.
 MAX_CONCURRENT_CALLS = 8
+SLOT_WAIT_SECONDS = 5
 
 # Fixed messages handed to the model when a call cannot be made at all. None
 # names an internal service or address, matching the gateway's own rule for
@@ -219,6 +229,11 @@ MSG_NO_TURN = "This tool could not be used because the turn identifier is missin
 
 _descriptor_cache: dict[str, Any] = {"fetched_at": 0.0, "specs": []}
 _descriptor_lock = asyncio.Lock()
+# Threads created lazily, so an image that never serves a tool call pays
+# nothing for this.
+_call_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=MAX_CONCURRENT_CALLS, thread_name_prefix="hive-web-tool"
+)
 _call_slots = asyncio.Semaphore(MAX_CONCURRENT_CALLS)
 
 
@@ -491,16 +506,34 @@ async def _call_tool(request, user, metadata, tool: str, body: dict, timeout_sec
         "Content-Type": "application/json",
     }
     try:
-        # Bounded, because the thread this takes is the process's, not ours.
-        async with _call_slots:
-            _status, payload = await asyncio.to_thread(
-                _request, "POST", f"{base}/tools/{tool}", headers, body, timeout_seconds
-            )
+        # Bounded on both axes: MAX_CONCURRENT_CALLS threads of this module's
+        # own, and a capped wait for one of them.
+        await asyncio.wait_for(_call_slots.acquire(), SLOT_WAIT_SECONDS)
+    except (asyncio.TimeoutError, TimeoutError):
+        # Every slot busy. Refuse in seconds and say so, rather than queueing
+        # behind a fetch the user is never told about.
+        log.warning(
+            "hive: a %s call found all %s web tool slots busy and was refused", tool, MAX_CONCURRENT_CALLS
+        )
+        return MSG_TOOL_UNAVAILABLE
+    except Exception:
+        # Nothing else that can go wrong here is safe to raise: upstream's tool
+        # loop renders an escaped exception as str(e) in the transcript.
+        log.exception("hive: could not take a web tool slot for a %s call", tool)
+        return MSG_TOOL_UNAVAILABLE
+
+    try:
+        loop = asyncio.get_running_loop()
+        _status, payload = await loop.run_in_executor(
+            _call_executor, _request, "POST", f"{base}/tools/{tool}", headers, body, timeout_seconds
+        )
     except Exception:
         # No exception text in what the model sees. A urllib error message
         # carries the request URL, and that URL names an internal service.
         log.exception("hive: %s call failed", tool)
         return MSG_TOOL_UNAVAILABLE
+    finally:
+        _call_slots.release()
 
     if not isinstance(payload, dict):
         return MSG_TOOL_UNAVAILABLE
