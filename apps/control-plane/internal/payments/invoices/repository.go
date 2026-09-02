@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"time"
 
@@ -52,7 +53,10 @@ func (r *pgxRepository) InsertOrFetch(ctx context.Context, in Invoice) (*Invoice
 		id = uuid.New()
 	}
 
-	rate, rateSource := nullableRate(in)
+	rate, rateSource, err := nullableRate(in)
+	if err != nil {
+		return nil, err
+	}
 	credits, err := nullableCredits(in.TotalCredits)
 	if err != nil {
 		return nil, err
@@ -302,11 +306,19 @@ func (r *pgxRepository) ListUnconverted(ctx context.Context, limit int) ([]Invoi
 	}
 	defer rows.Close()
 
+	// Per-row isolation extends to decoding, not just to repairing. The
+	// population this pass reads was written by code that no longer exists, so
+	// a row whose line_items JSONB does not match today's decoder is exactly
+	// the shape to expect here, and aborting the scan on it would block the
+	// repair of every other row on every boot, permanently. Skip it, name it,
+	// and carry on.
 	var out []Invoice
 	for rows.Next() {
 		inv, err := scanInvoice(rows)
 		if err != nil {
-			return nil, err
+			slog.Default().Warn("invoices: skipping an undecodable unconverted row",
+				"error", err)
+			continue
 		}
 		out = append(out, inv)
 	}
@@ -319,11 +331,18 @@ func (r *pgxRepository) ListUnconverted(ctx context.Context, limit int) ([]Invoi
 // UpdateConverted writes a repaired row and reports whether it wrote one.
 //
 // The `usd_bdt_rate IS NULL` predicate is repeated in the WHERE clause on
-// purpose. It is not decoration over the SELECT that produced this row: two
-// control-plane replicas boot at the same time on every deploy and both run the
-// repair, so without it the second one would convert an already-converted
-// amount a second time and divide a customer's invoice by the rate again. With
-// it, the second replica writes nothing and reports false.
+// purpose, so that a second writer arriving after the first committed converts
+// nothing and reports false rather than dividing a customer's invoice by the
+// rate a second time. Under READ COMMITTED it blocks on the row lock and then
+// re-evaluates the predicate against the committed version; under REPEATABLE
+// READ it raises a serialization error, which surfaces as a per-row failure and
+// is not retried because the row is by then already repaired.
+//
+// That second writer is not reachable on anything this repository ships today.
+// The compose file declares no replicas and the deploy runs `up -d --build`,
+// which stops the old control-plane before starting the new one, so exactly one
+// process runs the repair. The guard is here for the deployment that eventually
+// runs two, not as a description of the one that runs now.
 func (r *pgxRepository) UpdateConverted(ctx context.Context, in Invoice) (bool, error) {
 	if in.TotalBDTSubunits == nil || !in.TotalBDTSubunits.IsInt64() {
 		return false, fmt.Errorf("invoices: repaired total must fit bigint, got %v", in.TotalBDTSubunits)
@@ -339,7 +358,10 @@ func (r *pgxRepository) UpdateConverted(ctx context.Context, in Invoice) (bool, 
 	if err != nil {
 		return false, err
 	}
-	rate, rateSource := nullableRate(in)
+	rate, rateSource, err := nullableRate(in)
+	if err != nil {
+		return false, err
+	}
 
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE public.invoices
@@ -365,16 +387,27 @@ func (r *pgxRepository) UpdateConverted(ctx context.Context, in Invoice) (bool, 
 // nullableRate maps the empty rate and empty source onto SQL NULL, so an
 // unconverted row keeps the discriminator the repair depends on rather than
 // acquiring an empty string that satisfies IS NOT NULL.
-func nullableRate(in Invoice) (rate *string, source *string) {
+//
+// It also enforces that the two travel together. Both writers of this table
+// route through here, so the invariant lives at the seam rather than being
+// restated at each of them and forgotten at the next one. A rate with no
+// provenance is the state the usd_bdt_rate_source column comment declares
+// impossible, and it is the exact question the column exists to answer months
+// later; the schema refuses it too, and this refuses it earlier and with a
+// message that names the cause.
+func nullableRate(in Invoice) (rate *string, source *string, err error) {
+	if (in.USDBDTRate == "") != (in.USDBDTRateSource == "") {
+		return nil, nil, fmt.Errorf(
+			"invoices: rate %q and rate source %q must both be set or both be empty",
+			in.USDBDTRate, in.USDBDTRateSource)
+	}
 	if in.USDBDTRate != "" {
 		r := in.USDBDTRate
 		rate = &r
-	}
-	if in.USDBDTRateSource != "" {
 		s := in.USDBDTRateSource
 		source = &s
 	}
-	return rate, source
+	return rate, source, nil
 }
 
 // nullableCredits narrows a credit quantity for the bigint column, refusing an

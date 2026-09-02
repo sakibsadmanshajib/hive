@@ -217,7 +217,13 @@ func TestRender_OmitsAnUnknownCreditQuantity(t *testing.T) {
 	if strings.Contains(text, "\n0\n") {
 		t.Fatalf("unknown credit quantity rendered as a measured zero:\n%s", text)
 	}
-	if !strings.Contains(text, "--") {
+	// Anchored on the cell, not on the page. The header carries "HIVE  --
+	// Usage Statement" and the period line carries "2026-08-01 -- 2026-09-01",
+	// so a bare Contains for "--" is true no matter what FormatCredits(nil)
+	// returns, and the assertion could not fail. emit writes each drawn string
+	// on its own line, so the credits cell is a line of its own. Same idiom as
+	// the negative check above.
+	if !strings.Contains(text, "\n--\n") {
 		t.Fatalf("unknown credit quantity is not rendered as an absence:\n%s", text)
 	}
 	// The statement still identifies itself and still says nothing is owed,
@@ -282,9 +288,18 @@ func TestInvoiceWire_CarriesCreditsAndNoMoney(t *testing.T) {
 	// matches "generated_at" and would fail on a body that carries no money at
 	// all, which is a check that cries wolf rather than one that guards.
 	body := strings.ToLower(rec.Body.String())
-	for _, banned := range []string{"usd", "bdt", "subunit", "paisa", "taka", "৳", "5247"} {
+	for _, banned := range []string{"usd", "bdt", "subunit", "paisa", "taka", "৳"} {
 		if strings.Contains(body, banned) {
 			t.Fatalf("invoice wire leaked %q: %s", banned, rec.Body.String())
 		}
+	}
+	// The stored taka figure, searched as a JSON value rather than as loose
+	// digits. The body carries two random v4 UUIDs, about seventy hexadecimal
+	// characters, and "5247" is four hex digits, so a bare substring search
+	// fails by chance in roughly one run in five hundred with a message
+	// claiming a leak that never happened. A red required check that cries wolf
+	// teaches the next reader to dismiss it.
+	if strings.Contains(body, `"5247"`) || strings.Contains(body, ":5247") {
+		t.Fatalf("invoice wire leaked the stored taka amount: %s", rec.Body.String())
 	}
 }

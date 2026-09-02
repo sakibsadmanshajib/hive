@@ -30,14 +30,69 @@
 -- file on purpose: a money repair that regenerates a customer-facing document
 -- belongs where it can fail loudly and be retried, not in a schema step.
 
-ALTER TABLE public.invoices
-    ADD COLUMN IF NOT EXISTS total_credits bigint
-        CHECK (total_credits IS NULL OR total_credits >= 0);
+-- Columns and constraints are added SEPARATELY on purpose.
+--
+-- `ADD COLUMN IF NOT EXISTS` skips the whole subcommand when the column is
+-- already present, and an inline CHECK is part of that subcommand. A database
+-- that acquired one of these columns by any other route, a hand-applied
+-- statement or a restore taken mid-change, would then be left permanently
+-- without its constraint while hive_schema_migrations recorded this file as
+-- applied and nothing ever revisited it. Naming each constraint and adding it
+-- under its own existence test closes that: the column add is idempotent, and
+-- so is the constraint add, independently of each other.
+--
+-- NOT VALID plus VALIDATE follows this table's own precedent in
+-- 20260507_01_invoices_period_order_check.sql. It makes no practical difference
+-- at one row per workspace-month, but a reader comparing the two files should
+-- not have to work out why they differ.
 
-ALTER TABLE public.invoices
-    ADD COLUMN IF NOT EXISTS usd_bdt_rate_source text
-        CHECK (usd_bdt_rate_source IS NULL
-               OR usd_bdt_rate_source IN ('fx_snapshot', 'env', 'default'));
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS total_credits bigint;
+ALTER TABLE public.invoices ADD COLUMN IF NOT EXISTS usd_bdt_rate_source text;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.invoices'::regclass
+          AND conname = 'invoices_total_credits_non_negative'
+    ) THEN
+        ALTER TABLE public.invoices
+            ADD CONSTRAINT invoices_total_credits_non_negative
+            CHECK (total_credits IS NULL OR total_credits >= 0) NOT VALID;
+        ALTER TABLE public.invoices
+            VALIDATE CONSTRAINT invoices_total_credits_non_negative;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.invoices'::regclass
+          AND conname = 'invoices_usd_bdt_rate_source_allowed'
+    ) THEN
+        ALTER TABLE public.invoices
+            ADD CONSTRAINT invoices_usd_bdt_rate_source_allowed
+            CHECK (usd_bdt_rate_source IS NULL
+                   OR usd_bdt_rate_source IN ('fx_snapshot', 'env', 'default')) NOT VALID;
+        ALTER TABLE public.invoices
+            VALIDATE CONSTRAINT invoices_usd_bdt_rate_source_allowed;
+    END IF;
+
+    -- The rate and its provenance travel together or not at all. Without this,
+    -- a writer could store a rate with a NULL source, which is the one state
+    -- the column comment below declares impossible and the exact question the
+    -- column exists to answer months later. Every existing row satisfies it,
+    -- both columns being NULL, so it validates without touching data.
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'public.invoices'::regclass
+          AND conname = 'invoices_usd_bdt_rate_has_provenance'
+    ) THEN
+        ALTER TABLE public.invoices
+            ADD CONSTRAINT invoices_usd_bdt_rate_has_provenance
+            CHECK ((usd_bdt_rate IS NULL) = (usd_bdt_rate_source IS NULL)) NOT VALID;
+        ALTER TABLE public.invoices
+            VALIDATE CONSTRAINT invoices_usd_bdt_rate_has_provenance;
+    END IF;
+END $$;
 
 COMMENT ON COLUMN public.invoices.total_credits IS
     'Hive credit quantity consumed in this period, the unit public.credit_ledger_entries.credits_delta stores (1 USD = 1,000,000,000 credits, decision D-046). This is the invoice''s consumption quantity; total_bdt_subunits is the fiat amount charged for it, converted once at usd_bdt_rate. NULL means the quantity was never recorded for this row, which is true of invoices generated between the issue #1648 fix and issue #1682''s repair. Do not derive it by inverting usd_bdt_rate: that rounds, and it would present a manufactured figure as a ledger reading.';

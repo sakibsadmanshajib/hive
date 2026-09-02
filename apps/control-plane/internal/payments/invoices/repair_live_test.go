@@ -273,6 +273,116 @@ func TestRepairLeavesConvertedRowsUntouched_Live(t *testing.T) {
 	}
 }
 
+// TestUpdateConverted_RefusesARateWithNoProvenance_Live covers both halves of
+// the same invariant: the application refuses the write, and the schema refuses
+// it too, so a future writer that bypasses this repository cannot store a rate
+// nobody can attribute.
+func TestUpdateConverted_RefusesARateWithNoProvenance_Live(t *testing.T) {
+	pool := newInvoicesTestPool(t)
+	accountID := seedInvoiceWorkspace(t, pool)
+	repo := NewPgxRepository(pool)
+	ctx := context.Background()
+
+	period := Period{
+		Start: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+	}
+	id := insertConflatedRow(t, pool, accountID, period, conflatedCredits)
+
+	_, err := repo.UpdateConverted(ctx, Invoice{
+		ID:               id,
+		TotalBDTSubunits: big.NewInt(5247),
+		TotalCredits:     big.NewInt(conflatedCredits),
+		USDBDTRate:       "100.000000",
+		USDBDTRateSource: "",
+		PDFStorageKey:    storageKeyFor(accountID, period.Start),
+	})
+	if err == nil {
+		t.Fatal("repository accepted a rate with no recorded source on the repair path")
+	}
+
+	// The same seam guards generation, which is the other writer of this table
+	// and had the identical hole.
+	if _, err := repo.InsertOrFetch(ctx, Invoice{
+		WorkspaceID:      accountID,
+		PeriodStart:      time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+		PeriodEnd:        time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+		TotalBDTSubunits: big.NewInt(100),
+		USDBDTRate:       "100.000000",
+	}); err == nil {
+		t.Fatal("repository accepted a rate with no recorded source on the generation path")
+	}
+
+	// The schema half, reached directly so the application guard above cannot
+	// be the only thing holding the invariant.
+	if _, err := pool.Exec(ctx, `
+		UPDATE public.invoices SET usd_bdt_rate = 100.000000 WHERE id = $1
+	`, id); err == nil {
+		t.Fatal("the database accepted a rate with a NULL usd_bdt_rate_source")
+	}
+}
+
+// TestListUnconverted_SkipsAnUndecodableRow_Live keeps one unreadable legacy
+// row from blocking the repair of every other row on every boot. The population
+// this pass reads was written by code that no longer exists, so a row that does
+// not match today's decoder is the shape to expect, and the failure must be
+// partial rather than total.
+func TestListUnconverted_SkipsAnUndecodableRow_Live(t *testing.T) {
+	pool := newInvoicesTestPool(t)
+	accountID := seedInvoiceWorkspace(t, pool)
+	repo := NewPgxRepository(pool)
+	ctx := context.Background()
+
+	badPeriod := Period{
+		Start: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+	}
+	// bdt_subunits as a JSON number rather than the string the decoder expects.
+	var badID uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO public.invoices (
+			id, workspace_id, period_start, period_end,
+			total_bdt_subunits, line_items, pdf_storage_key
+		)
+		VALUES (gen_random_uuid(), $1, $2, $3, 1000,
+		        jsonb_build_array(jsonb_build_object(
+		            'model_id', 'hive-fast', 'request_count', 1, 'bdt_subunits', 1000)),
+		        $4)
+		RETURNING id
+	`, accountID, badPeriod.Start, badPeriod.End,
+		storageKeyFor(accountID, badPeriod.Start)).Scan(&badID); err != nil {
+		t.Fatalf("seed undecodable row: %v", err)
+	}
+
+	goodPeriod := Period{
+		Start: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		End:   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	}
+	goodID := insertConflatedRow(t, pool, accountID, goodPeriod, conflatedCredits)
+
+	rows, err := repo.ListUnconverted(ctx, 0)
+	if err != nil {
+		t.Fatalf("one undecodable row aborted the whole scan: %v", err)
+	}
+	if containsInvoice(rows, badID) {
+		t.Fatalf("undecodable row %s was returned rather than skipped", badID)
+	}
+	if !containsInvoice(rows, goodID) {
+		t.Fatalf("readable row %s was lost alongside the undecodable one", goodID)
+	}
+
+	storage := newFakeStorage()
+	svc := NewService(repo, storage, &stubPDF{}, &fakeAccess{}, &fakeNamer{}, nil)
+	if _, err := svc.RepairUnconvertedInvoices(ctx); err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	subunits, credits, rate, _ := readInvoiceRow(t, pool, goodID)
+	if subunits != 5247 || credits == nil || *credits != conflatedCredits || rate == nil {
+		t.Fatalf("readable row was not repaired alongside the skipped one: subunits=%d credits=%v rate=%v",
+			subunits, credits, rate)
+	}
+}
+
 func containsInvoice(rows []Invoice, id uuid.UUID) bool {
 	for _, row := range rows {
 		if row.ID == id {

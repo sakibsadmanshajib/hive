@@ -1,6 +1,15 @@
-# Phase 14 — monthly BDT-only invoices.
+# Monthly usage statements.
+#
+# A usage period is a prepaid draw down against credits the customer already
+# bought, so this document raises no charge and carries no money at all. It
+# states the credit quantity consumed and nothing that could be used to price
+# it: credits are sold at a markup and a subscription grants a quantity whose
+# internal value is not published, so a fiat figure derived from a credit count
+# would disclose that value (owner ruling, 2026-09-02, issues #1681 and #1682).
+# A fiat amount belongs on a purchase invoice, which this surface does not
+# model; that document is tracked in issue #1697.
+#
 # PDF rendered by gofpdf; stored in Supabase Storage hive-files bucket.
-# Zero customer-USD fields anywhere on this surface.
 openapi: 3.0.0
 info:
   title: Hive Invoices
@@ -30,9 +39,9 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [invoices]
+                required: [items]
                 properties:
-                  invoices:
+                  items:
                     type: array
                     items:
                       $ref: "#/components/schemas/Invoice"
@@ -51,7 +60,11 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Invoice"
+                type: object
+                required: [invoice]
+                properties:
+                  invoice:
+                    $ref: "#/components/schemas/Invoice"
         "404":
           description: Not found.
   /api/v1/invoices/{id}/pdf:
@@ -62,7 +75,7 @@ paths:
         schema: {type: string, format: uuid}
     get:
       operationId: downloadInvoicePdf
-      summary: Redirect to short-lived signed URL for the BDT-only PDF.
+      summary: Redirect to short-lived signed URL for the usage statement PDF.
       responses:
         "302":
           description: Redirect to signed Supabase Storage URL.
@@ -80,8 +93,8 @@ components:
         - workspace_id
         - period_start
         - period_end
-        - amount_bdt_subunits
-        - currency
+        - total_credits
+        - line_items
         - generated_at
       properties:
         id:
@@ -96,16 +109,31 @@ components:
         period_end:
           type: string
           format: date
-        amount_bdt_subunits:
-          type: string
-          description: Total in BDT subunits. math/big decimal string.
-        currency:
-          type: string
-          enum: [BDT]
-        pdf_storage_key:
+        total_credits:
           type: string
           nullable: true
-          description: Supabase Storage object key (bucket=hive-files).
+          description: >-
+            Hive credits consumed in the period, as a decimal string so a client
+            parses it with BigInt and never rounds at 2^53. Null means the
+            quantity was never recorded for that row, which is true of statements
+            generated between the issue #1648 fix and the issue #1682 repair. It
+            is not a measured zero and must not be rendered as one. There is
+            deliberately no fiat field beside it; see the note at the top of this
+            file.
+        line_items:
+          type: array
+          items:
+            type: object
+            required: [model_id, request_count, credits]
+            properties:
+              model_id:
+                type: string
+              request_count:
+                type: integer
+              credits:
+                type: string
+                nullable: true
+                description: Hive credits for this model. Same null rule as total_credits.
         generated_at:
           type: string
           format: date-time

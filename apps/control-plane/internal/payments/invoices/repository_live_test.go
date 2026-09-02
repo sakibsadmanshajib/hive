@@ -147,8 +147,9 @@ func TestInsertOrFetch_RecordsRate_Live(t *testing.T) {
 		LineItems: []InvoiceLineItem{
 			{ModelID: "hive-fast", RequestCount: 2, BDTSubunits: big.NewInt(6460)},
 		},
-		GeneratedAt: time.Date(2026, 9, 1, 2, 0, 0, 0, time.UTC),
-		USDBDTRate:  "123.130000",
+		GeneratedAt:      time.Date(2026, 9, 1, 2, 0, 0, 0, time.UTC),
+		USDBDTRate:       "123.130000",
+		USDBDTRateSource: "default",
 	})
 	if err != nil {
 		t.Fatalf("insert: %v", err)

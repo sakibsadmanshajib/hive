@@ -142,6 +142,27 @@ func (s *Service) repairOne(ctx context.Context, inv Invoice) error {
 	if err != nil {
 		return err
 	}
+
+	// Reconcile the derivation against the figure already on the row before
+	// overwriting it. Both the new total and the new credit quantity come from
+	// line_items, and the old generator summed its lines into the total in the
+	// same loop, so on every row this pass can actually see they agree.
+	//
+	// The check is here because the write is one way. Setting the rate removes
+	// the row from the predicate permanently and no later pass revisits it, so
+	// a row whose lines decode to less than its own stored total would be
+	// quietly rewritten downward, frozen there, and its customer-facing PDF
+	// regenerated to match. An empty bdt_subunits string decodes to a nil
+	// amount, which conflatedLines reads as zero credits, and the row would be
+	// repaired to a total of zero with a rate stamped on it as though that were
+	// a measurement. Failing loudly leaves the row selectable and names it in
+	// the log, which is the outcome this repository prefers over a quiet
+	// rewrite of stored money.
+	if inv.TotalBDTSubunits != nil && totalCredits.Cmp(inv.TotalBDTSubunits) != 0 {
+		return fmt.Errorf("invoices: row %s line items sum to %s credits but the row stores %s; refusing to rewrite a total from lines that disagree with it",
+			inv.ID, totalCredits, inv.TotalBDTSubunits)
+	}
+
 	if !total.IsInt64() {
 		return fmt.Errorf("invoices: repaired total %s subunits exceeds bigint storage", total)
 	}
@@ -161,6 +182,16 @@ func (s *Service) repairOne(ctx context.Context, inv Invoice) error {
 	// the wrong figure in the customer's hands while the console claimed it was
 	// fixed. If the upload fails, the row keeps its NULL rate and the next pass
 	// retries the whole thing.
+	//
+	// ponytail: the object write is last-writer-wins while the row write is
+	// guarded, so two processes repairing the same row AT DIFFERENT RATES could
+	// leave the stored PDF disagreeing with the row permanently. Unreachable
+	// today twice over: the deploy runs one control-plane at a time, and both
+	// arms of resolveRate are deterministic for a closed period unless two live
+	// processes hold different HIVE_USD_BDT_RATE values. If this ever runs
+	// multi-replica, the fix is at the !wrote branch below: re-read the row and
+	// re-render from the winning values so the object converges on the row that
+	// won rather than on whichever writer was slower.
 	if err := s.rewritePDF(ctx, repaired); err != nil {
 		return err
 	}

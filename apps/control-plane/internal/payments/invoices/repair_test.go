@@ -391,6 +391,54 @@ func TestRepairUnconvertedInvoices_TerminatesOnAPermanentlyFailingRow(t *testing
 	}
 }
 
+// TestRepairUnconvertedInvoices_RefusesLinesThatDisagreeWithTheStoredTotal is
+// the guard on a one-way write. The rate, once set, removes the row from the
+// predicate for good, so a total derived from lines that do not add up to the
+// stored figure would be frozen wrong and its PDF regenerated to match. The
+// pass must refuse the row and leave it selectable instead.
+func TestRepairUnconvertedInvoices_RefusesLinesThatDisagreeWithTheStoredTotal(t *testing.T) {
+	t.Parallel()
+
+	repo := newFakeRepo()
+	storage := newFakeStorage()
+	ws := uuid.New()
+	seeded := seedConflatedInvoice(t, repo, ws, conflatedCredits)
+
+	// The exact shape the review names: a line whose amount decoded to nil, so
+	// the derivation reads zero credits while the row still stores half a
+	// billion.
+	broken := seeded
+	broken.LineItems = []InvoiceLineItem{{ModelID: "hive-fast", RequestCount: 412, BDTSubunits: nil}}
+	repo.byID[seeded.ID] = broken
+	repo.byWorkspaceMonth[wsMonthKey(broken.WorkspaceID, broken.PeriodStart)] = broken
+
+	svc := NewService(repo, storage, &stubPDF{}, &fakeAccess{}, &fakeNamer{}, nil)
+	repaired, err := svc.RepairUnconvertedInvoices(context.Background())
+	if err != nil {
+		t.Fatalf("pass reported an error for one refused row: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("repaired %d rows whose lines disagree with their total, want 0", repaired)
+	}
+
+	got, err := repo.GetByID(context.Background(), seeded.ID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got.USDBDTRate != "" {
+		t.Fatalf("a row with disagreeing lines was stamped with rate %q and frozen", got.USDBDTRate)
+	}
+	if got.TotalBDTSubunits.Cmp(big.NewInt(conflatedCredits)) != 0 {
+		t.Fatalf("stored total was rewritten to %s", got.TotalBDTSubunits)
+	}
+	if repo.updates != 0 {
+		t.Fatalf("issued %d updates for a refused row", repo.updates)
+	}
+	if len(storage.uploads) != 0 {
+		t.Fatalf("regenerated %d PDFs for a refused row", len(storage.uploads))
+	}
+}
+
 func keysOf(m map[string][]byte) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
