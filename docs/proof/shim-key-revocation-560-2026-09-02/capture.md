@@ -156,3 +156,18 @@ hive_rate_limit 2
 against. So a revoked key becomes an email to the ops mailbox within about ten
 minutes (one five-minute probe interval plus the rule's six-minute `for`),
 rather than a customer noticing that document upload stopped answering.
+
+## 6. Rebased onto PR #1712 after it merged mid-flight
+
+PR #1712 merged while this branch was in review, which is what made the branch
+conflict: it edits the same comment block in `apps/edge-api/cmd/server/main.go`.
+Resolved in its favour, and the alert's own wording was corrected to match what
+is now true. After #1696, Open WebUI's document RAG embeddings carry the
+signed-in user's own token, so a dead shim key no longer breaks them; what it
+still breaks is text-to-speech and speech-to-text, both of which are
+`OWUI_SHIM_KEY` (`AUDIO_TTS_OPENAI_API_KEY` and `AUDIO_STT_OPENAI_API_KEY`), plus
+the bodyless `GET /v1/models`. The `promtool test rules` case above was re-run
+against the corrected annotations and passes unchanged; the summary now reads
+`OWUI_SHIM_KEY does not resolve; chat text-to-speech and speech-to-text are
+down`, and `.env.example`'s list of what the key authenticates was corrected in
+the same pass, since it had gone stale the moment #1712 landed.

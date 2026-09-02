@@ -1554,7 +1554,7 @@ func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 // registers it observes nothing.
 var owuiShimKeyUsable = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "hive_owui_shim_key_usable",
-	Help: "1 when OWUI_SHIM_KEY resolves to an active, tenant-provisioned Hive API key allowed at least one model, 0 when it does not. Open WebUI's document RAG embeddings and text-to-speech authenticate as that key and nothing else, so 0 means both are down while every visible surface still looks healthy (issue #560). Held at its last value while the control plane is unreachable, because that is not a verdict on the key.",
+	Help: "1 when OWUI_SHIM_KEY resolves to an active, tenant-provisioned Hive API key allowed at least one model, 0 when it does not. Open WebUI's text-to-speech and speech-to-text authenticate as that key and nothing else, so 0 means voice is down while every visible surface still looks healthy (issue #560). Held at its last value while the control plane is unreachable, because that is not a verdict on the key.",
 })
 
 // registerOWUIShimKeyMetric exports the gauge, and only when a shim key is

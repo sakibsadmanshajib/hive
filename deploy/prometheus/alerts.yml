@@ -120,13 +120,14 @@ groups:
           description: "{{ $value }} request(s) on alias {{ $labels.alias }} (provider {{ $labels.provider }}) priced a cache-{{ $labels.side }} token on the documented default multiplier because model_aliases.cache_{{ $labels.side }}_price_credits is NULL for this alias. Seed a real per-model rate (see the migration pattern in supabase/migrations/20260825_01_deepseek_cache_write_price.sql) so this stops being the normal path for this alias."
 
       # Issue #560. Open WebUI presents OWUI_SHIM_KEY, and nothing else, on the
-      # upstream calls that carry no signed-in user: document RAG embeddings,
-      # text-to-speech and speech-to-text. When that key stops resolving, those
-      # features fail with a
-      # generic invalid-key error that names no cause, and every visible surface
-      # (sign-in, the model picker, chat completions, which carry the user's own
-      # token) stays healthy. Two of the six demo capabilities go down with no
-      # symptom anyone would attribute to a credential.
+      # upstream calls that carry no signed-in user: text-to-speech and
+      # speech-to-text. (Document RAG embeddings were on that list until issue
+      # #1696 attached the searching user's own token to them.) When that key
+      # stops resolving, both fail with a generic invalid-key error that names
+      # no cause, while every visible surface stays healthy, sign-in and chat
+      # completions included, because those carry the user's own token. A demo
+      # capability goes down with no symptom anyone would attribute to a
+      # credential.
       #
       # edge-api probes the key at boot and every five minutes and logs the
       # verdict. That log line is not the signal: nothing reads it on a
@@ -151,5 +152,5 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "OWUI_SHIM_KEY does not resolve; chat document RAG, text-to-speech and speech-to-text are down"
-          description: "edge-api cannot resolve the Open WebUI shim key to an active, tenant-provisioned Hive API key allowed at least one model. Document RAG embeddings, text-to-speech and speech-to-text are failing right now with a generic invalid-key error, and nothing else on the chat surface looks wrong. The cause is in edge-api's log (`docker compose logs edge-api | grep 'owui:'`), which names whether the key is revoked, unmapped to a tenant, or allowed no models. Remedy for a revoked key: python3 scripts/seed-owui-e2e-user.py --account-slug <this deployment's account> --tenant-slug <its tenant> --env-file .env with OWUI_BASE_URL and OWUI_ADMIN_TOKEN set, then recreate open-webui."
+          summary: "OWUI_SHIM_KEY does not resolve; chat text-to-speech and speech-to-text are down"
+          description: "edge-api cannot resolve the Open WebUI shim key to an active, tenant-provisioned Hive API key allowed at least one model. Text-to-speech and speech-to-text are failing right now with a generic invalid-key error, and nothing else on the chat surface looks wrong. Document RAG is unaffected since issue #1696, which moved its embeddings onto the signed-in user's own token. The cause is in edge-api's log (`docker compose logs edge-api | grep 'owui:'`), which names whether the key is revoked, unmapped to a tenant, or allowed no models. Remedy for a revoked key: python3 scripts/seed-owui-e2e-user.py --account-slug <this deployment's account> --tenant-slug <its tenant> --env-file .env with OWUI_BASE_URL and OWUI_ADMIN_TOKEN set, then recreate open-webui."
