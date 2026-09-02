@@ -1,10 +1,4 @@
-import { CREDITS_PER_USD, formatCreditDigits } from "@/lib/format/credits";
-
-// Re-exported for the callers that have always imported the credit unit
-// from this module. It now lives in lib/format/credits.ts, next to the
-// balance formatter that needs it too, because importing this module from
-// there would be a cycle.
-export { CREDITS_PER_USD };
+import { formatCreditDigits } from "@/lib/format/credits";
 
 /**
  * Catalog prices are quoted in Hive credits per million metered tokens, and

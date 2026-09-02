@@ -159,18 +159,6 @@ export function formatPercent(
 }
 
 /**
- * One US dollar is one billion Hive credits (.wolf/decisions.md D-046,
- * migration 20260823_40_credit_unit_rescale_billion.sql).
- *
- * Nothing renders this. It is the conversion the PURCHASE flow needs, because
- * a customer buying credits is quoted a price in a currency they will actually
- * be charged (checkout-modal.tsx). Every balance, usage and spend surface
- * renders the credit quantity itself and no currency at all (D-070), so no
- * display formatter divides by this constant any more.
- */
-export const CREDITS_PER_USD = 1_000_000_000;
-
-/**
  * A credit quantity as digits, with no unit word.
  *
  * For the one place a pair of credit figures is read as a pair ("9,000 of

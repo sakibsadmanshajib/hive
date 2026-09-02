@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CREDITS_PER_USD,
   formatCreditAmount,
   formatCreditCount,
   formatCreditDigits,
@@ -170,7 +169,7 @@ describe("formatCreditAmount", () => {
     // to render "$99.99", from which a customer who had paid a known price for
     // a known credit grant could read the peg straight off.
     expect(formatCreditAmount(99_996_364_207)).toBe("99,996,364,207 credits");
-    expect(formatCreditAmount(CREDITS_PER_USD)).toBe("1,000,000,000 credits");
+    expect(formatCreditAmount(1_000_000_000)).toBe("1,000,000,000 credits");
   });
 
   it("never emits a currency mark, at any magnitude or sign", () => {

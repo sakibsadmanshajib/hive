@@ -23,7 +23,6 @@
 import { describe, expect, it } from "vitest";
 
 import { parseCreditLimitInput } from "@/lib/api-keys";
-import { CREDITS_PER_USD } from "@/lib/format/model-pricing";
 
 describe("parseCreditLimitInput", () => {
   it("takes a plain credit count exactly", () => {
@@ -35,9 +34,7 @@ describe("parseCreditLimitInput", () => {
   it("accepts grouping separators, because a real cap is a twelve-digit number", () => {
     expect(parseCreditLimitInput("10,000,000,000")).toBe(10_000_000_000);
     expect(parseCreditLimitInput("1,000")).toBe(1_000);
-    // Exactly the credit unit, which is the figure a customer converting an
-    // old dollar cap by hand is most likely to type.
-    expect(parseCreditLimitInput("1,000,000,000")).toBe(CREDITS_PER_USD);
+    expect(parseCreditLimitInput("1,000,000,000")).toBe(1_000_000_000);
   });
 
   it("refuses separators in positions that are not the canonical grouping", () => {
