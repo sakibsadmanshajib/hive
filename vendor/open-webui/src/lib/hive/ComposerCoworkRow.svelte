@@ -40,7 +40,10 @@
 	 * The durable record of the decision is not here. It is a line in the run's
 	 * own progress chain (coworkMode.inferredPackStep), which persists with the
 	 * conversation; this row is session scoped and only ever describes the last
-	 * submission.
+	 * submission. That is why it says "your last task" rather than "this one":
+	 * the store outlives a conversation switch, so a sentence that claimed to
+	 * be about the conversation on screen would be wrong the moment somebody
+	 * opened another one.
 	 */
 	import { getContext } from 'svelte';
 
@@ -60,7 +63,7 @@
 		</button>
 	{:else if $coworkLastPack}
 		<span class="hv-cowork-inference" data-hive-pack-inferred={$coworkLastPack}>
-			{$i18n.t('Hive read that as {{kind}}.', { kind: packLabel($coworkLastPack) })}
+			{$i18n.t('Hive read your last task as {{kind}}.', { kind: packLabel($coworkLastPack) })}
 		</span>
 		<button
 			type="button"

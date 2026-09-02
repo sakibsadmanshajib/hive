@@ -107,6 +107,19 @@ var sourceFilePattern = regexp.MustCompile(
 // Talmud" is a real title and "compile" alone already covers the request an
 // engineer would type). Leaving them out costs a correction on a rare coding
 // request; putting them in costs the default on a common knowledge one.
+//
+// "repo" and "repos" are absent for a sharper reason than ambiguity in
+// general: a repo is a repurchase agreement, and "the repo market" and "the
+// repo rate" are ordinary vocabulary in finance, which is one of the
+// verticals this product is sold into. The unambiguous long forms are here
+// instead, and the way an engineer actually shortens it, "the git repo",
+// needs no entry of its own because "git" already matches it.
+//
+// Known false positive, left in deliberately rather than papered over: a
+// hostname whose TLD is a code extension, ".sh" being the realistic one, is
+// read as a filename. A request naming a shell script is far commoner in this
+// product than one naming such a host, and the correction control exists for
+// the case where it is not.
 var codingTerms = []string{
 	"cargo",
 	"codebase",
@@ -137,8 +150,6 @@ var codingTerms = []string{
 	"refactoring",
 	"refactors",
 	"regression test",
-	"repo",
-	"repos",
 	"repositories",
 	"repository",
 	"segfault",

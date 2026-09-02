@@ -23,6 +23,11 @@ func TestInferPack_DefaultsToKnowledgeWorkWithoutCodingEvidence(t *testing.T) {
 		"Research the Bangladesh data localisation rules and write up what applies to us.",
 		"Turn these meeting notes into a project brief with owners and dates.",
 		"Read the contract and list every clause that mentions termination.",
+		// Finance is one of the verticals this product is sold into, and a
+		// repo there is a repurchase agreement. "repo" and "repos" are
+		// therefore not coding terms, however much they read like one.
+		"Explain how the repo market sets the overnight rate.",
+		"Summarise our exposure across the repos we rolled last quarter.",
 		// The exact string the visual proof for issue #1623 submits in its
 		// knowledge-work frame. Pinned here so the pack that capture shows is
 		// the one this function is mechanically held to, in CI, rather than a
@@ -44,6 +49,8 @@ func TestInferPack_PicksCodingOnPositiveEvidence(t *testing.T) {
 		"Find out why the test suite is red on the payments package.",
 		"Read the codebase and tell me where rate limiting is enforced.",
 		"Clone the repository and add a health check endpoint.",
+		// The unambiguous short form, which is how an engineer writes it.
+		"Clone the git repo and add a health check endpoint.",
 		"The build fails to compile after the dependency bump, work out why.",
 		"Run the linter over apps/edge-api and fix what it reports.",
 		"npm install is failing on a peer dependency, sort it out.",

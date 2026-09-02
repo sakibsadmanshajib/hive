@@ -36,8 +36,8 @@ type fakeClient struct {
 	// value is the empty one: an absent pack has to arrive at control-plane
 	// still absent, so the inference happens in exactly one place.
 	lastPack string
-	eventsFn      func(taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
-	filesFn       func(taskID uuid.UUID) ([]WorkspaceFile, error)
+	eventsFn func(taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
+	filesFn  func(taskID uuid.UUID) ([]WorkspaceFile, error)
 }
 
 func newFakeClient() *fakeClient {
