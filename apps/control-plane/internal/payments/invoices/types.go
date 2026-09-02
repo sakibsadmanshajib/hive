@@ -183,9 +183,15 @@ type Repository interface {
 	CreditRescaleAppliedAt(ctx context.Context) (time.Time, bool, error)
 
 	// ListPreRescale returns invoice rows whose period_end is at or before the
-	// supplied instant and which carry a credit quantity. `limit` bounds the
-	// result; zero or less means no bound.
-	ListPreRescale(ctx context.Context, appliedAt time.Time, limit int) ([]Invoice, error)
+	// supplied instant, which carry a credit quantity, and whose id sorts above
+	// afterID, ordered by id so the caller can page with the id it last saw.
+	// `limit` bounds one page; zero or less means no bound. uuid.Nil starts at
+	// the beginning.
+	//
+	// Paged rather than read whole because correcting a row does not remove it
+	// from this predicate, so neither re-reading from the start nor reading one
+	// page terminates over the whole set.
+	ListPreRescale(ctx context.Context, appliedAt time.Time, limit int, afterID uuid.UUID) ([]Invoice, error)
 
 	// UpdateRescaled writes a corrected credit quantity and the taka derived
 	// from it, guarded on the quantity the caller read, and reports whether a

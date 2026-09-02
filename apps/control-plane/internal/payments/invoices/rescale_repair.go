@@ -100,6 +100,8 @@ var errRowAlreadyAtLedgerScale = errors.New("invoices: row already agrees with i
 // ended before the credit unit rescale was applied, and the rescale happened
 // once, in the past. Rows in it that already agree with their ledger are
 // skipped without a write, which is what makes this safe to run on every boot.
+// The pass pages through all of it rather than one batch of it, so a set larger
+// than repairBatchLimit is finished by the same boot.
 func (s *Service) RepairPreRescaleInvoices(ctx context.Context) (int, error) {
 	boundary, ok, err := s.repo.CreditRescaleAppliedAt(ctx)
 	if err != nil {
@@ -122,45 +124,56 @@ func (s *Service) RepairPreRescaleInvoices(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	pending, err := s.repo.ListPreRescale(ctx, boundary, repairBatchLimit)
-	if err != nil {
-		return 0, fmt.Errorf("invoices: list pre-rescale invoices: %w", err)
-	}
-	if len(pending) == repairBatchLimit {
-		// Not a loop: a corrected row still matches the period predicate, so
-		// looping would re-select it forever. Say so instead; the live
-		// population is three rows and the historical set cannot grow.
-		s.logger.WarnContext(ctx, "invoice rescale repair: candidate batch came back full, some rows were not examined",
-			"limit", repairBatchLimit)
-	}
+	// Paged on the id the rows are ordered by, not on progress. A corrected row
+	// still matches the period predicate, so a progress-driven loop of the kind
+	// RepairUnconvertedInvoices uses would re-read the same first page forever
+	// here, and a single unpaged read would leave every row past the first page
+	// understated with nothing ever reaching it. The cursor advances strictly,
+	// so the pass sees every candidate exactly once and terminates whether a
+	// row was corrected, skipped or refused.
+	repaired, skipped, candidates := 0, 0, 0
+	cursor := uuid.Nil
+	for {
+		pending, err := s.repo.ListPreRescale(ctx, boundary, repairBatchLimit, cursor)
+		if err != nil {
+			return repaired, fmt.Errorf("invoices: list pre-rescale invoices: %w", err)
+		}
+		if len(pending) == 0 {
+			break
+		}
+		candidates += len(pending)
 
-	repaired, skipped := 0, 0
-	for _, inv := range pending {
-		switch err := s.repairPreRescaleOne(ctx, inv); {
-		case err == nil:
-			repaired++
-		case errors.Is(err, errRowAlreadyAtLedgerScale):
-			skipped++
-		case errors.Is(err, errRepairedConcurrently):
-			// Another writer corrected it between this pass's SELECT and its
-			// UPDATE. The row is right, this pass simply did not do it, and it
-			// is not a failure. Counted with the rows that needed nothing,
-			// which is what it now is.
-			skipped++
-		default:
-			s.logger.WarnContext(ctx, "invoice rescale repair: row failed",
-				"invoice_id", inv.ID,
-				"workspace_id", inv.WorkspaceID,
-				"period_start", inv.PeriodStart.Format("2006-01-02"),
-				"error", err,
-			)
+		for _, inv := range pending {
+			cursor = inv.ID
+			switch err := s.repairPreRescaleOne(ctx, inv); {
+			case err == nil:
+				repaired++
+			case errors.Is(err, errRowAlreadyAtLedgerScale):
+				skipped++
+			case errors.Is(err, errRepairedConcurrently):
+				// Another writer corrected it between this pass's SELECT and
+				// its UPDATE. The row is right, this pass simply did not do it,
+				// and it is not a failure. Counted with the rows that needed
+				// nothing, which is what it now is.
+				skipped++
+			default:
+				s.logger.WarnContext(ctx, "invoice rescale repair: row failed",
+					"invoice_id", inv.ID,
+					"workspace_id", inv.WorkspaceID,
+					"period_start", inv.PeriodStart.Format("2006-01-02"),
+					"error", err,
+				)
+			}
+		}
+		if len(pending) < repairBatchLimit {
+			break
 		}
 	}
 
-	if len(pending) > 0 {
+	if candidates > 0 {
 		s.logger.InfoContext(ctx, "invoice rescale repair: pass complete",
 			"rescale_applied_at", boundary.UTC().Format("2006-01-02T15:04:05Z07:00"),
-			"candidates", len(pending),
+			"candidates", candidates,
 			"invoices_repaired", repaired,
 			"already_correct", skipped,
 		)

@@ -1,8 +1,10 @@
 package invoices
 
 import (
+	"bytes"
 	"context"
 	"math/big"
+	"sort"
 	"testing"
 	"time"
 
@@ -75,18 +77,24 @@ func (f *fakeRepo) CreditRescaleAppliedAt(_ context.Context) (time.Time, bool, e
 	return f.rescaleAppliedAt, true, nil
 }
 
-func (f *fakeRepo) ListPreRescale(_ context.Context, boundary time.Time, limit int) ([]Invoice, error) {
+func (f *fakeRepo) ListPreRescale(_ context.Context, boundary time.Time, limit int, afterID uuid.UUID) ([]Invoice, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Ordered by id and cursored on it, exactly as the SQL is, so the fake
+	// cannot make a paging bug invisible by returning rows in map order.
 	var out []Invoice
 	for _, inv := range f.byID {
 		if inv.TotalCredits == nil || inv.PeriodEnd.After(boundary) {
 			continue
 		}
-		out = append(out, cloneInvoice(inv))
-		if limit > 0 && len(out) >= limit {
-			break
+		if bytes.Compare(inv.ID[:], afterID[:]) <= 0 {
+			continue
 		}
+		out = append(out, cloneInvoice(inv))
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].ID[:], out[j].ID[:]) < 0 })
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
@@ -491,5 +499,55 @@ func TestRepairPreRescaleInvoices_RefusesARowWithNoRate(t *testing.T) {
 	}
 	if repo.rescaleUpdates != 0 || len(storage.uploads) != 0 {
 		t.Fatalf("wrote %d rows and %d PDFs for a refused row", repo.rescaleUpdates, len(storage.uploads))
+	}
+}
+
+// TestRepairPreRescaleInvoices_CorrectsEveryCandidatePastTheFirstPage holds the
+// paging bound. Correcting a row does not remove it from the period predicate,
+// so a pass that re-read from the start would loop on the first page forever
+// and one that read a single page would leave everything past it understated,
+// silently and permanently.
+func TestRepairPreRescaleInvoices_CorrectsEveryCandidatePastTheFirstPage(t *testing.T) {
+	t.Parallel()
+
+	repo := newFakeRepo()
+	repo.rescaleAppliedAt = testRescaleBoundary
+	storage := newFakeStorage()
+
+	const candidates = repairBatchLimit + 3
+	ids := make([]uuid.UUID, 0, candidates)
+	for i := 0; i < candidates; i++ {
+		ws := uuid.New()
+		repo.seedLedger(ws, julyPeriod().Start, preRescaleLedgerCredits)
+		ids = append(ids, seedRepairedInvoice(t, repo, ws, julyPeriod(), preRescaleStoredCredits, 1).ID)
+	}
+
+	svc := NewService(repo, storage, &stubPDF{}, &fakeAccess{}, &fakeNamer{}, nil)
+	repaired, err := svc.RepairPreRescaleInvoices(context.Background())
+	if err != nil {
+		t.Fatalf("pass: %v", err)
+	}
+	if repaired != candidates {
+		t.Fatalf("repaired %d of %d candidates: rows past the first page of %d were never reached",
+			repaired, candidates, repairBatchLimit)
+	}
+	for _, id := range ids {
+		got, err := repo.GetByID(context.Background(), id)
+		if err != nil {
+			t.Fatalf("read back %s: %v", id, err)
+		}
+		if got.TotalCredits.Cmp(big.NewInt(preRescaleLedgerCredits)) != 0 {
+			t.Fatalf("row %s still holds %s credits", id, got.TotalCredits)
+		}
+	}
+
+	// And a second pass writes nothing, so paging did not reintroduce a rewrite.
+	second, err := svc.RepairPreRescaleInvoices(context.Background())
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if second != 0 || repo.rescaleUpdates != candidates {
+		t.Fatalf("second pass repaired %d rows and the fake saw %d writes, want 0 and %d",
+			second, repo.rescaleUpdates, candidates)
 	}
 }

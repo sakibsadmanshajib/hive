@@ -107,7 +107,7 @@ func TestRepairPreRescaleInvoices_Live(t *testing.T) {
 
 	// Sanity: the row is selectable by the period predicate before the pass,
 	// which is what makes its correction below mean something.
-	candidates, err := repo.ListPreRescale(ctx, boundary, 0)
+	candidates, err := repo.ListPreRescale(ctx, boundary, 0, uuid.Nil)
 	if err != nil {
 		t.Fatalf("list pre-rescale: %v", err)
 	}

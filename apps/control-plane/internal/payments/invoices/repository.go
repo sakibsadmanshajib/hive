@@ -432,13 +432,18 @@ func (r *pgxRepository) CreditRescaleAppliedAt(ctx context.Context) (time.Time, 
 // that pass still owns to that pass.
 //
 // This is a bounded historical set, not a growing one: the rescale happened
-// once, in the past, so no invoice generated from here on can enter it.
+// once, in the past, so no invoice generated from here on can enter it. It is
+// paged anyway, on `id > afterID` with the matching ORDER BY, because
+// correcting a row does not remove it from this predicate: a caller that
+// re-read from the start would re-read the same page forever, and one that read
+// a single page would never reach what is past it. uuid.Nil starts from the
+// beginning, since it sorts below every generated uuid.
 //
 // period_end is a date and the boundary is a timestamptz, so the comparison is
 // pinned to UTC rather than left to promote at whatever the session TimeZone
 // happens to be. Every period in this table starts and ends at UTC midnight,
 // which is what the cron writes, so this is the comparison the data means.
-func (r *pgxRepository) ListPreRescale(ctx context.Context, appliedAt time.Time, limit int) ([]Invoice, error) {
+func (r *pgxRepository) ListPreRescale(ctx context.Context, appliedAt time.Time, limit int, afterID uuid.UUID) ([]Invoice, error) {
 	sql := `
 		SELECT id, workspace_id, period_start, period_end,
 		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
@@ -446,11 +451,12 @@ func (r *pgxRepository) ListPreRescale(ctx context.Context, appliedAt time.Time,
 		FROM public.invoices
 		WHERE (period_end::timestamp AT TIME ZONE 'UTC') <= $1
 		  AND total_credits IS NOT NULL
-		ORDER BY period_start ASC, id ASC`
-	args := []any{appliedAt}
+		  AND id > $2
+		ORDER BY id ASC`
+	args := []any{appliedAt, afterID}
 	if limit > 0 {
 		sql += `
-		LIMIT $2`
+		LIMIT $3`
 		args = append(args, limit)
 	}
 	rows, err := r.pool.Query(ctx, sql, args...)
