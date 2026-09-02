@@ -1,0 +1,28 @@
+Capture run: issue #1745 invitation send cap (after)
+Console under test: http://localhost:3311 (next build + next start, this branch)
+Upstream: local proof stub on http://localhost:9311 for Supabase Auth and the
+control plane. No live tenant, no live credential, and no email is sent:
+the stub answers the invitation POST 201, then 429, then 503, with the
+two refusal bodies the control-plane handler produces.
+
+  GET /console/members status: 200
+  invite form present: 1
+
+1. Control: an invitation inside the cap is created and sent
+  POST /api/console/members status: 201
+  failure alert rendered: null
+  outcome notice: "We emailed an invitation to teammate@example.com. They join this workspace once they accept.Invitation linkCopyThis link is shown once. Whoever opens it joins the workspace as the invited address, and only that address, so treat it as private. Use New link on the row below to issue a fresh one, which retires this one."
+  outcome names the address: true
+  outcome claims a delivered email: true
+  screenshot: 01-invitation-sent.png
+
+2. The cap refuses, and the page says how long it lasts
+  POST /api/console/members status: 429
+  alert text: "invitation limit reached, try again in 5 minutes"
+  success notice cleared: 0
+  screenshot: 02-cap-refusal-with-wait.png
+
+3. The counter is unreachable, which is not the caller's quota
+  POST /api/console/members status: 503
+  alert text: "Invitations are temporarily unavailable. Please try again shortly."
+  screenshot: 03-counter-unavailable.png

@@ -30,7 +30,7 @@ func TestThrottledSenderRefusesWithoutReachingTheTransport(t *testing.T) {
 		}
 		budget--
 		return nil
-	})
+	}, nil)
 
 	msg := mailer.Message{To: "someone@example.com", Subject: "hi", Text: "hi"}
 	for i := 0; i < 2; i++ {
@@ -48,11 +48,29 @@ func TestThrottledSenderRefusesWithoutReachingTheTransport(t *testing.T) {
 	}
 }
 
+// Every window has to admit the send, not just the first. Without this a day
+// ceiling added beside an hour ceiling would be decorative: the hourly limiter
+// answers first and its verdict would stand for both.
+func TestThrottledSenderConsultsEveryWindow(t *testing.T) {
+	inner := &countingSender{}
+	hourly := func(context.Context, string) error { return nil }
+	daily := func(context.Context, string) error { return errors.New("day quota exhausted") }
+	sender := mailer.NewThrottledSender(inner, hourly, daily)
+
+	err := sender.Send(context.Background(), mailer.Message{To: "a@example.com", Text: "x"})
+	if !errors.Is(err, mailer.ErrThrottled) {
+		t.Fatalf("err = %v, want ErrThrottled from the second window", err)
+	}
+	if inner.calls != 0 {
+		t.Fatalf("transport ran %d times, want 0", inner.calls)
+	}
+}
+
 // A nil allow func is a transport with no ceiling, which is what every existing
 // construction of a plain sender is.
 func TestThrottledSenderWithoutLimiterIsATransparentPassThrough(t *testing.T) {
 	inner := &countingSender{}
-	sender := mailer.NewThrottledSender(inner, nil)
+	sender := mailer.NewThrottledSender(inner)
 	if err := sender.Send(context.Background(), mailer.Message{To: "a@example.com", Text: "x"}); err != nil {
 		t.Fatalf("send: %v", err)
 	}

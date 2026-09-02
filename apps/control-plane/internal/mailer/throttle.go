@@ -12,15 +12,25 @@ import (
 // did not go out so it can report that rather than a delivery it never made.
 var ErrThrottled = errors.New("mailer: send cap reached")
 
-// The transport-wide ceiling. It sits above every per-caller cap that exists
-// (a single inviter is bounded at 30 an hour, a workspace at 200 a day), so
-// reaching it means either several workspaces onboarding at once or a caller
-// with no cap of its own, and stopping is right in both cases. A constant
-// rather than an environment variable: an abuse ceiling with a runtime knob is
-// an abuse ceiling with a runtime off switch.
+// The transport-wide ceiling, in two windows.
+//
+// It sits above every per-caller cap that exists (a single inviter is bounded
+// at 30 an hour, a workspace at 200 a day), so reaching it means either several
+// workspaces onboarding at once or a caller with no cap of its own, and
+// stopping is right in both cases.
+//
+// The day window is not redundant with the hour: per-caller caps aggregate, so
+// four inviters each comfortably inside 30 an hour reach 120, and an hourly
+// ceiling alone would permit that rate all day. A relay account's allowance is
+// quoted per day, so the day is the window that has to hold.
+//
+// Constants rather than environment variables: an abuse ceiling with a runtime
+// knob is an abuse ceiling with a runtime off switch.
 const (
 	RelayCapPerWindow = 100
 	RelayCapWindow    = time.Hour
+	RelayCapPerDay    = 300
+	RelayCapDayWindow = 24 * time.Hour
 )
 
 // AllowFunc records one attempt against subject and reports whether it is
@@ -45,23 +55,27 @@ type AllowFunc func(ctx context.Context, subject string) error
 // own, and both are worth stopping.
 type ThrottledSender struct {
 	inner Sender
-	allow AllowFunc
+	allow []AllowFunc
 }
 
-// NewThrottledSender returns inner wrapped in the transport-wide ceiling.
-// A nil allow yields a transparent pass-through, which is what an unlimited
-// transport was before this existed.
-func NewThrottledSender(inner Sender, allow AllowFunc) *ThrottledSender {
+// NewThrottledSender returns inner wrapped in the transport-wide ceiling. Each
+// allow is one window over the same subject, and every one of them has to admit
+// the send. No allow (or only nil ones) yields a transparent pass-through,
+// which is what an unlimited transport was before this existed.
+func NewThrottledSender(inner Sender, allow ...AllowFunc) *ThrottledSender {
 	return &ThrottledSender{inner: inner, allow: allow}
 }
 
 // Send refuses before dialling anything when the ceiling is reached.
 func (t *ThrottledSender) Send(ctx context.Context, msg Message) error {
-	if t.allow != nil {
+	for _, allow := range t.allow {
+		if allow == nil {
+			continue
+		}
 		// One subject, because the ceiling counts this process's whole output.
 		// A per-recipient or per-caller key belongs to whoever knows those
 		// values, and the invitation path already carries both.
-		if err := t.allow(ctx, "relay"); err != nil {
+		if err := allow(ctx, "relay"); err != nil {
 			return fmt.Errorf("%w: %v", ErrThrottled, err)
 		}
 	}

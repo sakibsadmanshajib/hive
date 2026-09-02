@@ -438,20 +438,28 @@ func main() {
 						Window: window,
 					}
 				}
-				// The transport-wide ceiling, below the per-caller caps and
-				// counted across every future caller of this sender.
-				relayCeiling := signupguard.NewRateLimiter(
-					signupguard.NewRedisIncrementer(redisClient),
-					signupguard.RateLimitConfig{
-						Limit:     mailer.RelayCapPerWindow,
-						Window:    mailer.RelayCapWindow,
-						Namespace: "mail",
-						Subject:   "relay",
-					},
-				)
+				// The transport-wide ceiling, above the per-caller caps and
+				// counted across every future caller of this sender. Two
+				// windows, because per-caller caps aggregate: an hourly ceiling
+				// alone permits that same rate every hour of the day.
+				relayCeiling := func(limit int, window time.Duration, subject string) mailer.AllowFunc {
+					return signupguard.NewRateLimiter(
+						signupguard.NewRedisIncrementer(redisClient),
+						signupguard.RateLimitConfig{
+							Limit:     limit,
+							Window:    window,
+							Namespace: "mail",
+							Subject:   subject,
+						},
+					).Allow
+				}
 				accountsSvc = accountsSvc.
 					WithInvitationMailer(accounts.NewInvitationMailer(
-						mailer.NewThrottledSender(mailer.NewSMTPSender(mailCfg), relayCeiling.Allow),
+						mailer.NewThrottledSender(
+							mailer.NewSMTPSender(mailCfg),
+							relayCeiling(mailer.RelayCapPerWindow, mailer.RelayCapWindow, "relay"),
+							relayCeiling(mailer.RelayCapPerDay, mailer.RelayCapDayWindow, "relay-day"),
+						),
 						consoleURL,
 					)).
 					WithInvitationLimits(accounts.InvitationLimits{
@@ -468,9 +476,10 @@ func main() {
 							}
 						},
 					})
-				log.Printf("invitation mailer ready (relay %s, sender %s, cap %d/inviter/hour, %d/workspace/day, %d/relay/hour)",
+				log.Printf("invitation mailer ready (relay %s, sender %s, cap %d/inviter/hour, %d/workspace/day, %d/relay/hour, %d/relay/day)",
 					mailCfg.Host, mailCfg.FromAddress,
-					accounts.InviteCapPerInviter, accounts.InviteCapPerTenant, mailer.RelayCapPerWindow)
+					accounts.InviteCapPerInviter, accounts.InviteCapPerTenant,
+					mailer.RelayCapPerWindow, mailer.RelayCapPerDay)
 			} else {
 				log.Println("WARN invitation mailer disabled: no public console origin configured " +
 					"(set WEB_CONSOLE_PUBLIC_URL or CONSOLE_APP_URL); invitations are issued with a copyable link instead")
