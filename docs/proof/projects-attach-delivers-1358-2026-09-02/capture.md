@@ -2,8 +2,8 @@
 
 ## Substrate, stated plainly
 
-The chat image built from this branch (`hive-owui:proof-1358-final`, built by
-`deploy/docker/Dockerfile.open-webui` from commit `0d2e8c3`) running as a single
+The chat image built from this branch (`hive-owui:proof-1358-v3`, built by
+`deploy/docker/Dockerfile.open-webui` from the review-response commits) running as a single
 container on `http://127.0.0.1:13580`, with a fresh database and no prior state.
 
 It is not the deployed box, because the deployed box serves `main` and this
@@ -60,12 +60,13 @@ endpoints the Projects surface itself calls, then the capture uses the surface:
 the project page's own **New chat** button.
 
 ```
-project id=9474f5b0-303e-4d9e-be1b-5f8b554ca0ab
+project id=f6aab089-94d1-4134-89d8-6533089c3e42
 document uploaded processing={"status":"completed"}
 document attached to project http=200
-New chat landed on /c/6b4ad54b-f2ac-424b-b372-66c92065fe07
+New chat landed on /?project=f6aab089-94d1-4134-89d8-6533089c3e42
+conversation url after the first message: /c/79ca0e19-7f3b-4fcc-87a3-ff2968d7b81e
 bound answer contains BRACKEN-7741-QX: true
-/api/chat/completions model=dots-studio/dots-3-note-preview:free files=[{"type":"collection","id":"9474f5b0-303e-4d9e-be1b-5f8b554ca0ab"}]
+/api/chat/completions model=dots-studio/dots-3-note-preview:free files=[{"type":"collection","id":"f6aab089-94d1-4134-89d8-6533089c3e42"}]
 ```
 
 The conversation renders "Retrieved 1 source", answers "The rack asset tag of
@@ -74,24 +75,44 @@ the Hive demo box is BRACKEN-7741-QX", and carries a citation chip naming
 
 Frames: `01-project-with-file.png`, `02-bound-chat-answer.png`.
 
-## What the two `files` lines are, and why they are the load bearing evidence
+## Title generation is ON in this capture, and that is the point
 
-The screenshots show the outcome. The two lines above show the mechanism, read
-off the outgoing request rather than inferred from it:
+The first capture of this change ran with `ENABLE_TITLE_GENERATION=false`, which
+made it structurally incapable of showing the defect an independent review then
+found: pre creating the chat on the project page made the first request carry a
+`chat_id`, the backend dropped the title and tag tasks for it
+(`is_new_chat`, `main.py:1096`), and every conversation in a project would have
+been called "New Chat" forever. A capture configured with the relevant feature
+disabled proves that feature's absence, not its correctness.
 
-* control, no project: `files=null`, which is the state every conversation in a
-  project was in before this change, marker or no marker;
-* in the project: `files=[{"type":"collection","id":"<the project>"}]`, put
-  there by `withProjectFiles` at the request assembly in `sendMessageSocket`.
+So this run leaves title generation at its default, on:
 
-A conversation created inside a project also opens at all now, which it did not
-before: `/chats/new` stored the marker alone, and `loadChat` then called
-`convertMessagesToHistory(undefined)` and threw before the page rendered.
+```
+generated conversation title: What is the rack asset tag of ... • Open WebUI
+title is still the placeholder: false
+stored chat: title="What is the rack asset tag of the Hive demo box?" hiveProject=f6aab089-94d1-4134-89d8-6533089c3e42
+project page conversation rows after the first message: ["rack-register.txt Remove","What is the rack asset tag of the Hive demo box? Unlink"]
+```
+
+Both halves matter: the conversation has a real title, and the binding survived
+onto the stored chat, so the project's own list shows it under that title rather
+than as a row of identical "New Chat" entries.
+
+Frame: `04-project-conversation-titled.png`.
+
+## What this capture still cannot show
+
+`WEBUI_AUTH=false`, so there is one identity and the retrieval denial path is
+never exercised here. This capture is therefore not evidence that a member
+cannot reach another member's collection. That claim was verified separately by
+an independent security review reading `get_sources_from_items` and
+`filter_accessible_collections` in the backend, and it is recorded on the pull
+request rather than asserted from these frames.
 
 ## Reproduction
 
 ```bash
-docker build -f deploy/docker/Dockerfile.open-webui -t hive-owui:proof-1358-final .
+docker build -f deploy/docker/Dockerfile.open-webui -t hive-owui:proof-1358-v3 .
 docker run -d --name owui1358 -p 13580:8080 \
   -e WEBUI_AUTH=false -e ENABLE_OLLAMA_API=false -e ENABLE_OPENAI_API=true \
   -e OPENAI_API_BASE_URLS="https://openrouter.ai/api/v1" -e OPENAI_API_KEYS="<key>" \
@@ -99,10 +120,11 @@ docker run -d --name owui1358 -p 13580:8080 \
   -e RAG_EMBEDDING_ENGINE=openai \
   -e RAG_OPENAI_API_BASE_URL="https://openrouter.ai/api/v1" -e RAG_OPENAI_API_KEY="<key>" \
   -e RAG_EMBEDDING_MODEL="nvidia/llama-nemotron-embed-vl-1b-v2:free" \
-  -e RAG_TOP_K=5 -e WEBUI_SECRET_KEY=<secret> -e ENABLE_TITLE_GENERATION=false \
-  hive-owui:proof-1358-final
+  -e RAG_TOP_K=5 -e WEBUI_SECRET_KEY=<secret> \
+  hive-owui:proof-1358-v3
 # then drive the capture: control turn, create project, attach document,
-# New chat, ask, read the intercepted request bodies
+# New chat, ask, read the intercepted request bodies, then reopen the project
+# page and read the conversation row's title
 ```
 
 ## Unit guard
@@ -114,9 +136,9 @@ leaving a green suite over a dead feature.
 
 ```
 $ sh scripts/test-owui-hive-frontend.sh
- ✓ lib/hive/projects/projects.test.ts (21 tests)
+ ✓ lib/hive/projects/projects.test.ts (23 tests)
  Test Files  25 passed (25)
-      Tests  382 passed (382)
+      Tests  384 passed (384)
 ```
 
 ## Full log

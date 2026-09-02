@@ -1,18 +1,23 @@
 landed on http://127.0.0.1:13580/
 no credential appears in any URL below: this instance runs with WEBUI_AUTH=false
-control conversation answer: Thought for 1 seconds I'll search for information about the Hive demo box's rack asset tag. Explored 6 query_knowledge_files, search_knowledge_files, list_knowledge_bases, 2 search_chats I've searched through the available knowledge bases and previous chat conversations, but I couldn't find any information about a "Hive demo box" or its rack asset tag. The searches returned empty results, suggesti
+control conversation answer: Thought for less than a second I'll search for information about the Hive demo box and its rack asset tag. Explored 6 search_knowledge_files, query_knowledge_files, 3 search_chats, list_knowledge_bases I couldn't find any information about the Hive demo box or its rack asset tag in your accessible knowledge bases or previous conversations. The information doesn't appear to be stored in any of the 
 control answer contains BRACKEN-7741-QX: false
 captured 03-control-chat-answer.png
-project id=9474f5b0-303e-4d9e-be1b-5f8b554ca0ab
-document uploaded id=22c12389-fc99-4961-ba1e-55ace7fd5931 processing={"status":"completed"}
+project id=f6aab089-94d1-4134-89d8-6533089c3e42
+document uploaded id=e0b55f98-bf40-427d-9798-a33db3a6df39 processing={"status":"completed"}
 document attached to project http=200
 the document is the only place the string BRACKEN-7741-QX exists
 captured 01-project-with-file.png
-New chat landed on /c/6b4ad54b-f2ac-424b-b372-66c92065fe07
+New chat landed on /?project=f6aab089-94d1-4134-89d8-6533089c3e42
+conversation url after the first message: /c/79ca0e19-7f3b-4fcc-87a3-ff2968d7b81e
 bound conversation answer: Retrieved 1 source Thought for less than a second The rack asset tag of the Hive demo box is BRACKEN-7741-QX rack-register.txt. Ask Explain 1 Source
 bound answer contains BRACKEN-7741-QX: true
+generated conversation title: What is the rack asset tag of ... • Open WebUI
+title is still the placeholder: false
+stored chat: title="What is the rack asset tag of the Hive demo box?" hiveProject=f6aab089-94d1-4134-89d8-6533089c3e42
 captured 02-bound-chat-answer.png
 
 files field on each outgoing completion request, in order:
   /api/chat/completions model=dots-studio/dots-3-note-preview:free files=null
-  /api/chat/completions model=dots-studio/dots-3-note-preview:free files=[{"type":"collection","id":"9474f5b0-303e-4d9e-be1b-5f8b554ca0ab"}]
+  /api/chat/completions model=dots-studio/dots-3-note-preview:free files=[{"type":"collection","id":"f6aab089-94d1-4134-89d8-6533089c3e42"}]
+project page conversation rows after the first message: ["rack-register.txt Remove","What is the rack asset tag of the Hive demo box? Unlink"]

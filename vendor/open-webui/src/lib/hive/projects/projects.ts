@@ -308,9 +308,18 @@ export interface ChatRequestFile {
  * backend/open_webui/retrieval/utils.py resolves it to the collection's files
  * and applies the caller's read access check before any of them are searched.
  * A project IS a collection on this backend, per the header above, so binding
- * needs no new retrieval path and no new permission: this is byte for byte the
- * item the composer's plus menu produces when the same project is attached by
- * hand, and it therefore reaches exactly the same documents and no others.
+ * needs no new retrieval path and no new permission: this is the same item the
+ * composer's plus menu produces when the same project is attached by hand,
+ * minus every optional key, so it reaches the same documents and no others.
+ *
+ * Minus every optional key is the load bearing half, not a detail. That
+ * function reads `context`, `legacy` and `collection_names` off the item and
+ * each one selects a weaker branch: `context: 'full'` reads every file's
+ * content directly and never reaches `filter_accessible_collections` at all,
+ * and `legacy` admits a client supplied `collection_names` list. Emitting two
+ * keys forfeits all three and takes the single strictest path,
+ * `collection_names.append(item['id'])` followed by that choke point. Do not
+ * add a key here without re-reading which branch it opens.
  *
  * A reference rather than a list of file ids, deliberately. The claim the
  * project page makes is that its files reach EVERY conversation in the
@@ -366,77 +375,6 @@ export const bindChatToProject = async (
 		fetchImpl
 	);
 	return true;
-};
-
-/**
- * The models a conversation created inside a project is born with.
- *
- * A chat created with no models loads with none selected and cannot be sent,
- * because Chat.svelte's `loadChat` takes the models off the stored blob and,
- * unlike `initNewChat`, has no default to fall back on. The precedence below
- * is `initNewChat`'s own: whatever the composer last used, then the person's
- * setting, then the deployment's default, then, so the conversation can never
- * be born unusable, the first model the person can actually see.
- */
-export const seedChatModels = (
-	available: string[],
-	sessionModels: unknown,
-	settingsModels: unknown,
-	configDefaultModels: string | null | undefined
-): string[] => {
-	const offered = new Set(available);
-	const candidates: unknown[] = [
-		sessionModels,
-		settingsModels,
-		(configDefaultModels ?? '').split(',').map((id) => id.trim())
-	];
-	for (const list of candidates) {
-		if (!Array.isArray(list)) continue;
-		const usable = list.filter((id): id is string => typeof id === 'string' && offered.has(id));
-		if (usable.length > 0) return usable;
-	}
-	return available.slice(0, 1);
-};
-
-/**
- * Create a conversation already bound to the project.
- *
- * The blob carries an empty but well formed conversation rather than the
- * marker alone. `/chats/new` stores what it is given verbatim, and a blob with
- * no `history` and no `messages` makes `loadChat` call
- * `convertMessagesToHistory(undefined)`, which throws before the page renders:
- * the conversation this button creates could not be opened at all, so the
- * files it is supposed to receive could never have been observed arriving.
- */
-export const createBoundChat = async (
-	token: string,
-	projectId: string,
-	models: string[] = [],
-	apiBase: string = DEFAULT_API_BASE,
-	fetchImpl: typeof fetch = fetch
-): Promise<{ id: string }> => {
-	const chat = await requestJson<{ id: string }>(
-		'/chats/new',
-		{
-			method: 'POST',
-			headers: headers(token),
-			body: JSON.stringify({
-				chat: {
-					[PROJECT_CHAT_KEY]: projectId,
-					models,
-					params: {},
-					history: { messages: {}, currentId: null },
-					messages: [],
-					tags: [],
-					timestamp: Date.now()
-				},
-				folder_id: null
-			})
-		},
-		apiBase,
-		fetchImpl
-	);
-	return { id: chat.id };
 };
 
 /**

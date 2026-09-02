@@ -126,7 +126,11 @@
 		settleRunSteps,
 		type RunStep
 	} from '$lib/hive/coworkMode';
-	import { PROJECT_CHAT_KEY, withProjectFiles } from '$lib/hive/projects/projects';
+	import {
+		PROJECT_CHAT_KEY,
+		bindChatToProject,
+		withProjectFiles
+	} from '$lib/hive/projects/projects';
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
@@ -1555,6 +1559,16 @@
 		params = {};
 		taskIds = null;
 		chatTasks = [];
+
+		// A conversation started from a project carries its binding on the URL
+		// and writes it into the chat when the chat is created (#1358). The chat
+		// is deliberately not created up front: doing that makes the request
+		// carry a chat_id, and the backend then drops title and tag generation
+		// (is_new_chat in main.py), so every conversation in a project would
+		// stay titled New Chat forever.
+		if ($page.url.searchParams.get('project')) {
+			hiveProjectId = $page.url.searchParams.get('project');
+		}
 
 		if ($page.url.searchParams.get('youtube')) {
 			await uploadWeb(`https://www.youtube.com/watch?v=${$page.url.searchParams.get('youtube')}`);
@@ -3080,6 +3094,19 @@
 							await updateChatById(localStorage.token, res.chat_id, {
 								params: params
 							});
+						}
+
+						// hive (#1358): the project this conversation was started
+						// from, for the same reason as params above. The backend
+						// creates the chat row from the completion request and
+						// never sees the binding, so it is written here, once, on
+						// the request that created the chat. The chat is
+						// deliberately not pre created on the project page: a chat
+						// that already exists makes the first request carry a
+						// chat_id, and the backend then skips title and tag
+						// generation for it forever (is_new_chat, main.py).
+						if (hiveProjectId) {
+							await bindChatToProject(localStorage.token, res.chat_id, hiveProjectId);
 						}
 					}
 				}

@@ -6,15 +6,16 @@
 	 * Hive authored; storage seam documented in ./projects.ts. Files are the
 	 * knowledge collection's files, so anything attached here is exactly what
 	 * RAG retrieval pulls in for work against this project. Conversations carry
-	 * their binding inside their own persisted blob (`hiveProject`), which is
-	 * why "New chat" creates the chat with the marker already written and
-	 * "Link existing" writes it after the fact through the same merge.
+	 * their binding inside their own persisted blob (`hiveProject`). "New chat"
+	 * hands the marker to the composer on the URL and the composer writes it
+	 * when it creates the chat; "Link existing" writes it after the fact
+	 * through the same merge.
 	 */
 	import { getContext, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import { WEBUI_NAME, config, models, settings } from '$lib/stores';
+	import { WEBUI_NAME } from '$lib/stores';
 	import { uploadFile } from '$lib/apis/files';
 	import { getChatList } from '$lib/apis/chats';
 
@@ -23,8 +24,6 @@
 		ProjectError,
 		addFileToProject,
 		bindChatToProject,
-		createBoundChat,
-		seedChatModels,
 		deleteProject,
 		getProject,
 		removeFileFromProject,
@@ -181,34 +180,14 @@
 
 	const startNewChat = async () => {
 		if (busy) return;
-		busy = true;
-		error = '';
-		try {
-			// Born with a model, like any other new conversation: loadChat reads
-			// the models off the blob and has no default of its own, so a chat
-			// created without them opens with none selected and cannot be sent.
-			let sessionModels: unknown = null;
-			try {
-				sessionModels = JSON.parse(sessionStorage.selectedModels ?? 'null');
-			} catch {
-				sessionModels = null;
-			}
-			const chat = await createBoundChat(
-				token,
-				id,
-				seedChatModels(
-					($models ?? []).map((model) => model.id),
-					sessionModels,
-					$settings?.models,
-					$config?.default_models
-				)
-			);
-			await goto(`/c/${chat.id}`);
-		} catch (err) {
-			error =
-				err instanceof ProjectError ? err.message : $i18n.t('The conversation could not be created.');
-			busy = false;
-		}
+		// Not created here. The composer creates it on the first message, the
+		// way every other conversation is created, and picks the binding up off
+		// the URL; a chat pre created here would carry a chat_id on its first
+		// request and the backend would then skip title and tag generation for
+		// it forever (#1358). The conversation therefore appears in the list
+		// below once it has a first message rather than immediately, which also
+		// stops an abandoned one leaving a permanent empty row.
+		await goto(`/?project=${encodeURIComponent(id)}`);
 	};
 
 	const openLinkPicker = async () => {

@@ -9,9 +9,7 @@ import {
 	ProjectError,
 	addFileToProject,
 	bindChatToProject,
-	createBoundChat,
 	createProject,
-	seedChatModels,
 	deleteProject,
 	getProject,
 	listProjects,
@@ -180,44 +178,6 @@ describe('projects data layer', () => {
 		expect(seen[1].body).toEqual({ chat: { [PROJECT_CHAT_KEY]: null } });
 	});
 
-	it('creates a chat already bound at birth via chats/new', async () => {
-		let body: Record<string, unknown> = {};
-		const fetchImpl = (async (_i: RequestInfo | URL, init: RequestInit = {}) => {
-			body = JSON.parse(String(init.body ?? '{}'));
-			return json({ id: 'c-new' });
-		}) as unknown as typeof fetch;
-
-		const chat = await createBoundChat('tok', 'k1', ['m1'], '/api/v1', fetchImpl);
-		expect(chat.id).toBe('c-new');
-		const blob = body.chat as Record<string, unknown>;
-		expect(blob[PROJECT_CHAT_KEY]).toBe('k1');
-		// An empty but well formed conversation, not the marker alone: a blob
-		// with no history makes loadChat call convertMessagesToHistory(undefined),
-		// which throws before the page renders, so the conversation this button
-		// creates could not be opened at all.
-		expect(blob.history).toEqual({ messages: {}, currentId: null });
-		expect(blob.messages).toEqual([]);
-		// And born with a model, because loadChat has no default to fall back on.
-		expect(blob.models).toEqual(['m1']);
-	});
-
-	it('picks the models a new conversation is born with the way a new chat does', () => {
-		const available = ['a', 'b', 'c'];
-		// Whatever the composer last used wins.
-		expect(seedChatModels(available, ['b'], ['a'], 'c')).toEqual(['b']);
-		// Then the person's own setting.
-		expect(seedChatModels(available, null, ['a'], 'c')).toEqual(['a']);
-		// Then the deployment default, comma separated as config carries it.
-		expect(seedChatModels(available, null, null, ' c , missing ')).toEqual(['c']);
-		// A stale name the person can no longer see is skipped, not seeded.
-		expect(seedChatModels(available, ['retired'], ['b'], 'c')).toEqual(['b']);
-		// Last resort is the first model they can see, so the conversation is
-		// never born unusable.
-		expect(seedChatModels(available, null, null, null)).toEqual(['a']);
-		// And with nothing at all to offer, an empty list rather than a throw.
-		expect(seedChatModels([], null, null, null)).toEqual([]);
-	});
-
 	it('resolves bound conversations by scanning the chat list and reading blobs', async () => {
 		const chatsById: Record<string, unknown> = {
 			c1: { id: 'c1', title: 'T1', chat: { [PROJECT_CHAT_KEY]: 'k1' }, updated_at: 10 },
@@ -339,9 +299,29 @@ describe('a project bound chat carries the project scope into its request', () =
 });
 
 describe('Chat.svelte actually reads the binding it is handed', () => {
-	it('loads the project marker off the chat blob and clears it on a new chat', () => {
+	it('takes the binding off the URL when a conversation is started from a project', () => {
+		// The project page navigates rather than pre creating the chat: a chat
+		// that already exists makes the first request carry a chat_id, and the
+		// backend then drops title and tag generation for it forever, so every
+		// conversation in a project would stay called New Chat.
+		const init = chatSource.slice(chatSource.indexOf('const initNewChat = async'));
+		expect(init).toContain("hiveProjectId = $page.url.searchParams.get('project')");
+	});
+
+	it('writes the binding once the backend has told it the new chat id', () => {
+		// The chat row is created server side from the completion request, which
+		// never carries the binding, so it is written on the same branch that
+		// already persists chat level params for exactly that reason.
+		const branch = chatSource.slice(chatSource.indexOf('if (res.chat_id && $chatId !== res.chat_id'));
+		expect(branch).toContain('bindChatToProject(localStorage.token, res.chat_id, hiveProjectId)');
+		const params = branch.indexOf('params: params');
+		const bind = branch.indexOf('bindChatToProject');
+		expect(params).toBeGreaterThan(-1);
+		expect(bind).toBeGreaterThan(params);
+	});
+
+	it('loads the project marker off the chat blob of an existing conversation', () => {
 		expect(chatSource).toContain('hiveProjectId = chatContent?.[PROJECT_CHAT_KEY] ?? null');
-		expect(chatSource).toContain('hiveProjectId = null');
 	});
 
 	it('clears the binding before the next chat is read, not only where it is set', () => {
@@ -352,11 +332,28 @@ describe('Chat.svelte actually reads the binding it is handed', () => {
 		expect(load.slice(0, load.indexOf('const chatContent'))).toContain('hiveProjectId = null');
 	});
 
-	it('resolves the binding at request assembly, where every entry point passes', () => {
+	it('resolves the binding at request assembly, after the prune that would undo it', () => {
 		// sendMessageSocket is the one function submitPrompt, regeneration and
-		// continue all reach, and `files` is the field it puts on the wire. A
-		// call anywhere earlier would be pruned away again.
+		// continue all reach, and `files` is the field it puts on the wire.
+		// Ordering is the whole fix: the prune drops any chat level file no
+		// message references, so an attachment added before it is deleted again.
 		const assembly = chatSource.slice(chatSource.indexOf('const sendMessageSocket'));
-		expect(assembly).toContain('files = withProjectFiles(files, hiveProjectId)');
+		const pruned = assembly.indexOf('chatFiles = chatFiles.filter');
+		const attach = assembly.indexOf('files = withProjectFiles(files, hiveProjectId)');
+		expect(pruned).toBeGreaterThan(-1);
+		expect(attach).toBeGreaterThan(pruned);
+	});
+});
+
+describe('the project page hands the binding over rather than pre creating a chat', () => {
+	const detail = readFileSync(resolve(here, './ProjectDetail.svelte'), 'utf8');
+
+	it('navigates to the composer with the project on the query string', () => {
+		expect(detail).toContain('goto(`/?project=${encodeURIComponent(id)}`)');
+	});
+
+	it('has no second chat creation path of its own left to drift', () => {
+		expect(detail).not.toContain('createBoundChat');
+		expect(detail).not.toContain('seedChatModels');
 	});
 });
