@@ -395,17 +395,35 @@ const SCENARIOS = [
       }
       log(`the sandbox workspace holds ${name} carrying ${code}`);
 
-      // The Working folder panel's own data, read through the customer route
-      // rather than off disk, so the panel and the file agree.
-      const listed = await page.evaluate(
-        async ({ id, auth }) => {
-          const res = await fetch(`/v1/agent/tasks/${id}/files`, {
-            headers: { Accept: "application/json", ...(auth ? { Authorization: auth } : {}) },
-          });
-          return { status: res.status, body: await res.text() };
-        },
-        { id: created.id, auth: bearer },
-      );
+      /*
+       * The Working folder panel's own data, read through the customer route
+       * rather than off disk, so the panel and the file agree.
+       *
+       * Only after the row reaches Running, and then polled. The listing is
+       * served from the launcher's live session registry, which the task's
+       * engine_session_ref reaches the database ahead of; asked a second
+       * after create, while the row is still queued, it correctly answers an
+       * empty list because there is no session to list yet. Reading that as
+       * "the file is missing" is the mistake this comment exists to stop the
+       * next person repeating.
+       */
+      await waitForRowStatus(page, instructions, "Running", 300_000);
+      const readListing = () =>
+        page.evaluate(
+          async ({ id, auth }) => {
+            const res = await fetch(`/v1/agent/tasks/${id}/files`, {
+              headers: { Accept: "application/json", ...(auth ? { Authorization: auth } : {}) },
+            });
+            return { status: res.status, body: await res.text() };
+          },
+          { id: created.id, auth: bearer },
+        );
+      const listingDeadline = Date.now() + 120_000;
+      let listed = await readListing();
+      while (!listed.body.includes(name) && Date.now() < listingDeadline) {
+        await new Promise((r) => setTimeout(r, 2000));
+        listed = await readListing();
+      }
       log(`GET /v1/agent/tasks/{id}/files answered HTTP ${listed.status}: ${listed.body.slice(0, 400)}`);
       if (!listed.body.includes(name)) {
         throw new Error(`the working folder listing does not name ${name}: ${listed.body}`);
