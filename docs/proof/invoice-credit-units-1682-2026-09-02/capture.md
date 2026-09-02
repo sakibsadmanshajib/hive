@@ -48,7 +48,9 @@ Screenshot: `proof-01-console-before.png`.
 The figure the owner actually saw, 5,246,533.38 taka, came from the old row
 rendered by the old surface. It is evidenced in section 4 below, where the
 stored value is read straight out of Postgres, rather than re-staged here: the
-column that produced it no longer exists on any build of this branch.
+table column that held it, `public.invoices.total_bdt_subunits`, is still there
+and now holds the corrected taka amount, but no customer-facing surface on this
+branch renders it, so there is nowhere left to photograph the old figure.
 
 ## 2. After the repair, the same page
 

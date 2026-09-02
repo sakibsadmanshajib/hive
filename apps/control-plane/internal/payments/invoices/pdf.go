@@ -70,10 +70,30 @@ func renderInvoice(inv Invoice, workspaceName string) ([]byte, string, error) {
 	pdf.SetMargins(15, 18, 15)
 	pdf.AddPage()
 
-	// textBuf collects every customer-visible string drawn into the PDF.
-	// At the end of Render we assertNoFXLeak over its concatenation.
-	var textBuf strings.Builder
+	// Two buffers, because the two tripwires have different jurisdictions.
+	//
+	// textBuf collects every customer-visible string drawn into the PDF, and
+	// assertNoFXLeak runs over all of it: a USD token must not reach the page
+	// from any source, which is why sanitize scrubs it out of customer metadata
+	// first.
+	//
+	// ownBuf collects only the strings this renderer composes itself: labels,
+	// headings and amounts. assertNoFiatAmount runs over that alone, because it
+	// guards what THIS CODE prints and not what an account happens to be
+	// called. Running it over the whole page would make "Taka Labs" a name the
+	// product cannot render, and scrubbing the name to avoid that would print
+	// "[redacted] Labs" to a customer whose only mistake was the word.
+	var textBuf, ownBuf strings.Builder
 	emit := func(txt string) {
+		textBuf.WriteString(txt)
+		textBuf.WriteByte('\n')
+		ownBuf.WriteString(txt)
+		ownBuf.WriteByte('\n')
+	}
+	// emitMetadata records a customer-controlled string: a workspace name or a
+	// model id out of the catalog. It reaches the FX guard and not the fiat
+	// guard.
+	emitMetadata := func(txt string) {
 		textBuf.WriteString(txt)
 		textBuf.WriteByte('\n')
 	}
@@ -94,7 +114,7 @@ func renderInvoice(inv Invoice, workspaceName string) ([]byte, string, error) {
 	pdf.Ln(2)
 	t := fmt.Sprintf("Workspace: %s", sanitize(workspaceName))
 	pdf.CellFormat(0, 6, t, "", 1, "L", false, 0, "")
-	emit(t)
+	emitMetadata(t)
 	t = fmt.Sprintf("Period: %s -- %s",
 		inv.PeriodStart.Format("2006-01-02"),
 		inv.PeriodEnd.Format("2006-01-02"),
@@ -135,7 +155,7 @@ func renderInvoice(inv Invoice, workspaceName string) ([]byte, string, error) {
 		pdf.CellFormat(100, 7, modelLabel, "1", 0, "L", false, 0, "")
 		pdf.CellFormat(30, 7, reqCount, "1", 0, "R", false, 0, "")
 		pdf.CellFormat(50, 7, credits, "1", 1, "R", false, 0, "")
-		emit(modelLabel)
+		emitMetadata(modelLabel)
 		emit(reqCount)
 		emit(credits)
 	}
@@ -178,7 +198,7 @@ func renderInvoice(inv Invoice, workspaceName string) ([]byte, string, error) {
 	if err := assertNoFXLeak([]byte(text)); err != nil {
 		return nil, "", err
 	}
-	if err := assertNoFiatAmount(text); err != nil {
+	if err := assertNoFiatAmount(ownBuf.String()); err != nil {
 		return nil, "", err
 	}
 
@@ -264,8 +284,10 @@ var fxTripwireTokens = []string{
 	"exchange",
 }
 
-// fiatTripwireTokens lists the currency markers that must not appear on a usage
-// statement. Owner ruling, 2026-09-02: this document is a prepaid draw down and
+// fiatTripwireTokens lists the currency markers this renderer must not itself
+// print on a usage statement. It is checked against the text the renderer
+// composes, never against customer metadata; see the two buffers in
+// renderInvoice. Owner ruling, 2026-09-02: this document is a prepaid draw down and
 // raises no charge, and converting the credit quantity into money at the
 // internal peg would disclose the internal value of a subscription's credit
 // grant, which is confidential. A fiat figure belongs on a purchase invoice,
@@ -303,10 +325,11 @@ func assertNoFXLeak(raw []byte) error {
 func sanitize(in string) string {
 	out := in
 	lower := strings.ToLower(out)
-	// Both token sets, because a workspace legitimately named "Taka Labs" would
-	// otherwise trip assertNoFiatAmount and fail the render for that account
-	// alone, which is a fail-closed refusal for entirely the wrong reason.
-	for _, token := range append(append([]string{}, fxTripwireTokens...), fiatTripwireTokens...) {
+	// FX tokens only. The fiat markers deliberately do NOT belong here: they
+	// guard what this renderer prints, and a workspace named "Taka Labs" is not
+	// this renderer pricing anything. Redacting them out of a customer's own
+	// name would mangle it to no purpose.
+	for _, token := range fxTripwireTokens {
 		if token == "$" {
 			out = strings.ReplaceAll(out, "$", "[symbol]")
 			lower = strings.ToLower(out)

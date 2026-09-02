@@ -158,19 +158,44 @@ func TestRender_RefusesAFiatMarkerFromAnyFutureEdit(t *testing.T) {
 	}
 }
 
-// TestSanitize_KeepsAFiatNamedWorkspaceRenderable stops the guard above from
-// failing an account for its own name. A workspace called "Taka Labs" must
-// still get a statement.
-func TestSanitize_KeepsAFiatNamedWorkspaceRenderable(t *testing.T) {
+// TestRender_LeavesACurrencyNamedWorkspaceAlone keeps the fiat guard inside its
+// own jurisdiction. It exists to stop THIS RENDERER pricing a credit quantity;
+// an account called "Taka Labs" is not this renderer pricing anything, so the
+// name must reach the page whole, neither refused nor redacted.
+func TestRender_LeavesACurrencyNamedWorkspaceAlone(t *testing.T) {
 	t.Parallel()
 
-	inv := creditFixtureInvoice()
-	text, err := renderInvoiceText(inv, "Taka Labs BDT Division")
+	const name = "Taka Labs BDT Division"
+	text, err := renderInvoiceText(creditFixtureInvoice(), name)
 	if err != nil {
 		t.Fatalf("render refused a workspace named after a currency: %v", err)
 	}
+	if !strings.Contains(text, name) {
+		t.Fatalf("workspace name was mangled; want %q in:\n%s", name, text)
+	}
+	if strings.Contains(text, "[redacted]") {
+		t.Fatalf("workspace name was redacted for containing a currency word:\n%s", text)
+	}
 	if !strings.Contains(text, "524,653,338") {
-		t.Fatalf("credit quantity missing after sanitising the workspace name:\n%s", text)
+		t.Fatalf("credit quantity missing:\n%s", text)
+	}
+}
+
+// TestRender_StillRefusesAModelIdThatCarriesAFiatAmount is the other half of
+// that boundary. Metadata is exempt from the fiat guard, so this pins what the
+// exemption does NOT cost: a model id is still sanitised against the FX guard,
+// which is what keeps a USD token off the page whatever the catalog holds.
+func TestRender_StillRefusesAModelIdThatCarriesAFiatAmount(t *testing.T) {
+	t.Parallel()
+
+	inv := creditFixtureInvoice()
+	inv.LineItems[0].ModelID = "usd-priced-model"
+	text, err := renderInvoiceText(inv, "Acme Workspace")
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(strings.ToLower(text), "usd") {
+		t.Fatalf("a usd token reached the page through model metadata:\n%s", text)
 	}
 }
 
