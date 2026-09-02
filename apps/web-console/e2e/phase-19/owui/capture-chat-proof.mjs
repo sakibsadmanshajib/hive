@@ -321,8 +321,24 @@ async function main() {
       await page.goto(`${OWUI_URL}/`, { waitUntil: "domcontentloaded" });
       await page.locator("#chat-input").waitFor({ state: "visible", timeout: 60_000 });
       await page.getByRole("button", { name: /^select(ed)? .*model/i }).click();
-      const option = page.getByRole("option", { name: new RegExp(CONTROL_MODEL, "i") }).first();
-      await option.waitFor({ state: "visible", timeout: 15_000 });
+      // The picker labels an option with the alias's DISPLAY name, not its id:
+      // "deepseek-v4-flash" is offered as "Deepseek V4 Flash". Matching the id
+      // verbatim finds nothing, so the hyphens are relaxed to any separator.
+      const controlPattern = new RegExp(
+        CONTROL_MODEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/-/g, "[\\s-]?"),
+        "i",
+      );
+      const option = page.getByRole("option", { name: controlPattern }).first();
+      try {
+        await option.waitFor({ state: "visible", timeout: 15_000 });
+      } catch {
+        const offered = (await page.getByRole("option").allInnerTexts())
+          .map((t) => t.replace(/\s+/g, " ").trim().slice(0, 40))
+          .join(" | ");
+        throw new Error(
+          `the model picker offers nothing matching ${controlPattern}, so the control turn cannot be sent. It lists: ${offered}`,
+        );
+      }
       await option.click();
 
       const controlRequest = await sendPrompt(page);
