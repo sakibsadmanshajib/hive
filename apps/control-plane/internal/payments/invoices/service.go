@@ -111,21 +111,9 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		return nil, err
 	}
 
-	items := make([]InvoiceLineItem, 0, len(credited))
-	total := new(big.Int)
-	for _, c := range credited {
-		subunits, err := payments.CreditsToBDTSubunits(c.Credits, rate.Rate)
-		if err != nil {
-			return nil, fmt.Errorf("invoices: convert %s credits: %w", c.ModelID, err)
-		}
-		items = append(items, InvoiceLineItem{
-			ModelID:      c.ModelID,
-			RequestCount: c.RequestCount,
-			BDTSubunits:  subunits,
-		})
-		// Total is the sum of the rendered lines, not a separately converted
-		// aggregate, so the document always adds up for the customer reading it.
-		total.Add(total, subunits)
+	items, total, totalCredits, err := convertLines(credited, rate.Rate)
+	if err != nil {
+		return nil, err
 	}
 
 	// The column is a bigint, so a total that does not fit wraps on the way in
@@ -150,9 +138,11 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		PeriodStart:      period.Start,
 		PeriodEnd:        period.End,
 		TotalBDTSubunits: total,
+		TotalCredits:     totalCredits,
 		LineItems:        items,
 		GeneratedAt:      s.now(),
 		USDBDTRate:       rate.Display,
+		USDBDTRateSource: rate.Source,
 	}
 
 	pdfBytes, err := s.pdf.Render(candidate, workspaceName)
@@ -175,6 +165,40 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 		return nil, fmt.Errorf("invoices: persist: %w", err)
 	}
 	return saved, nil
+}
+
+// convertLines turns per-model credit quantities into invoice lines, returning
+// the lines, the taka total and the credit total.
+//
+// Both units are carried through. The credit quantity is what the ledger
+// recorded and what issue #1681 puts in front of the customer; the taka amount
+// is what they are charged for it, converted once per line at the supplied
+// rate. The total is the sum of the ROUNDED lines rather than a separately
+// converted aggregate, so the document adds up for a customer checking it by
+// hand.
+func convertLines(credited []ModelCredits, rate *big.Rat) ([]InvoiceLineItem, *big.Int, *big.Int, error) {
+	items := make([]InvoiceLineItem, 0, len(credited))
+	total := new(big.Int)
+	totalCredits := new(big.Int)
+	for _, c := range credited {
+		subunits, err := payments.CreditsToBDTSubunits(c.Credits, rate)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("invoices: convert %s credits: %w", c.ModelID, err)
+		}
+		quantity := new(big.Int)
+		if c.Credits != nil {
+			quantity.Set(c.Credits)
+		}
+		items = append(items, InvoiceLineItem{
+			ModelID:      c.ModelID,
+			RequestCount: c.RequestCount,
+			BDTSubunits:  subunits,
+			Credits:      quantity,
+		})
+		total.Add(total, subunits)
+		totalCredits.Add(totalCredits, quantity)
+	}
+	return items, total, totalCredits, nil
 }
 
 // resolveRate picks the USD to BDT rate this invoice is denominated at.

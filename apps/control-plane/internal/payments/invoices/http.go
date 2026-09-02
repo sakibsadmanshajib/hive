@@ -3,6 +3,7 @@ package invoices
 import (
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -65,53 +66,67 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // invoiceWire is the JSON shape for invoice list / detail responses.
 //
-// Currency subunits (`total_bdt_subunits`, line-item `bdt_subunits`) are
-// emitted as JSON strings (`,string` tag) so client-side code that parses
-// them with BigInt avoids any Number.MAX_SAFE_INTEGER precision loss when
-// totals exceed 2^53. The server math itself is performed via *big.Int;
-// the wire shape preserves that invariant end-to-end.
+// It carries the credit quantity and NOT the fiat value of that quantity
+// (owner ruling, 2026-09-02). This document is a prepaid usage draw down: the
+// customer paid when they bought the credits, and converting the consumed
+// credits back into money at the internal peg would both read as a second bill
+// and disclose the internal value of a subscription's credit grant, which is
+// confidential. The taka figure is still stored on the row for audit and is
+// still repaired by the issue #1682 pass; it is simply not customer-facing.
+// A fiat amount belongs on a purchase invoice, a document this package does not
+// yet produce.
+//
+// Credit quantities are emitted as JSON strings so client-side code parses
+// them with BigInt and never rounds at 2^53. The server math is *big.Int; the
+// wire shape preserves that invariant end-to-end.
 type invoiceWire struct {
-	ID                 uuid.UUID         `json:"id"`
-	WorkspaceID        uuid.UUID         `json:"workspace_id"`
-	PeriodStart        string            `json:"period_start"`
-	PeriodEnd          string            `json:"period_end"`
-	TotalBDTSubunits   int64             `json:"total_bdt_subunits,string"`
-	LineItems          []lineItemWire    `json:"line_items"`
-	GeneratedAt        time.Time         `json:"generated_at"`
+	ID          uuid.UUID `json:"id"`
+	WorkspaceID uuid.UUID `json:"workspace_id"`
+	PeriodStart string    `json:"period_start"`
+	PeriodEnd   string    `json:"period_end"`
+	// TotalCredits is the consumption quantity in Hive credits (issue #1681).
+	// A pointer, so a quantity that was never recorded travels as null rather
+	// than as a measured zero.
+	TotalCredits *string        `json:"total_credits"`
+	LineItems    []lineItemWire `json:"line_items"`
+	GeneratedAt  time.Time      `json:"generated_at"`
 }
 
 type lineItemWire struct {
-	ModelID      string `json:"model_id"`
-	RequestCount int64  `json:"request_count"`
-	BDTSubunits  int64  `json:"bdt_subunits,string"`
+	ModelID      string  `json:"model_id"`
+	RequestCount int64   `json:"request_count"`
+	Credits      *string `json:"credits"`
 }
 
 func toInvoiceWire(inv Invoice) invoiceWire {
 	items := make([]lineItemWire, 0, len(inv.LineItems))
 	for _, it := range inv.LineItems {
-		amount := int64(0)
-		if it.BDTSubunits != nil {
-			amount = it.BDTSubunits.Int64()
-		}
 		items = append(items, lineItemWire{
 			ModelID:      it.ModelID,
 			RequestCount: it.RequestCount,
-			BDTSubunits:  amount,
+			Credits:      creditsWire(it.Credits),
 		})
 	}
-	total := int64(0)
-	if inv.TotalBDTSubunits != nil {
-		total = inv.TotalBDTSubunits.Int64()
-	}
 	return invoiceWire{
-		ID:               inv.ID,
-		WorkspaceID:      inv.WorkspaceID,
-		PeriodStart:      inv.PeriodStart.Format("2006-01-02"),
-		PeriodEnd:        inv.PeriodEnd.Format("2006-01-02"),
-		TotalBDTSubunits: total,
-		LineItems:        items,
-		GeneratedAt:      inv.GeneratedAt,
+		ID:           inv.ID,
+		WorkspaceID:  inv.WorkspaceID,
+		PeriodStart:  inv.PeriodStart.Format("2006-01-02"),
+		PeriodEnd:    inv.PeriodEnd.Format("2006-01-02"),
+		TotalCredits: creditsWire(inv.TotalCredits),
+		LineItems:    items,
+		GeneratedAt:  inv.GeneratedAt,
 	}
+}
+
+// creditsWire renders a credit quantity as a decimal string, or nil when the
+// quantity was never recorded. Never narrowed through int64: the console reads
+// it with BigInt, and a silent wrap would be a money figure nobody could catch.
+func creditsWire(credits *big.Int) *string {
+	if credits == nil {
+		return nil
+	}
+	s := credits.String()
+	return &s
 }
 
 // =============================================================================

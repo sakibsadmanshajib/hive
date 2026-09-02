@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"time"
 
@@ -52,23 +53,29 @@ func (r *pgxRepository) InsertOrFetch(ctx context.Context, in Invoice) (*Invoice
 		id = uuid.New()
 	}
 
-	var rate *string
-	if in.USDBDTRate != "" {
-		rate = &in.USDBDTRate
+	rate, rateSource, err := nullableRate(in)
+	if err != nil {
+		return nil, err
+	}
+	credits, err := nullableCredits(in.TotalCredits)
+	if err != nil {
+		return nil, err
 	}
 
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO public.invoices (
 			id, workspace_id, period_start, period_end,
-			total_bdt_subunits, line_items, pdf_storage_key, usd_bdt_rate
+			total_bdt_subunits, line_items, pdf_storage_key, usd_bdt_rate,
+			total_credits, usd_bdt_rate_source
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, $9, $10)
 		ON CONFLICT (workspace_id, period_start) DO NOTHING
 		RETURNING id, workspace_id, period_start, period_end,
 		          total_bdt_subunits, line_items, pdf_storage_key, generated_at,
-		          usd_bdt_rate::text
+		          usd_bdt_rate::text, total_credits, usd_bdt_rate_source
 	`, id, in.WorkspaceID, in.PeriodStart, in.PeriodEnd,
-		in.TotalBDTSubunits.Int64(), itemsJSON, in.PDFStorageKey, rate)
+		in.TotalBDTSubunits.Int64(), itemsJSON, in.PDFStorageKey, rate,
+		credits, rateSource)
 
 	got, err := scanInvoice(row)
 	if err != nil {
@@ -85,7 +92,7 @@ func (r *pgxRepository) fetchByWorkspacePeriod(ctx context.Context, workspaceID 
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, workspace_id, period_start, period_end,
 		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
-		       usd_bdt_rate::text
+		       usd_bdt_rate::text, total_credits, usd_bdt_rate_source
 		FROM public.invoices
 		WHERE workspace_id = $1 AND period_start = $2
 	`, workspaceID, periodStart)
@@ -103,7 +110,7 @@ func (r *pgxRepository) GetByID(ctx context.Context, id uuid.UUID) (*Invoice, er
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, workspace_id, period_start, period_end,
 		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
-		       usd_bdt_rate::text
+		       usd_bdt_rate::text, total_credits, usd_bdt_rate_source
 		FROM public.invoices
 		WHERE id = $1
 	`, id)
@@ -124,7 +131,7 @@ func (r *pgxRepository) ListByWorkspace(ctx context.Context, workspaceID uuid.UU
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, workspace_id, period_start, period_end,
 		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
-		       usd_bdt_rate::text
+		       usd_bdt_rate::text, total_credits, usd_bdt_rate_source
 		FROM public.invoices
 		WHERE workspace_id = $1
 		ORDER BY period_start DESC
@@ -269,8 +276,156 @@ func (r *pgxRepository) AggregateByModel(ctx context.Context, workspaceID uuid.U
 }
 
 // =============================================================================
+// Repair path (issue #1682)
+// =============================================================================
+
+// ListUnconverted returns the rows written before the issue #1648 fix, oldest
+// first so a bounded pass makes deterministic progress rather than revisiting
+// an arbitrary subset.
+//
+// `usd_bdt_rate IS NULL` is the whole predicate. It is the discriminator
+// migration 20260901_01 documents, and it is also what makes the repair
+// idempotent: writing the rate is what removes a row from this result.
+func (r *pgxRepository) ListUnconverted(ctx context.Context, limit int) ([]Invoice, error) {
+	sql := `
+		SELECT id, workspace_id, period_start, period_end,
+		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
+		       usd_bdt_rate::text, total_credits, usd_bdt_rate_source
+		FROM public.invoices
+		WHERE usd_bdt_rate IS NULL
+		ORDER BY period_start ASC, id ASC`
+	args := []any{}
+	if limit > 0 {
+		sql += `
+		LIMIT $1`
+		args = append(args, limit)
+	}
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("invoices: list unconverted: %w", err)
+	}
+	defer rows.Close()
+
+	// Per-row isolation extends to decoding, not just to repairing. The
+	// population this pass reads was written by code that no longer exists, so
+	// a row whose line_items JSONB does not match today's decoder is exactly
+	// the shape to expect here, and aborting the scan on it would block the
+	// repair of every other row on every boot, permanently. Skip it, name it,
+	// and carry on.
+	var out []Invoice
+	for rows.Next() {
+		inv, err := scanInvoice(rows)
+		if err != nil {
+			slog.Default().Warn("invoices: skipping an undecodable unconverted row",
+				"error", err)
+			continue
+		}
+		out = append(out, inv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("invoices: unconverted rows: %w", err)
+	}
+	return out, nil
+}
+
+// UpdateConverted writes a repaired row and reports whether it wrote one.
+//
+// The `usd_bdt_rate IS NULL` predicate is repeated in the WHERE clause on
+// purpose, so that a second writer arriving after the first committed converts
+// nothing and reports false rather than dividing a customer's invoice by the
+// rate a second time. Under READ COMMITTED it blocks on the row lock and then
+// re-evaluates the predicate against the committed version; under REPEATABLE
+// READ it raises a serialization error, which surfaces as a per-row failure and
+// is not retried because the row is by then already repaired.
+//
+// That second writer is not reachable on anything this repository ships today.
+// The compose file declares no replicas and the deploy runs `up -d --build`,
+// which stops the old control-plane before starting the new one, so exactly one
+// process runs the repair. The guard is here for the deployment that eventually
+// runs two, not as a description of the one that runs now.
+func (r *pgxRepository) UpdateConverted(ctx context.Context, in Invoice) (bool, error) {
+	if in.TotalBDTSubunits == nil || !in.TotalBDTSubunits.IsInt64() {
+		return false, fmt.Errorf("invoices: repaired total must fit bigint, got %v", in.TotalBDTSubunits)
+	}
+	if in.USDBDTRate == "" {
+		return false, fmt.Errorf("invoices: repaired row must carry the rate it was converted at")
+	}
+	itemsJSON, err := encodeLineItems(in.LineItems)
+	if err != nil {
+		return false, err
+	}
+	credits, err := nullableCredits(in.TotalCredits)
+	if err != nil {
+		return false, err
+	}
+	rate, rateSource, err := nullableRate(in)
+	if err != nil {
+		return false, err
+	}
+
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE public.invoices
+		SET total_bdt_subunits  = $2,
+		    line_items          = $3,
+		    total_credits       = $4,
+		    usd_bdt_rate        = $5::numeric,
+		    usd_bdt_rate_source = $6,
+		    pdf_storage_key     = $7
+		WHERE id = $1
+		  AND usd_bdt_rate IS NULL
+	`, in.ID, in.TotalBDTSubunits.Int64(), itemsJSON, credits, rate, rateSource, in.PDFStorageKey)
+	if err != nil {
+		return false, fmt.Errorf("invoices: update converted: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
+
+// nullableRate maps the empty rate and empty source onto SQL NULL, so an
+// unconverted row keeps the discriminator the repair depends on rather than
+// acquiring an empty string that satisfies IS NOT NULL.
+//
+// It also enforces that the two travel together. Both writers of this table
+// route through here, so the invariant lives at the seam rather than being
+// restated at each of them and forgotten at the next one. A rate with no
+// provenance is the state the usd_bdt_rate_source column comment declares
+// impossible, and it is the exact question the column exists to answer months
+// later; the schema refuses it too, and this refuses it earlier and with a
+// message that names the cause.
+func nullableRate(in Invoice) (rate *string, source *string, err error) {
+	if (in.USDBDTRate == "") != (in.USDBDTRateSource == "") {
+		return nil, nil, fmt.Errorf(
+			"invoices: rate %q and rate source %q must both be set or both be empty",
+			in.USDBDTRate, in.USDBDTRateSource)
+	}
+	if in.USDBDTRate != "" {
+		r := in.USDBDTRate
+		rate = &r
+		s := in.USDBDTRateSource
+		source = &s
+	}
+	return rate, source, nil
+}
+
+// nullableCredits narrows a credit quantity for the bigint column, refusing an
+// overflow rather than letting big.Int.Int64 return an undefined value with no
+// error (the defect class tracked in issue #1547).
+func nullableCredits(credits *big.Int) (*int64, error) {
+	if credits == nil {
+		return nil, nil
+	}
+	if !credits.IsInt64() {
+		return nil, fmt.Errorf("invoices: credit quantity %s exceeds bigint storage", credits)
+	}
+	if credits.Sign() < 0 {
+		return nil, fmt.Errorf("invoices: credit quantity must not be negative, got %s", credits)
+	}
+	v := credits.Int64()
+	return &v, nil
+}
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -283,6 +438,8 @@ func scanInvoice(row rowScanner) (Invoice, error) {
 		lineItemsBytes []byte
 		pdfStorageKey  *string
 		usdBDTRate     *string
+		totalCredits   *int64
+		rateSource     *string
 	)
 	if err := row.Scan(
 		&inv.ID,
@@ -294,6 +451,8 @@ func scanInvoice(row rowScanner) (Invoice, error) {
 		&pdfStorageKey,
 		&inv.GeneratedAt,
 		&usdBDTRate,
+		&totalCredits,
+		&rateSource,
 	); err != nil {
 		return Invoice{}, err
 	}
@@ -306,6 +465,15 @@ func scanInvoice(row rowScanner) (Invoice, error) {
 	// distinguishable.
 	if usdBDTRate != nil {
 		inv.USDBDTRate = *usdBDTRate
+	}
+	// NULL credits stay nil, never big.NewInt(0): an unknown quantity and a
+	// month of no consumption are different claims, and only one of them is
+	// true of the rows this column was added for (issue #1682).
+	if totalCredits != nil {
+		inv.TotalCredits = big.NewInt(*totalCredits)
+	}
+	if rateSource != nil {
+		inv.USDBDTRateSource = *rateSource
 	}
 	items, err := decodeLineItems(lineItemsBytes)
 	if err != nil {
@@ -323,6 +491,10 @@ type lineItemJSON struct {
 	ModelID      string `json:"model_id"`
 	RequestCount int64  `json:"request_count"`
 	BDTSubunits  string `json:"bdt_subunits"`
+	// Credits is omitted rather than written as "0" when the quantity is
+	// unknown, so a legacy line and a genuinely free line stay distinguishable
+	// after a JSONB round trip (issue #1681).
+	Credits string `json:"credits,omitempty"`
 }
 
 func encodeLineItems(items []InvoiceLineItem) ([]byte, error) {
@@ -332,10 +504,15 @@ func encodeLineItems(items []InvoiceLineItem) ([]byte, error) {
 		if it.BDTSubunits != nil {
 			amount = it.BDTSubunits.String()
 		}
+		credits := ""
+		if it.Credits != nil {
+			credits = it.Credits.String()
+		}
 		out = append(out, lineItemJSON{
 			ModelID:      it.ModelID,
 			RequestCount: it.RequestCount,
 			BDTSubunits:  amount,
+			Credits:      credits,
 		})
 	}
 	b, err := json.Marshal(out)
@@ -361,10 +538,18 @@ func decodeLineItems(raw []byte) ([]InvoiceLineItem, error) {
 				return nil, fmt.Errorf("invoices: invalid bdt_subunits %q", p.BDTSubunits)
 			}
 		}
+		var credits *big.Int
+		if p.Credits != "" {
+			credits = new(big.Int)
+			if _, ok := credits.SetString(p.Credits, 10); !ok {
+				return nil, fmt.Errorf("invoices: invalid credits %q", p.Credits)
+			}
+		}
 		out = append(out, InvoiceLineItem{
 			ModelID:      p.ModelID,
 			RequestCount: p.RequestCount,
 			BDTSubunits:  amount,
+			Credits:      credits,
 		})
 	}
 	return out, nil

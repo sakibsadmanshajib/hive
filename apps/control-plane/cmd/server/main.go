@@ -618,6 +618,28 @@ func main() {
 		defer invoicesCron.Stop()
 		log.Println("invoice monthly cron started (window=day-1 02:00 UTC)")
 
+		// Issue #1682 — one-shot repair of the invoice rows written before the
+		// issue #1648 fix, whose taka columns hold a raw credit count and whose
+		// stored PDFs say the same. Selected by `usd_bdt_rate IS NULL` and
+		// guarded on the same predicate at write time, so it converts each row
+		// exactly once no matter how many times the process restarts or how
+		// many replicas run it.
+		//
+		// On a goroutine because boot must not block on storage round trips,
+		// and off runCtx so a shutdown cancels it mid-pass; a cancelled pass
+		// leaves the remaining rows unconverted and the next boot picks them
+		// up.
+		go func() {
+			repaired, err := invoicesSvc.RepairUnconvertedInvoices(runCtx)
+			if err != nil {
+				log.Printf("invoice repair pass failed: %v", err)
+				return
+			}
+			if repaired > 0 {
+				log.Printf("invoice repair: converted %d pre-fix invoice(s) and regenerated their PDFs", repaired)
+			}
+		}()
+
 		// Phase 14 — owner-discretionary credit grants. Same-tx ledger
 		// append + immutable audit row (BEFORE UPDATE OR DELETE trigger
 		// guards mutations at schema level). RoleService gates the admin

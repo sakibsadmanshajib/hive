@@ -41,12 +41,12 @@ type Cron struct {
 	interval time.Duration
 	now      func() time.Time
 
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	doneCh   chan struct{}
-	started  bool
-	lastRun  time.Time
-	runOnce  sync.Once
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	doneCh  chan struct{}
+	started bool
+	lastRun time.Time
+	runOnce sync.Once
 }
 
 // NewCron constructs the monthly invoice cron.

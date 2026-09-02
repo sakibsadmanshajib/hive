@@ -2906,9 +2906,15 @@ export interface SpendAlert {
 export interface InvoiceLineItem {
   model_id: string;
   request_count: number;
-  // BDT subunit decimal string. Wire shape is JSON string (Go `,string` tag)
-  // so callers parse with BigInt and never round at 2^53.
-  bdt_subunits: string;
+  // Hive credit quantity as a decimal string, or null when the row never
+  // recorded one.
+  //
+  // There is deliberately no fiat field here. A usage invoice is a prepaid
+  // draw down and raises no charge (owner ruling, 2026-09-02), and converting
+  // the quantity back into money at the internal peg would disclose the
+  // internal value of a subscription's credit grant. The control-plane no
+  // longer sends one.
+  credits: string | null;
 }
 
 export interface InvoiceRecord {
@@ -2916,8 +2922,8 @@ export interface InvoiceRecord {
   workspace_id: string;
   period_start: string;
   period_end: string;
-  // BDT subunit decimal string — see InvoiceLineItem.bdt_subunits comment.
-  total_bdt_subunits: string;
+  // Hive credit quantity consumed in the period — see InvoiceLineItem.credits.
+  total_credits: string | null;
   line_items: InvoiceLineItem[];
   generated_at: string;
 }
@@ -3002,25 +3008,30 @@ function decodeInvoiceLineItem(value: JsonValue): InvoiceLineItem | null {
   if (!isJsonObject(value)) return null;
   const modelId = readStringField(value, "model_id");
   const requestCount = readNumberField(value, "request_count");
-  // bdt_subunits arrives as a JSON string (server `,string` tag) for BigInt
-  // safety. Tolerate JSON number too for forward-compat with any older test
-  // fixture that still emits a number.
-  const bdtSubunitsRaw = readStringField(value, "bdt_subunits");
-  const bdtSubunitsNumeric = readNumberField(value, "bdt_subunits");
-  const bdtSubunits =
-    bdtSubunitsRaw !== null
-      ? bdtSubunitsRaw
-      : bdtSubunitsNumeric !== null
-      ? String(bdtSubunitsNumeric)
-      : null;
-  if (modelId === null || requestCount === null || bdtSubunits === null) {
+  if (modelId === null || requestCount === null) {
     return null;
   }
   return {
     model_id: modelId,
     request_count: requestCount,
-    bdt_subunits: bdtSubunits,
+    credits: readCreditQuantity(value, "credits"),
   };
+}
+
+/**
+ * Read a credit quantity that the server may legitimately send as null.
+ *
+ * Kept as a decimal string rather than a number: the console formats it with
+ * BigInt, and narrowing here would round a money figure before any formatter
+ * could protect it. A numeric field is tolerated for the same reason the
+ * subunit reader tolerates one, but null and absence both stay null, so an
+ * unrecorded quantity is never presented as a measured zero.
+ */
+function readCreditQuantity(source: JsonObject, key: string): string | null {
+  const raw = readStringField(source, key);
+  if (raw !== null) return raw;
+  const numeric = readNumberField(source, key);
+  return numeric !== null ? String(numeric) : null;
 }
 
 function decodeInvoiceRecord(value: JsonValue): InvoiceRecord | null {
@@ -3029,14 +3040,6 @@ function decodeInvoiceRecord(value: JsonValue): InvoiceRecord | null {
   const workspaceId = readStringField(value, "workspace_id");
   const periodStart = readStringField(value, "period_start");
   const periodEnd = readStringField(value, "period_end");
-  const totalRaw = readStringField(value, "total_bdt_subunits");
-  const totalNumeric = readNumberField(value, "total_bdt_subunits");
-  const total =
-    totalRaw !== null
-      ? totalRaw
-      : totalNumeric !== null
-      ? String(totalNumeric)
-      : null;
   const generatedAt = readStringField(value, "generated_at");
   const itemsRaw = readArrayField(value, "line_items") ?? [];
   if (
@@ -3044,7 +3047,6 @@ function decodeInvoiceRecord(value: JsonValue): InvoiceRecord | null {
     workspaceId === null ||
     periodStart === null ||
     periodEnd === null ||
-    total === null ||
     generatedAt === null
   ) {
     return null;
@@ -3059,7 +3061,7 @@ function decodeInvoiceRecord(value: JsonValue): InvoiceRecord | null {
     workspace_id: workspaceId,
     period_start: periodStart,
     period_end: periodEnd,
-    total_bdt_subunits: total,
+    total_credits: readCreditQuantity(value, "total_credits"),
     line_items: items,
     generated_at: generatedAt,
   };
