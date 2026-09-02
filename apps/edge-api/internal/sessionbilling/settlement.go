@@ -174,6 +174,20 @@ func Reserve(ctx context.Context, in Input) (*Settlement, *Refusal) {
 // control-plane records as a zero-credit reservation rather than silently
 // serving free.
 func ReserveCharge(ctx context.Context, in Input) (*Settlement, *Refusal) {
+	if in.HoldFloor <= 0 {
+		// The whole charge is this entry point's caller to derive, so a non
+		// positive one means it derived nothing. Refuse, rather than record a
+		// zero credit reservation and finalize it at zero: that is serving free
+		// with a ledger row that reads as a charge, which is the exact shape
+		// that looked green while the gateway billed nothing for three days in
+		// July (D-034). This is the check that replaces the token price gate
+		// dropped above, and it is a check rather than a paragraph because the
+		// next caller of an exported function in a shared package will not read
+		// the paragraph.
+		slog.Error(in.Surface+" charge reservation called with no charge to hold",
+			"request_id", in.RequestID, "alias", in.Alias, "hold_floor", in.HoldFloor)
+		return nil, &Refusal{Reason: "not_wired", write: WriteBillingUnavailable}
+	}
 	return reserve(ctx, in, false)
 }
 

@@ -1,12 +1,17 @@
 package webtools
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sessionbilling/billingtest"
 )
@@ -404,24 +409,86 @@ func TestWebToolRefusesWhenTheWorkspaceHasNoBillingAccount(t *testing.T) {
 	}
 }
 
-// The charge is settled AFTER the response is written, so a slow control-plane
-// cannot add its settlement latency to a tool result that is already finished.
-// Asserted by holding the accounting fake open until the recorder has a body.
+// The charge is settled AFTER the response is written, and this asserts the
+// ordering rather than the outcome.
+//
+// The previous version of this test only checked that one finalize existed
+// once ServeHTTP had returned, which is true whether settlement runs before or
+// after the write: it could not fail on the thing it is named for. The
+// ResponseWriter is wrapped so the fake can record, at the moment the response
+// is first written, whether the charge had already settled. Both sides go
+// through one atomic, so there is no cross goroutine read of the recorder.
 func TestWebToolSettlesAfterTheResponseIsWritten(t *testing.T) {
 	acct := &billingtest.Accounting{}
 	deps := billableDeps(t, acct, catalogPricer())
 	deps.Search = &stubSearcher{hits: okHits()}
-	h := newTestHandler(t, deps)
+	mux := http.NewServeMux()
+	NewHandler(deps).Register(mux)
 
-	rr := post(t, h, "/v1/tools/web_search", "turn-1", map[string]any{"query": "who won"})
-	if rr.Code != http.StatusOK || rr.Body.Len() == 0 {
+	var settled atomic.Bool
+	acct.OnFinalize = func() { settled.Store(true) }
+
+	body, err := json.Marshal(map[string]any{"query": "who won"})
+	if err != nil {
+		t.Fatalf("marshalling request: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/tools/web_search", bytes.NewReader(body))
+	req.Header.Set(TurnHeader, "turn-1")
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{
+		ID: uuid.New(), TenantID: uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+	}))
+
+	rr := httptest.NewRecorder()
+	observer := &writeObserver{ResponseWriter: rr}
+	observer.onFirstWrite = func() { observer.settledAtWrite = settled.Load() }
+	mux.ServeHTTP(observer, req)
+
+	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body)
 	}
-	// The deferred settle has run by the time ServeHTTP returns, which is what
-	// keeps the charge from being lost, while still following the write.
+	if !observer.wrote {
+		t.Fatal("the handler never wrote a response")
+	}
+	if observer.settledAtWrite {
+		t.Error("the charge settled before the response was written")
+	}
+	// The other half: deferred is not the same as dropped. By the time
+	// ServeHTTP has returned the charge must have landed, or a delivered call
+	// would go unbilled.
+	if !settled.Load() {
+		t.Error("the charge had not settled by the time the handler returned")
+	}
 	if charges := acct.Finalized(); len(charges) != 1 {
 		t.Fatalf("charges settled = %d, want 1", len(charges))
 	}
+}
+
+// writeObserver records whether something had happened by the time the
+// response was first written. Both WriteHeader and Write are intercepted,
+// because a handler may reach either first.
+type writeObserver struct {
+	http.ResponseWriter
+	onFirstWrite   func()
+	wrote          bool
+	settledAtWrite bool
+}
+
+func (w *writeObserver) note() {
+	if w.wrote {
+		return
+	}
+	w.wrote = true
+	w.onFirstWrite()
+}
+
+func (w *writeObserver) WriteHeader(status int) {
+	w.note()
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *writeObserver) Write(b []byte) (int, error) {
+	w.note()
+	return w.ResponseWriter.Write(b)
 }
 
 // A tenant whose billing position cannot be read at all is refused, never
@@ -445,5 +512,91 @@ func TestUnreadableBillingPositionRefusesTheCall(t *testing.T) {
 	}
 	if search.calls != 0 {
 		t.Errorf("backend called %d times for an unreadable billing position, want 0", search.calls)
+	}
+}
+
+// A reduction that ranked nothing has already paid for the embedding burst, so
+// it is charged. This is the search side's rule (an empty result set is
+// charged because the query still reached SearXNG) applied to the strictly
+// more expensive case, and without it a page that reliably reduces to nothing
+// is free at three fetches a turn on caller chosen input (issue #1644 is the
+// open gap that makes that spend unmetered anywhere else).
+func TestWebFetchChargesAReductionThatRankedNothing(t *testing.T) {
+	acct := &billingtest.Accounting{}
+	deps := billableDeps(t, acct, catalogPricer())
+	deps.Fetch = FetcherFunc(func(context.Context, string, string) (FetchResult, error) {
+		return FetchResult{}, ErrReduceEmpty
+	})
+	h := newTestHandler(t, deps)
+
+	rr := post(t, h, "/v1/tools/web_fetch", "turn-1", map[string]any{"url": "https://example.com/a"})
+	if rr.Code == http.StatusOK {
+		t.Fatalf("status = %d, want a failure, body = %s", rr.Code, rr.Body)
+	}
+	charges := acct.Finalized()
+	if len(charges) != 1 {
+		t.Fatalf("charges settled = %d, want 1: the embedding spend already happened", len(charges))
+	}
+	if charges[0].ActualCredits != fetchPricePerCall {
+		t.Errorf("charge = %d credits, want %d", charges[0].ActualCredits, fetchPricePerCall)
+	}
+	if _, released := acct.Counts(); released != 0 {
+		t.Errorf("released %d holds, want 0", released)
+	}
+}
+
+// A malformed envelope with a nil error means the pipeline ran end to end, so
+// it is past the embedder and is charged. The customer is still answered with
+// a failure; the bug is ours, not an unspent call.
+func TestWebFetchChargesANonConformingEnvelope(t *testing.T) {
+	acct := &billingtest.Accounting{}
+	deps := billableDeps(t, acct, catalogPricer())
+	deps.Fetch = FetcherFunc(func(context.Context, string, string) (FetchResult, error) {
+		return FetchResult{}, nil
+	})
+	h := newTestHandler(t, deps)
+
+	rr := post(t, h, "/v1/tools/web_fetch", "turn-1", map[string]any{"url": "https://example.com/a"})
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502, body = %s", rr.Code, rr.Body)
+	}
+	if charges := acct.Finalized(); len(charges) != 1 {
+		t.Fatalf("charges settled = %d, want 1", len(charges))
+	}
+}
+
+// The failures that fire before any embedding request is made stay free. One
+// case per class rather than an exhaustive list, since they share the one
+// branch.
+func TestWebFetchDoesNotChargeAFailureBeforeTheEmbedder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"url rejected", ErrURLRejected},
+		{"upstream error status", ErrFetchStatus},
+		{"too large", ErrTooLarge},
+		{"extraction produced nothing", ErrExtractEmpty},
+		{"embedder unavailable", ErrEmbedUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			acct := &billingtest.Accounting{}
+			deps := billableDeps(t, acct, catalogPricer())
+			deps.Fetch = FetcherFunc(func(context.Context, string, string) (FetchResult, error) {
+				return FetchResult{}, tc.err
+			})
+			h := newTestHandler(t, deps)
+
+			rr := post(t, h, "/v1/tools/web_fetch", "turn-1", map[string]any{"url": "https://example.com/a"})
+			if rr.Code == http.StatusOK {
+				t.Fatalf("status = %d, want a failure, body = %s", rr.Code, rr.Body)
+			}
+			if charges := acct.Finalized(); len(charges) != 0 {
+				t.Errorf("charged %d times for a failure before the embedder, want 0", len(charges))
+			}
+			if _, released := acct.Counts(); released != 1 {
+				t.Errorf("released %d holds, want 1", released)
+			}
+		})
 	}
 }

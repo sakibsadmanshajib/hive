@@ -154,3 +154,69 @@ func TestReserveRefusesAnUnlabelledRequest(t *testing.T) {
 		t.Error("an unlabelled request reached control-plane")
 	}
 }
+
+// ReserveCharge drops the token price gate, which is correct for a caller
+// deriving its own charge in a unit this package does not meter, and replaces
+// it with the check that does apply to such a caller. A non-positive charge is
+// refused rather than recorded: a zero credit reservation finalized at zero
+// serves the request free while leaving a ledger row that reads as a charge,
+// which is the shape that looked green while the gateway billed nothing for
+// three days in July (D-034).
+func TestReserveChargeRefusesANonPositiveCharge(t *testing.T) {
+	for _, holdFloor := range []int64{0, -1} {
+		acct := &stubAccounting{}
+		in := billableInput(t, acct)
+		// No route at all, which is the shape this entry point exists for.
+		in.Route = inference.SelectRouteResult{}
+		in.Body = nil
+		in.HoldFloor = holdFloor
+
+		settle, refusal := ReserveCharge(context.Background(), in)
+		if settle != nil {
+			t.Errorf("hold floor %d produced a settlement, want a refusal", holdFloor)
+		}
+		if refusal == nil {
+			t.Fatalf("hold floor %d was accepted, want a refusal", holdFloor)
+		}
+		acct.mu.Lock()
+		holds := len(acct.reservations)
+		acct.mu.Unlock()
+		if holds != 0 {
+			t.Errorf("hold floor %d created %d reservations, want 0", holdFloor, holds)
+		}
+	}
+}
+
+// The positive case, so the guard above cannot pass by refusing everything: a
+// caller with a derived charge and no route still gets a hold, sized at exactly
+// the figure it derived. Nothing in the zero-value Route inflates or shrinks
+// it, because ReservationCredits falls back to HoldFloor when the route
+// carries no reservation estimate.
+func TestReserveChargeHoldsExactlyTheDerivedCharge(t *testing.T) {
+	acct := &stubAccounting{}
+	in := billableInput(t, acct)
+	in.Route = inference.SelectRouteResult{}
+	in.Body = nil
+	in.Alias = "hive-web-fetch"
+	in.Endpoint = "web_fetch"
+	in.HoldFloor = 200_000
+
+	settle, refusal := ReserveCharge(context.Background(), in)
+	if refusal != nil {
+		t.Fatalf("refused: %s", refusal.Reason)
+	}
+	if settle == nil {
+		t.Fatal("no settlement returned")
+	}
+	if settle.Held() != 200_000 {
+		t.Errorf("held %d credits, want 200000", settle.Held())
+	}
+	acct.mu.Lock()
+	defer acct.mu.Unlock()
+	if len(acct.reservations) != 1 {
+		t.Fatalf("reservations = %d, want 1", len(acct.reservations))
+	}
+	if got := acct.reservations[0].EstimatedCredits; got != 200_000 {
+		t.Errorf("reservation estimated_credits = %d, want 200000", got)
+	}
+}

@@ -351,9 +351,42 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.fetch.Fetch(r.Context(), admitted.String(), focus)
 	if err != nil {
-		// Logged with the real cause, answered without it. Not charged: a
-		// page that could not be read is not a delivered fetch.
-		charge.refuse("fetch_failed")
+		// WHICH FETCH FAILURES ARE FREE, written down here rather than left to
+		// be inferred from the call sites.
+		//
+		// Free, because they fire BEFORE any embedding request is made and the
+		// customer received nothing that cost anything: a refused URL, a
+		// blocked redirect, too many redirects, a blocked address, a resolve
+		// failure, a timeout, an oversized body, an upstream non-200, an
+		// unreadable content type, a failed extraction and ErrExtractEmpty.
+		// ErrEmbedUnavailable is free too, and that one is a judgement rather
+		// than a fact about ordering: a batch can fail after a sibling batch
+		// succeeded, so a little spend may already have happened, but the
+		// embedder refusing is our backend failing rather than a service the
+		// customer received.
+		//
+		// CHARGED: ErrReduceEmpty. The reduction ranks what it has already
+		// embedded, so by the time it can report that nothing ranked, up to
+		// MaxChunksPerPage chunks have gone to the embedder, on the path
+		// reduce.go states is unmetered and issue #1644 tracks. Handing the
+		// hold back there is real money spent with nothing recovered, over an
+		// input the caller chooses, at three fetches a turn and thirty calls a
+		// minute. It is also the search side's own rule (an empty result set
+		// is charged because the query still reached SearXNG) applied to the
+		// strictly more expensive case.
+		//
+		// Two of ErrReduceEmpty's four return sites are before the embedder
+		// (zero chunks from an oversized page, and an empty selection on the
+		// no-focus path). Neither is reachable: chunkRunes cannot produce zero
+		// chunks from a page past MaxCallChars, and reduce.go's own comment
+		// records the second as unreachable while a chunk is narrower than the
+		// per-call ceiling. They are named rather than hidden, and telling
+		// them apart would mean plumbing a "did it embed" flag through the
+		// pipeline for two branches that cannot fire.
+		if !errors.Is(err, ErrReduceEmpty) {
+			charge.refuse("fetch_failed")
+		}
+		// Logged with the real cause, answered without it.
 		log.Printf("webtools: web_fetch failed: %v", err)
 		code := fetchCode(err)
 		writeEnvelope(w, fetchStatus(code), NewError(code, fetchMessage(code, err), 0))
@@ -371,7 +404,11 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 	// pipeline is written in a later slice by someone who will reasonably
 	// assume the envelope cannot lie, so the check belongs on this side.
 	if result.Status != StatusOK || len(result.Parts) == 0 {
-		charge.refuse("nonconforming_envelope")
+		// Charged, deliberately, by falling through to the deferred settle.
+		// This is only reachable when the pipeline returned a nil error, which
+		// means it ran end to end and past the embedder; the envelope being
+		// malformed is our bug, not an unspent call. The customer is answered
+		// with a failure either way.
 		log.Printf("webtools: web_fetch pipeline returned a non-conforming envelope (status=%q parts=%d)",
 			result.Status, len(result.Parts))
 		writeEnvelope(w, http.StatusBadGateway, NewError(CodeExtractEmpty, msgFetchFailed, result.Dropped))
