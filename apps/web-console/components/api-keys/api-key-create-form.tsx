@@ -85,6 +85,10 @@ interface CreateApiKeyResponse {
   allowlist_summary: { mode: string; group_names: string[]; label: string };
   spend_credits: number;
   budget_limit_credits: number | null;
+  // Mirrors ApiKey in lib/control-plane/client.ts. A freshly minted key has no
+  // cap, so the control-plane sends null here; the field is declared because
+  // this response is handed straight to state typed as ApiKey.
+  budget_spend_credits: number | null;
   secret?: string;
 }
 

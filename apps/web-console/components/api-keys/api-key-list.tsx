@@ -37,19 +37,22 @@ function statusTone(status: string): { label: string; tone: ToneName } {
 }
 
 /**
- * Spend against a key's cap: both dollar figures for the exact number, and a
- * bar for the proportion at a glance (issue #1683). Before this the column
- * pair was plain text and the reader had to divide two dollar amounts in
- * their head to learn how much of the budget was gone.
+ * How much of a key's budget is gone: the dollar figures for the exact number,
+ * and a bar for the proportion at a glance (issue #1683). Before this the
+ * column pair was plain text and the reader had to divide two dollar amounts
+ * in their head.
  *
- * The bar renders only when the cap's window matches the spend figure's
- * window. spend_credits is lifetime (RecordUsageFinalization writes the
- * lifetime rollup on every settled request, Repository.GetLifetimeSpend sums
- * it), so it divides honestly by a lifetime cap and not by a monthly one: a
- * key at $500 lifetime against a $10/mo cap is nowhere near its monthly cap,
- * and a bar reading 5000% would raise an alarm the enforcement path never
- * raises. A monthly cap therefore keeps both figures and claims no ratio,
- * until the list endpoint reports a month-to-date spend worth dividing.
+ * The numerator is budget_spend_credits, which is the counter edge-api
+ * enforces against (api_key_budget_windows consumed plus reserved), and NOT
+ * spend_credits. The two are written by different paths: the lifetime rollup
+ * takes every settled request, while the budget window is only written once a
+ * cap exists and is never backfilled for the spend that came before it. A bar
+ * drawn from the lifetime figure paints a key that was capped after it spent
+ * as refused, at a hundred and eighty percent and in red, while the gateway
+ * goes on serving it. This surface must not claim a state the system does not
+ * have, so when the enforced counter is absent it draws no bar at all and
+ * states the two figures separately, with no part-of-whole connective between
+ * them.
  *
  * Native <progress> rather than a coloured div: the progressbar role, the
  * value and the maximum come from the element itself, so a screen reader
@@ -57,13 +60,18 @@ function statusTone(status: string): { label: string; tone: ToneName } {
  * step with the rendered fill.
  */
 function BudgetUsageCell({ row }: { row: ApiKey }) {
-  const spendText = formatUsdFromCredits(row.spend_credits);
+  const lifetimeText = formatUsdFromCredits(row.spend_credits);
   const limit = row.budget_limit_credits;
 
   if (limit === null) {
+    // No cap, so there is no proportion to state. The lifetime total is the
+    // only spend figure that exists for such a key: the budget window is
+    // never written while the budget kind is "none".
     return (
       <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-        <span className="tabular-nums text-[var(--color-ink)]">{spendText}</span>
+        <span className="tabular-nums text-[var(--color-ink)]">
+          {lifetimeText}
+        </span>
         <span className="text-xs text-[var(--color-ink-3)]">of</span>
         <span className="text-[var(--color-ink-3)]">Unlimited</span>
       </div>
@@ -71,38 +79,58 @@ function BudgetUsageCell({ row }: { row: ApiKey }) {
   }
 
   const limitText = `${formatUsdFromCredits(limit)}${limitSuffix(row.budget_summary.kind)}`;
-  const figures = (
-    <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-      <span className="tabular-nums text-[var(--color-ink)]">{spendText}</span>
-      <span className="text-xs text-[var(--color-ink-3)]">of</span>
-      <span className="tabular-nums text-[var(--color-ink-2)]">{limitText}</span>
-    </div>
-  );
+  // Coalesced rather than read straight: a control-plane that predates the
+  // field sends no key at all, and undefined would sail past a === null check
+  // into the arithmetic below.
+  const budgetSpend = row.budget_spend_credits ?? null;
 
-  if (row.budget_summary.kind !== "lifetime") {
-    return figures;
+  if (budgetSpend === null) {
+    // A cap with no enforced counter to divide: an older control-plane, or a
+    // shape this console does not recognise. Both figures, no "of" between
+    // them and no bar, because the proportion is exactly what is unknown.
+    return (
+      <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+        <span className="tabular-nums text-[var(--color-ink)]">
+          {lifetimeText}
+        </span>
+        <span className="text-xs text-[var(--color-ink-3)]">lifetime</span>
+        <span className="text-[var(--color-ink-3)]">&middot;</span>
+        <span className="tabular-nums text-[var(--color-ink-2)]">
+          {limitText}
+        </span>
+        <span className="text-xs text-[var(--color-ink-3)]">cap</span>
+      </div>
+    );
   }
 
-  // A non-positive cap refuses every request, so any spend at all against one
-  // is a budget that is gone. Resolving it here to a plain 0 or 1 keeps the
-  // division out of the render path entirely: no NaN from 0/0, no Infinity
-  // from a spend over a zero cap, and nothing downstream has to defend
-  // against either.
-  const ratio =
-    limit > 0 ? row.spend_credits / limit : row.spend_credits > 0 ? 1 : 0;
+  // A non-positive cap is exhausted by definition, whatever has been spent
+  // against it: enforcement refuses when consumed + reserved + estimated
+  // exceeds the limit, and every request carries a positive estimate, so a
+  // zero cap rejects the first call. Resolving it to 1 here also keeps the
+  // division out of the render path, so no NaN from 0/0 and no Infinity.
+  const ratio = limit > 0 ? budgetSpend / limit : 1;
   const reached = ratio >= 1;
   // The fill is clamped to the track at both ends and only the percentage
   // carries the overshoot, so a key at 150% cannot render a bar wider than its
-  // column. The lower bound is for a spend the wire says is negative: nothing
-  // in the ledger produces one, and a bar that renders a negative width if
-  // something ever does is not worth the risk of finding out.
+  // column. The lower bound is for a counter the wire says is negative:
+  // nothing writes one, and a bar that renders a negative width if something
+  // ever does is not worth the risk of finding out.
   const fill = Number((Math.min(Math.max(ratio, 0), 1) * 100).toFixed(1));
   const percentText = formatPercent(ratio);
+  const budgetSpendText = formatUsdFromCredits(budgetSpend);
 
   return (
     <div className="flex min-w-[12rem] max-w-[16rem] flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-3">
-        {figures}
+        <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+          <span className="tabular-nums text-[var(--color-ink)]">
+            {budgetSpendText}
+          </span>
+          <span className="text-xs text-[var(--color-ink-3)]">of</span>
+          <span className="tabular-nums text-[var(--color-ink-2)]">
+            {limitText}
+          </span>
+        </div>
         <span className="flex items-center gap-1.5">
           {reached ? (
             <Badge tone="danger" className="whitespace-nowrap">
@@ -124,10 +152,12 @@ function BudgetUsageCell({ row }: { row: ApiKey }) {
       <progress
         value={fill}
         max={100}
-        aria-label={`Budget used: ${spendText} of ${limitText}`}
+        aria-label={`Budget used: ${budgetSpendText} of ${limitText}`}
         // The clamped fill would otherwise announce "100%" for a key at 150%.
         // aria-valuetext keeps what a screen reader hears identical to the
-        // percentage printed beside the bar.
+        // percentage printed beside the bar. Support for it on a native
+        // progress is not uniform, which is why the true percentage is also a
+        // text node in this cell rather than only an attribute.
         aria-valuetext={reached ? `${percentText}, limit reached` : percentText}
         className={cn(
           "h-1.5 w-full appearance-none overflow-hidden rounded-full border-0",
@@ -141,6 +171,16 @@ function BudgetUsageCell({ row }: { row: ApiKey }) {
             : "[&::-webkit-progress-value]:bg-[var(--color-accent)] [&::-moz-progress-bar]:bg-[var(--color-accent)]",
         )}
       />
+      {row.spend_credits === budgetSpend ? null : (
+        // The two counters differ whenever the cap resets (a monthly window is
+        // this month, the lifetime total is every month) or when the key spent
+        // before it was capped. Printing the lifetime figure here keeps the
+        // number this column has always carried, without letting it near the
+        // ratio above.
+        <span className="text-2xs text-[var(--color-ink-3)] whitespace-nowrap">
+          {lifetimeText} lifetime
+        </span>
+      )}
     </div>
   );
 }
@@ -184,12 +224,12 @@ export function ApiKeyList({ keys, canManage }: ApiKeyListProps) {
     },
     {
       key: "budget_usage",
-      // "lifetime" stays in the header, not implied. spend_credits is the
-      // key's whole-life total (Repository.GetLifetimeSpend), while the cap
-      // beside it can be monthly, and two numbers side by side read as a
-      // ratio. A key at $500 lifetime against a $10/mo cap is not over its
-      // cap, and an unqualified "Spend" column says it is.
-      header: "Spend (lifetime) vs limit",
+      // "Budget used", not "Spend": the figure beside the cap is the enforced
+      // window (budget_spend_credits), which for a monthly cap is this month
+      // and not the key's whole life. The header said "Spend (lifetime)" while
+      // the number under it was the lifetime rollup; naming the new number
+      // "spend" would carry that reading onto a different counter.
+      header: "Budget used",
       cell: (row) => <BudgetUsageCell row={row} />,
     },
     {

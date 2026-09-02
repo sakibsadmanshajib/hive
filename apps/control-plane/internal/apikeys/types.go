@@ -244,6 +244,18 @@ type KeyView struct {
 	// BudgetSummary.Label already renders a human sentence for the kind, but
 	// carried no machine-readable limit for a UI to reformat or edit against.
 	BudgetLimitCredits *int64
+	// BudgetSpendCredits is what the gateway measures against that limit:
+	// api_key_budget_windows consumed plus reserved, for the window the key's
+	// budget kind is on. nil when there is no cap to enforce.
+	//
+	// It is not SpendCredits, and the gap between them is the point. Only
+	// ApplyReservationDelta writes the window and it returns early while the
+	// budget kind is "none", so a key that spent while uncapped and was capped
+	// afterwards carries a large SpendCredits and a zero window, and edge-api
+	// serves its next request. Dividing SpendCredits by the limit would report
+	// that key as over its cap and refused, which is a state the system does
+	// not have (issue #1683).
+	BudgetSpendCredits *int64
 }
 
 // AuthSnapshot is the control-plane-owned, Redis-projected authorization

@@ -736,6 +736,12 @@ func keyViewItem(view KeyView) map[string]interface{} {
 		// a UI could edit against.
 		"spend_credits":        view.SpendCredits,
 		"budget_limit_credits": view.BudgetLimitCredits,
+		// budget_spend_credits is the counter edge-api enforces against, null
+		// when the key carries no cap. spend_credits above is the lifetime
+		// rollup, and the two diverge by whatever the key spent before it was
+		// capped, so a console drawing a proportion of the cap has to divide
+		// this one or it will report a refusal that is not happening.
+		"budget_spend_credits": view.BudgetSpendCredits,
 	}
 	return item
 }

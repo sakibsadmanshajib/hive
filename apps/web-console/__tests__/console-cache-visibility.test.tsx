@@ -113,6 +113,7 @@ function apiKey(overrides: Partial<ApiKey> = {}): ApiKey {
     // rather than off the key.
     spend_credits: 0,
     budget_limit_credits: null,
+    budget_spend_credits: null,
     ...overrides,
   };
 }

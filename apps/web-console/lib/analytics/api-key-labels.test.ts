@@ -23,6 +23,7 @@ function key(overrides: Partial<ApiKey> = {}): ApiKey {
     allowlist_summary: { mode: "all", group_names: [], label: "All models" },
     spend_credits: 0,
     budget_limit_credits: null,
+    budget_spend_credits: null,
     ...overrides,
   };
 }

@@ -1345,3 +1345,103 @@ func TestKeyViewHidesALimitThatIsNotEnforced(t *testing.T) {
 		}
 	}
 }
+
+// TestKeyViewBudgetSpendIsTheEnforcedWindowNotLifetimeSpend pins the counter a
+// percentage-of-cap surface has to divide (issue #1683).
+//
+// The two counters are written by different paths. RecordUsageFinalization
+// writes api_key_usage_rollups on every settled request; only
+// ApplyReservationDelta writes api_key_budget_windows, and it returns early
+// while the budget kind is "none". Nothing backfills the window when a cap is
+// set later, so a key that spends while uncapped and is capped afterwards has
+// a large lifetime spend and an empty window, and edge-api's CheckAccess
+// (consumed + reserved + estimated > limit) serves its next request. A view
+// that reported the lifetime figure as the amount used against the cap would
+// paint that key as refused while the gateway was still serving it.
+func TestKeyViewBudgetSpendIsTheEnforcedWindowNotLifetimeSpend(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	ctx := context.Background()
+	accountID := uuid.New()
+	actorID := uuid.New()
+	now := time.Now()
+
+	created, err := svc.CreateKey(ctx, accountID, actorID, CreateKeyInput{Nickname: "capped-later"})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	keyID := created.Key.ID
+
+	// Uncapped spend. The rollup takes it; the budget window cannot, because
+	// ApplyReservationDelta returns early for a "none" budget kind.
+	if err := svc.RecordUsageFinalization(ctx, keyID, "hive-fast", 1000, 200, 0, 0, 900, now); err != nil {
+		t.Fatalf("RecordUsageFinalization: %v", err)
+	}
+	if err := svc.ApplyReservationDelta(ctx, keyID, 0, 900, now); err != nil {
+		t.Fatalf("ApplyReservationDelta while uncapped: %v", err)
+	}
+
+	view, err := svc.GetKeyView(ctx, accountID, keyID)
+	if err != nil {
+		t.Fatalf("GetKeyView: %v", err)
+	}
+	if view.BudgetSpendCredits != nil {
+		t.Fatalf("expected no budget spend for an uncapped key, got %d", *view.BudgetSpendCredits)
+	}
+
+	limit := int64(500)
+	kind := "lifetime"
+	if _, err := svc.UpdatePolicy(ctx, accountID, actorID, keyID, UpdatePolicyInput{
+		BudgetKind:         &kind,
+		BudgetLimitCredits: &limit,
+	}); err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+
+	view, err = svc.GetKeyView(ctx, accountID, keyID)
+	if err != nil {
+		t.Fatalf("GetKeyView after capping: %v", err)
+	}
+	if view.SpendCredits != 900 {
+		t.Fatalf("expected the lifetime figure to keep the pre-cap spend, got %d", view.SpendCredits)
+	}
+	if view.BudgetSpendCredits == nil {
+		t.Fatalf("expected a budget spend figure once the key carries a cap, got nil")
+	}
+	// 900 against a 500 cap would read as 180 percent and refused. The window
+	// is empty, and the gateway agrees: it would serve this key's next request.
+	if *view.BudgetSpendCredits != 0 {
+		t.Fatalf("expected the enforced window to be empty for spend that predates the cap, got %d", *view.BudgetSpendCredits)
+	}
+
+	// A request made after the cap exists reaches the window, and reserved
+	// credits count towards the same total edge-api compares against.
+	if err := svc.ApplyReservationDelta(ctx, keyID, 0, 200, now); err != nil {
+		t.Fatalf("ApplyReservationDelta after capping: %v", err)
+	}
+	if err := svc.ApplyReservationDelta(ctx, keyID, 50, 0, now); err != nil {
+		t.Fatalf("ApplyReservationDelta (reservation): %v", err)
+	}
+
+	view, err = svc.GetKeyView(ctx, accountID, keyID)
+	if err != nil {
+		t.Fatalf("GetKeyView after post-cap usage: %v", err)
+	}
+	if view.BudgetSpendCredits == nil || *view.BudgetSpendCredits != 250 {
+		t.Fatalf("expected consumed 200 plus reserved 50, got %v", view.BudgetSpendCredits)
+	}
+
+	snapshot, err := svc.ResolveSnapshot(ctx, created.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+	if snapshot.BudgetConsumedCredits+snapshot.BudgetReservedCredits != *view.BudgetSpendCredits {
+		t.Fatalf(
+			"the view must report what enforcement reads: snapshot %d+%d, view %d",
+			snapshot.BudgetConsumedCredits,
+			snapshot.BudgetReservedCredits,
+			*view.BudgetSpendCredits,
+		)
+	}
+}

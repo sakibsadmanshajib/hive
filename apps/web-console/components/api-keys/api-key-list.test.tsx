@@ -30,6 +30,7 @@ function baseKey(overrides: Partial<ApiKey> = {}): ApiKey {
     allowlist_summary: { mode: "all", group_names: [], label: "All models" },
     spend_credits: 0,
     budget_limit_credits: null,
+    budget_spend_credits: null,
     ...overrides,
   };
 }
@@ -123,17 +124,27 @@ describe("ApiKeyList name column", () => {
 
 /**
  * Issue #1683: the spend-against-limit surface was two plain dollar cells and
- * the reader had to divide them in their head. These pin the bar that
- * replaced them: a real progressbar with an accessible name, the percentage
- * and both dollar figures readable together, and a fill that never leaves its
- * track.
+ * the reader had to divide them in their head.
+ *
+ * The numerator these pin is budget_spend_credits, the counter edge-api
+ * enforces against, not spend_credits. The lifetime rollup takes every settled
+ * request while the budget window only starts once a cap exists, so a bar
+ * drawn from the lifetime figure reports a refusal the gateway is not making.
  */
 describe("ApiKeyList budget usage bar", () => {
-  function lifetimeKey(spend: number, limit: number | null): ApiKey {
+  function lifetimeKey(
+    budgetSpend: number | null,
+    limit: number | null,
+    overrides: Partial<ApiKey> = {},
+  ): ApiKey {
     return baseKey({
-      spend_credits: spend,
+      // Equal by default so the lifetime note stays out of the way of the
+      // cases that are not about it.
+      spend_credits: budgetSpend ?? 0,
+      budget_spend_credits: budgetSpend,
       budget_limit_credits: limit,
       budget_summary: { kind: "lifetime", label: "Lifetime budget cap" },
+      ...overrides,
     });
   }
 
@@ -147,7 +158,7 @@ describe("ApiKeyList budget usage bar", () => {
     expect(screen.getByText("$0.36")).toBeTruthy();
   });
 
-  it("fills the bar to the spent share and shows the percentage beside both dollar figures", () => {
+  it("fills the bar to the enforced share and shows the percentage beside both dollar figures", () => {
     render(
       <ApiKeyList keys={[lifetimeKey(1_000_000_000, 5_000_000_000)]} canManage={false} />,
     );
@@ -193,6 +204,17 @@ describe("ApiKeyList budget usage bar", () => {
     expect(screen.queryByText(/NaN|Infinity/)).toBeNull();
   });
 
+  it("treats a zero limit with nothing spent as exhausted too, since it refuses the first request", () => {
+    // handleUpdatePolicy accepts a zero budget_limit_credits with no
+    // positivity check, and enforcement is consumed + reserved + estimated >
+    // limit, so a zero cap rejects every call. An empty bar reading 0.0% would
+    // be the opposite of what the gateway does.
+    render(<ApiKeyList keys={[lifetimeKey(0, 0)]} canManage={false} />);
+
+    expect(screen.getByRole("progressbar").getAttribute("value")).toBe("100");
+    expect(screen.getByText("Limit reached")).toBeTruthy();
+  });
+
   it("renders a zero-spend capped key as an empty bar, not a missing one", () => {
     render(<ApiKeyList keys={[lifetimeKey(0, 5_000_000_000)]} canManage={false} />);
 
@@ -200,13 +222,63 @@ describe("ApiKeyList budget usage bar", () => {
     expect(screen.getByText("0.0%")).toBeTruthy();
   });
 
-  it("shows both dollar figures but no ratio for a monthly cap, whose window the lifetime spend does not match", () => {
+  it("divides the enforced window and not the lifetime spend, so a key capped after it spent is not painted as refused", () => {
+    // The defect this guards: $2.97 of lifetime spend against a $2.00 cap set
+    // afterwards is 148.5% and a red "Limit reached" if the lifetime figure is
+    // the numerator, while edge-api reads an empty budget window and serves
+    // the key's next request.
+    render(
+      <ApiKeyList
+        keys={[
+          lifetimeKey(0, 2_000_000_000, { spend_credits: 2_970_000_000 }),
+        ]}
+        canManage={false}
+      />,
+    );
+
+    expect(screen.getByRole("progressbar").getAttribute("value")).toBe("0");
+    expect(screen.getByText("0.0%")).toBeTruthy();
+    expect(screen.queryByText("Limit reached")).toBeNull();
+    expect(screen.queryByText("148.5%")).toBeNull();
+    // The lifetime total is not hidden, it is just kept away from the ratio.
+    expect(screen.getByText("$2.97 lifetime")).toBeTruthy();
+  });
+
+  it("draws the bar for a monthly cap too, because the enforced counter is that month's window", () => {
+    render(
+      <ApiKeyList
+        keys={[
+          baseKey({
+            spend_credits: 12_000_000_000,
+            budget_spend_credits: 2_500_000_000,
+            budget_limit_credits: 10_000_000_000,
+            budget_summary: { kind: "monthly", label: "Monthly budget cap" },
+          }),
+        ]}
+        canManage={false}
+      />,
+    );
+
+    const bar = screen.getByRole("progressbar");
+    expect(bar.getAttribute("value")).toBe("25");
+    expect(bar.getAttribute("aria-label")).toBe("Budget used: $2.50 of $10.00/mo");
+    expect(screen.getByText("25.0%")).toBeTruthy();
+    // A twelve dollar lifetime total against a ten dollar monthly cap is the
+    // ratio this column must never state; it is present as its own figure.
+    expect(screen.getByText("$12.00 lifetime")).toBeTruthy();
+  });
+
+  it("states both figures with no part-of-whole connective when the enforced counter is absent", () => {
+    // An older control-plane sends no budget_spend_credits. The proportion is
+    // exactly what is unknown then, so the cell draws no bar and does not join
+    // the two numbers with "of", which would state the ratio in prose.
     render(
       <ApiKeyList
         keys={[
           baseKey({
             spend_credits: 360_000_000,
-            budget_limit_credits: 5_000_000_000,
+            budget_spend_credits: null,
+            budget_limit_credits: 10_000_000_000,
             budget_summary: { kind: "monthly", label: "Monthly budget cap" },
           }),
         ]}
@@ -215,7 +287,7 @@ describe("ApiKeyList budget usage bar", () => {
     );
 
     expect(screen.queryByRole("progressbar")).toBeNull();
-    expect(screen.getByText("$0.36")).toBeTruthy();
-    expect(screen.getByText("$5.00/mo")).toBeTruthy();
+    const cell = screen.getByText("$0.36").parentElement;
+    expect(cell?.textContent).toBe("$0.36lifetime\u00b7$10.00/mocap");
   });
 });

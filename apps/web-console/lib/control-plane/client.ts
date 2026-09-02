@@ -1559,6 +1559,18 @@ export interface ApiKey {
   // pre-fill the edit form, since budget_summary.label only carries a
   // rendered sentence.
   budget_limit_credits: number | null;
+  // What the gateway measures against that limit: api_key_budget_windows
+  // consumed plus reserved, for the window the key's budget kind is on
+  // (apps/control-plane/internal/apikeys Service.budgetSpendCredits). null
+  // means there is no cap to enforce, or an older control-plane that does not
+  // send the field.
+  //
+  // This, not spend_credits, is the numerator of any proportion-of-cap
+  // rendering. spend_credits is the lifetime rollup, written on every settled
+  // request including the ones a key made before it was capped, and nothing
+  // backfills the window when a cap is set later. Dividing the lifetime figure
+  // paints a key as refused while edge-api is still serving it (issue #1683).
+  budget_spend_credits: number | null;
   secret?: string;
 }
 
@@ -1742,6 +1754,7 @@ function decodeApiKey(value: JsonValue): ApiKey | null {
 
   const spendCredits = readNumberField(value, "spend_credits") ?? 0;
   const budgetLimitCredits = readNumberField(value, "budget_limit_credits");
+  const budgetSpendCredits = readNumberField(value, "budget_spend_credits");
 
   const key: ApiKey = {
     id,
@@ -1757,6 +1770,7 @@ function decodeApiKey(value: JsonValue): ApiKey | null {
     allowlist_summary: allowlistSummary,
     spend_credits: spendCredits,
     budget_limit_credits: budgetLimitCredits,
+    budget_spend_credits: budgetSpendCredits,
   };
 
   if (secret !== null) {

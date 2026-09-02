@@ -94,7 +94,16 @@ func (s *Service) ListKeyViews(ctx context.Context, accountID uuid.UUID) ([]KeyV
 		if err != nil {
 			return nil, fmt.Errorf("apikeys: get lifetime spend: %w", err)
 		}
-		views = append(views, buildKeyView(key, policy, spend))
+		view := buildKeyView(key, policy, spend)
+		// One more per-key read, on top of the policy and lifetime-spend reads
+		// this loop already does. A key list is a page of a customer's own
+		// keys, so the row count is small; batch all three into one query if
+		// that ever stops being true.
+		view.BudgetSpendCredits, err = s.budgetSpendCredits(ctx, key.ID, policy)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, view)
 	}
 	return views, nil
 }
@@ -113,7 +122,39 @@ func (s *Service) GetKeyView(ctx context.Context, accountID, keyID uuid.UUID) (K
 	if err != nil {
 		return KeyView{}, fmt.Errorf("apikeys: get lifetime spend: %w", err)
 	}
-	return buildKeyView(key, policy, spend), nil
+	view := buildKeyView(key, policy, spend)
+	view.BudgetSpendCredits, err = s.budgetSpendCredits(ctx, keyID, policy)
+	if err != nil {
+		return KeyView{}, err
+	}
+	return view, nil
+}
+
+// budgetSpendCredits reports the counter the gateway enforces against, so a
+// surface that draws a proportion of a cap divides the same numbers the
+// refusal is made from: api_key_budget_windows consumed plus reserved, summed
+// exactly as edge-api's authz.CheckAccess sums them
+// (consumed + reserved + estimated > limit).
+//
+// Deliberately not GetLifetimeSpend. That reads api_key_usage_rollups, which
+// RecordUsageFinalization writes on every settled request whether or not a cap
+// exists, while the window is only ever written by ApplyReservationDelta,
+// which returns early for a "none" budget kind. Nothing backfills the window
+// when a cap is set later, so the two counters diverge by whatever the key
+// spent before it was capped, and a console dividing the lifetime figure would
+// show a red, over-cap key that the gateway is still serving (issue #1683).
+//
+// nil means there is nothing to enforce: no budget kind, or no limit.
+func (s *Service) budgetSpendCredits(ctx context.Context, keyID uuid.UUID, policy KeyPolicy) (*int64, error) {
+	if policy.BudgetKind == "" || policy.BudgetKind == "none" || policy.BudgetLimitCredits == nil {
+		return nil, nil
+	}
+	window, err := s.repo.GetBudgetWindow(ctx, keyID, policy.BudgetKind, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("apikeys: get budget window: %w", err)
+	}
+	used := window.ConsumedCredits + window.ReservedCredits
+	return &used, nil
 }
 
 // requireBillingTenant refuses a mint for an account edge-api is guaranteed to
