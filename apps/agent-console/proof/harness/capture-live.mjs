@@ -355,9 +355,15 @@ const SCENARIOS = [
       const content = `Hive demo box service record.\n\nRack asset tag: ${code}\n`;
       const instructions = `${RUN_TAG} attachment: read ${name} and state the rack asset tag.`;
 
+      // The console attaches the session bearer in its own client, so the
+      // header is taken off its create request rather than rebuilt here.
+      // Never logged: it is a live credential and log() would only redact it
+      // if it happened to match a known shape.
+      let bearer = "";
       await page.route("**/v1/agent/tasks", async (route) => {
         const request = route.request();
         if (request.method() !== "POST") return route.fallback();
+        bearer = request.headers()["authorization"] || "";
         const body = JSON.parse(request.postData() || "{}");
         body.attachments = [{ name, content }];
         log(`amended the create with 1 attachment (${Buffer.byteLength(content, "utf8")} bytes)`);
@@ -391,10 +397,15 @@ const SCENARIOS = [
 
       // The Working folder panel's own data, read through the customer route
       // rather than off disk, so the panel and the file agree.
-      const listed = await page.evaluate(async (id) => {
-        const res = await fetch(`/v1/agent/tasks/${id}/files`, { headers: { Accept: "application/json" } });
-        return { status: res.status, body: await res.text() };
-      }, created.id);
+      const listed = await page.evaluate(
+        async ({ id, auth }) => {
+          const res = await fetch(`/v1/agent/tasks/${id}/files`, {
+            headers: { Accept: "application/json", ...(auth ? { Authorization: auth } : {}) },
+          });
+          return { status: res.status, body: await res.text() };
+        },
+        { id: created.id, auth: bearer },
+      );
       log(`GET /v1/agent/tasks/{id}/files answered HTTP ${listed.status}: ${listed.body.slice(0, 400)}`);
       if (!listed.body.includes(name)) {
         throw new Error(`the working folder listing does not name ${name}: ${listed.body}`);
