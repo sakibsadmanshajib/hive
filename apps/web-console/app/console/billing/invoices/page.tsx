@@ -7,11 +7,13 @@
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
-  getViewer,
   listWorkspaceInvoices,
   type InvoiceRecord,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { InvoiceRow } from "@/components/billing/invoice-row";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
@@ -24,12 +26,12 @@ import {
 } from "@/components/ui/card";
 
 export default async function WorkspaceInvoicesPage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
 
-  const profile = await getAccountProfile();
+  const profile = await requireAccountProfile();
   const workspaceId = viewer.current_account.id;
 
   // Fetch invoices but distinguish three states:
@@ -56,7 +58,7 @@ export default async function WorkspaceInvoicesPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/billing"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Invoices</span>

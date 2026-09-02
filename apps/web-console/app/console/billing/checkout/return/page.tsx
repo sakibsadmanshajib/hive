@@ -2,10 +2,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
   getCheckoutIntent,
-  getViewer,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { CheckoutReturnStatus } from "@/components/billing/checkout-return-status";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
@@ -31,7 +33,7 @@ interface CheckoutReturnPageProps {
 // intents to read, and `hint` only selects wording. Neither can produce a
 // success, a failure, or a credit. Settlement stays with the provider webhook.
 export default async function CheckoutReturnPage({ searchParams }: CheckoutReturnPageProps) {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -40,7 +42,7 @@ export default async function CheckoutReturnPage({ searchParams }: CheckoutRetur
   const intentId = parseIntentId(params.intent);
   const hint = parseReturnHint(params.hint);
 
-  const profile = await getAccountProfile();
+  const profile = await requireAccountProfile();
   const intent = intentId
     ? await getCheckoutIntent(intentId).catch((): null => null)
     : null;
@@ -54,7 +56,7 @@ export default async function CheckoutReturnPage({ searchParams }: CheckoutRetur
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active={BILLING_PATH}
       topbar={<span className="font-medium text-[var(--color-ink-2)]">Billing</span>}
     >

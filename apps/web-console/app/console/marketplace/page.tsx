@@ -4,12 +4,14 @@ import { isWorkspaceAdminViewer } from "@/lib/viewer-gates";
 import { ShieldAlert } from "lucide-react";
 
 import {
-  getViewer,
-  getAccountProfile,
   getMarketplaceEntries,
   ControlPlaneError,
   type MarketplaceEntries,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -25,7 +27,7 @@ import { MarketplaceManager } from "@/components/marketplace/marketplace-manager
 // #947/#948/#949 family): OWNER of the selected workspace or platform admin
 // may render, anyone else gets a 404 that does not confirm the surface exists.
 export default async function MarketplacePage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -35,9 +37,7 @@ export default async function MarketplacePage() {
     notFound();
   }
 
-  const profile = await getAccountProfile().catch(
-    (): { owner_name: string } => ({ owner_name: "" }),
-  );
+  const profile = await requireAccountProfile();
 
   let entries: MarketplaceEntries | null = null;
   let loadFailed = false;
@@ -61,7 +61,7 @@ export default async function MarketplacePage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/marketplace"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Marketplace</span>

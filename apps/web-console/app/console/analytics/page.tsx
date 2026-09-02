@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
-import { getAccountProfile, getViewer } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import {
   fetchOverviewData,
   type GroupBy,
@@ -78,7 +81,7 @@ const TABS: ReadonlyArray<{ id: TabName; label: string }> = [
 export default async function AnalyticsPage({
   searchParams,
 }: AnalyticsPageProps) {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -93,7 +96,7 @@ export default async function AnalyticsPage({
   // Independent round trips, so they run together: the profile only feeds
   // the shell's user menu and nothing in the tab body reads it.
   const [profile, bundle] = await Promise.all([
-    getAccountProfile().catch((): { owner_name: string } => ({ owner_name: "" })),
+    requireAccountProfile(),
     fetchOverviewData({
       activeTab,
       groupBy,
@@ -148,7 +151,7 @@ export default async function AnalyticsPage({
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/analytics"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Analytics</span>

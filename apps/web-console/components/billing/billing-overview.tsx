@@ -15,7 +15,10 @@ import { formatCredits, formatShortDate } from "@/lib/format/credits";
 import { CreditBalance } from "@/components/billing/credit-balance";
 
 interface BillingOverviewProps {
-  balance: BalanceSummary;
+  // null when the balance could not be read. Rendering an unknown balance as
+  // a figure is how a customer ends up trusting a number the system never
+  // had; the card says "Unavailable" instead (issue #494).
+  balance: BalanceSummary | null;
   recentEntries: LedgerEntry[];
   // Country code is intentionally accepted but not displayed — locale rendering
   // is done downstream by checkout-modal which uses Intl with the rail's
@@ -91,7 +94,16 @@ export function BillingOverview({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5 px-5 py-5 sm:flex-row sm:items-end sm:justify-between">
-          <CreditBalance balance={balance} />
+          {balance ? (
+            <CreditBalance balance={balance} />
+          ) : (
+            <div className="flex flex-col gap-1">
+              <p className="text-3xl text-[var(--color-ink-3)]">Unavailable</p>
+              <p className="text-xs text-[var(--color-ink-3)]">
+                We could not read your balance just now. Refresh to try again.
+              </p>
+            </div>
+          )}
           <div className="flex items-center gap-3">
             <Link
               href="/console/billing?action=buy"

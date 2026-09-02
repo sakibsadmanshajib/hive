@@ -4,12 +4,13 @@ import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import {
   ControlPlaneError,
-  EMPTY_ACCOUNT_PROFILE,
-  getAccountProfile,
   getApiKeyLimits,
-  getViewer,
   updateApiKeyLimits,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { can } from "@/lib/viewer-gates";
 import {
   parseKeyLimitsInput,
@@ -39,7 +40,7 @@ function saveErrorMessage(err: unknown): string {
 
 export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactElement> {
   const { id: keyID } = await props.params;
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
 
   // Account-membership gate runs before the control-plane round-trip.
   // Authenticated users without an active account row should never reach
@@ -53,16 +54,12 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
   // Owner-gate: members without api_keys.write see read-only.
   const canEdit = can(viewer, "api_keys.write");
 
-  // The shell needs a display name, and a profile fetch failure is not a reason
-  // to fail the page: the viewer already carries everything the rail needs, and
-  // the shell falls back to the email. This follows budget/page.tsx rather than
-  // feature-gates/page.tsx: the canonical EMPTY_ACCOUNT_PROFILE sentinel rather
-  // than an ad hoc object, and a log line, so a real control-plane outage on
-  // this path leaves a trace instead of degrading silently.
-  const profile = await getAccountProfile().catch((error: unknown) => {
-    console.error("ApiKeyLimitsPage: could not load account profile", error);
-    return EMPTY_ACCOUNT_PROFILE;
-  });
+  // The shell needs a display name, and a profile fetch failure is not a
+  // reason to fail the page: the viewer already carries everything the rail
+  // needs, and the shell falls back to the email. requireAccountProfile()
+  // holds that decision now, and logs the failure, so a real control-plane
+  // outage on this path still leaves a trace (issue #494).
+  const profile = await requireAccountProfile();
 
   let limits: KeyLimits;
   try {
@@ -89,7 +86,7 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
       return (
         <ConsoleNotFound
           viewer={viewer}
-          ownerName={profile.owner_name || null}
+          ownerName={profile?.owner_name || null}
           active="/console/api-keys"
           section="Rate limits"
           eyebrow="Authentication"
@@ -112,7 +109,7 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
     // A server action is a public endpoint: the disabled fieldset is
     // presentation only, so permission is resolved again from the caller's own
     // session, and the payload is parsed rather than trusted.
-    const actor = await getViewer();
+    const actor = await requireViewer();
     if (!can(actor, "api_keys.write")) {
       return { ok: false, error: "You do not have permission to change rate limits." };
     }
@@ -146,7 +143,7 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/api-keys"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">

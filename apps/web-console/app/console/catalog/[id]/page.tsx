@@ -6,12 +6,15 @@ import { redirect } from "next/navigation";
 import { chatModelUrl, isChatCapable } from "@/lib/chat-link";
 
 import {
-  getAccountProfile,
   getAnalyticsUsage,
   getCatalogModels,
-  getViewer,
   type UsageSummaryRow,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+  tolerate,
+} from "@/lib/console/data";
 import { ConsoleNotFound } from "@/components/app-shell/console-not-found";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { ModelDetail } from "@/components/catalog/model-detail";
@@ -33,7 +36,7 @@ export default async function ModelDetailPage(
   props: ModelDetailPageProps,
 ): Promise<ReactElement> {
   const { id } = await props.params;
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -43,11 +46,28 @@ export default async function ModelDetailPage(
   // selecting from it also means an alias this tenant may not see is a 404
   // here for free, rather than a page that renders a model they cannot call.
   const [models, profile] = await Promise.all([
-    getCatalogModels(),
-    getAccountProfile().catch(
-      (): { owner_name: string } => ({ owner_name: "" }),
-    ),
+    tolerate(getCatalogModels()),
+    requireAccountProfile(),
   ]);
+
+  // A catalog we could not read cannot answer whether this model exists, and
+  // "Model not found" would answer it anyway. Say which question failed
+  // (issue #494).
+  if (!models) {
+    return (
+      <ConsoleNotFound
+        viewer={viewer}
+        ownerName={profile?.owner_name || null}
+        active="/console/catalog"
+        section="Model catalog"
+        eyebrow="Build"
+        title="Could not load the model catalog"
+        description="We could not reach the catalog service, so we cannot tell you whether this model is available. Refresh to try again."
+        backHref="/console/catalog"
+        backLabel="Back to catalog"
+      />
+    );
+  }
 
   const model = models.find((row) => row.id === id);
   if (!model) {
@@ -67,7 +87,7 @@ export default async function ModelDetailPage(
     return (
       <ConsoleNotFound
         viewer={viewer}
-        ownerName={profile.owner_name || null}
+        ownerName={profile?.owner_name || null}
         active="/console/catalog"
         section="Model catalog"
         eyebrow="Build"
@@ -104,7 +124,7 @@ export default async function ModelDetailPage(
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/catalog"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">

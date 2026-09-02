@@ -4,12 +4,14 @@ import { isPlatformAdminViewer } from "@/lib/viewer-gates";
 import { ShieldAlert } from "lucide-react";
 
 import {
-  getViewer,
-  getAccountProfile,
   getProviders,
   ControlPlaneError,
   type CustomProvider,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -23,7 +25,7 @@ import { ProvidersManager } from "@/components/providers/providers-manager";
 // 200 confirms the surface exists, so a customer gets 404 instead.
 // Mirrors app/console/marketplace/page.tsx.
 export default async function ProvidersPage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -33,9 +35,7 @@ export default async function ProvidersPage() {
     notFound();
   }
 
-  const profile = await getAccountProfile().catch(
-    (): { owner_name: string } => ({ owner_name: "" }),
-  );
+  const profile = await requireAccountProfile();
 
   let providers: CustomProvider[] | null = null;
   let loadFailed = false;
@@ -59,7 +59,7 @@ export default async function ProvidersPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/providers"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Providers</span>

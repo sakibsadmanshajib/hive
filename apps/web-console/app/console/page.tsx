@@ -11,12 +11,14 @@ import {
 } from "lucide-react";
 
 import {
-  getAccountProfile,
   getAnalyticsErrors,
   getAnalyticsUsage,
   getBalance,
-  getViewer,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -69,10 +71,15 @@ const NEXT_STEPS: ReadonlyArray<{
 ];
 
 export default async function ConsolePage() {
-  const viewer = await getViewer();
-  const profile = await getAccountProfile();
+  const viewer = await requireViewer();
+  const profile = await requireAccountProfile();
   const isUnverified = viewer.user.email_verified === false;
-  const needsSetup = profile.profile_setup_complete === false;
+  // Only nag about setup when the profile actually says it is unfinished. A
+  // profile the console could not read says nothing, and the previous
+  // EMPTY_ACCOUNT_PROFILE fallback said "unfinished" for it, which would have
+  // sent a fully set-up customer back through setup on a transient outage
+  // (issue #494).
+  const needsSetup = profile?.profile_setup_complete === false;
 
   // usageRows/errorRows are `null` on a fetch failure and `[]` on a genuine
   // empty result: an analytics outage must not render as "no requests" or
@@ -113,7 +120,7 @@ export default async function ConsolePage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Overview</span>

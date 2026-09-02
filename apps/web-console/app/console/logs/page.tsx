@@ -2,12 +2,14 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
   getApiKeys,
   getCatalogModels,
   getUsageEvents,
-  getViewer,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import type { UsageEventRow } from "@/lib/control-plane/client";
 import { UsageLogsCsv } from "@/components/logs/usage-logs-csv";
 import { LogsFilters } from "@/components/logs/logs-filters";
@@ -38,7 +40,7 @@ function isValidWindow(value: string | undefined): value is string {
 }
 
 export default async function LogsPage({ searchParams }: LogsPageProps) {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -53,9 +55,7 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
   };
   const cursor = params.cursor ?? null;
 
-  const profile = await getAccountProfile().catch(
-    (): { owner_name: string } => ({ owner_name: "" }),
-  );
+  const profile = await requireAccountProfile();
 
   let page: Awaited<ReturnType<typeof getUsageEvents>> | null = null;
   let fetchError = false;
@@ -118,7 +118,7 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/logs"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Logs</span>

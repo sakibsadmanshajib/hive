@@ -2,14 +2,17 @@ import { redirect } from "next/navigation";
 import { KeyRound } from "lucide-react";
 
 import {
-  getAccountProfile,
   getApiKeys,
   getCatalogModels,
   getUsageWindows,
-  getViewer,
   type CatalogModel,
   type UsageWindows,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+  tolerate,
+} from "@/lib/console/data";
 import { apiBaseUrl } from "@/lib/api-contract";
 import { pickQuickstartAlias } from "@/lib/quickstart-model";
 import { can } from "@/lib/viewer-gates";
@@ -49,17 +52,19 @@ async function catalogModelsOrNone(): Promise<CatalogModel[]> {
 }
 
 export default async function ApiKeysPage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   const canManage = can(viewer, "api_keys.write");
   if (!canManage) {
     redirect("/console/settings/profile");
   }
 
   const [keys, profile, models, windows] = await Promise.all([
-    getApiKeys(),
-    getAccountProfile().catch(
-      (): { owner_name: string } => ({ owner_name: "" }),
-    ),
+    // "No API keys yet" is a statement about the account. A failed read is a
+    // statement about the request, and this is the page an operator opens to
+    // revoke a leaked key: telling them there are no keys when we simply
+    // could not list them is the worst answer available (issue #494).
+    tolerate(getApiKeys()),
+    requireAccountProfile(),
     // Names a model that actually answers on this deployment. Bounded, and
     // that bound matters more here than on /console/docs: this is the page an
     // operator opens to revoke a leaked key, and `getCatalogModels` sets no
@@ -91,7 +96,7 @@ export default async function ApiKeysPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/api-keys"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">API keys</span>
@@ -109,7 +114,13 @@ export default async function ApiKeysPage() {
           apiBaseUrl={apiBaseUrl()}
           quickstartModel={pickQuickstartAlias(models)}
         />
-        {keys.length === 0 ? (
+        {keys === null ? (
+          <EmptyState
+            icon={<KeyRound size={20} aria-hidden="true" />}
+            title="Could not load your API keys"
+            description="We could not reach the key service, so this list is not showing what exists. Refresh to try again."
+          />
+        ) : keys.length === 0 ? (
           <EmptyState
             icon={<KeyRound size={20} aria-hidden="true" />}
             title="No API keys yet"

@@ -2,12 +2,8 @@ import type { ReactNode } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import {
-  getViewer,
-  getBalance,
-  getBudgetThreshold,
-  type Viewer,
-} from "@/lib/control-plane/client";
+import { getBalance, getBudgetThreshold } from "@/lib/control-plane/client";
+import { requireViewer, tolerate } from "@/lib/console/data";
 import { readTenantIdClaim } from "@/lib/auth/tenant-claim";
 import { createClient } from "@/lib/supabase/server";
 import { VerificationBanner } from "@/components/verification-banner";
@@ -23,25 +19,17 @@ interface ConsoleLayoutProps {
 // components/workspace-switcher.tsx) so each page picks its own `active`
 // route.
 export default async function ConsoleLayout({ children }: ConsoleLayoutProps) {
-  // getViewer() already retries one transient Supabase Auth hiccup
-  // (lib/control-plane/client.ts). A second failure means the session
-  // genuinely cannot be resolved right now, and every page under this layout
-  // shares this one call, so this is the one place that closes the crash for
-  // all of them: redirect to sign-in, the same destination an expired
-  // session already takes (tests/e2e/unauth.spec.ts), instead of letting the
-  // throw reach the generic error boundary.
-  let viewer: Viewer;
-  try {
-    viewer = await getViewer();
-  } catch (error) {
-    console.error("ConsoleLayout: could not load viewer", error);
-    redirect("/auth/sign-in");
-  }
+  // requireViewer() carries the redirect-to-sign-in fallback that used to be
+  // written out here, so every console route now shares it rather than this
+  // layout being the only place that had it (issue #494). It also memoizes
+  // the read for the request, so the page beneath this layout reuses this
+  // answer instead of making a second, independently failable viewer call.
+  const viewer = await requireViewer();
 
   // A signed-in user can legitimately hold no tenant membership: the Supabase
   // access-token hook issues a valid token with no tenant_id claim rather than
   // failing sign-in. Billing accounts are auto-provisioned on first login, so
-  // getViewer() above still succeeds; only the tenant scope can be missing.
+  // requireViewer() above still succeeds; only the tenant scope can be missing.
   //
   // Hand that case to /console/provision rather than settling it here. This is
   // a layout, so it re-renders on every navigation, and a provisioning write
@@ -59,16 +47,20 @@ export default async function ConsoleLayout({ children }: ConsoleLayoutProps) {
 
   const isUnverified = viewer.user.email_verified === false;
 
-  const [balanceSummary, budgetThreshold] = isUnverified
+  // A balance that failed to load is unknown, and unknown is not zero. This
+  // read used to collapse a rejection to 0, which is below every threshold a
+  // customer can set, so an unreadable balance rendered "your balance has
+  // reached or dropped below your alert threshold" on every console route at
+  // once (issue #494). Pass the uncertainty through instead and let the
+  // banner stay quiet; a warning nobody can act on is worse than no warning.
+  const [currentBalance, threshold] = isUnverified
     ? [null, null]
-    : await Promise.allSettled([getBalance(), getBudgetThreshold()]);
-
-  const currentBalance =
-    balanceSummary?.status === "fulfilled"
-      ? balanceSummary.value.available_credits
-      : 0;
-  const threshold =
-    budgetThreshold?.status === "fulfilled" ? budgetThreshold.value : null;
+    : await Promise.all([
+        tolerate(getBalance()).then(
+          (balance) => balance?.available_credits ?? null,
+        ),
+        tolerate(getBudgetThreshold()),
+      ]);
 
   return (
     <>

@@ -3,12 +3,14 @@ import { redirect } from "next/navigation";
 
 import {
   ControlPlaneError,
-  getAccountProfile,
   getMembers,
-  getViewer,
   type AccountMember,
   type PendingInvitation,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import {
   invitationOutcome,
   parseDeliveryFlag,
@@ -182,7 +184,7 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
     data: { session },
   } = await supabase.auth.getSession();
 
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -214,9 +216,7 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
 
   const [memberList, profile] = await Promise.all([
     loadMembers(),
-    getAccountProfile().catch(
-      (): { owner_name: string } => ({ owner_name: "" }),
-    ),
+    requireAccountProfile(),
   ]);
   const members = memberList.members;
   const invitations = memberList.invitations;
@@ -370,7 +370,7 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/members"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Members</span>

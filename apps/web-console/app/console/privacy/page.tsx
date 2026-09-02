@@ -2,11 +2,13 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
   getCatalogModels,
-  getViewer,
   type CatalogModel,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import {
@@ -73,15 +75,13 @@ type CatalogList = CatalogModel[] | null;
  *     scoped rather than as a complete privacy statement.
  */
 export default async function PrivacyPage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
 
   const [profile, models] = await Promise.all([
-    getAccountProfile().catch(
-      (): { owner_name: string } => ({ owner_name: "" }),
-    ),
+    requireAccountProfile(),
     getCatalogModels().catch((): CatalogList => null),
   ]);
 
@@ -94,7 +94,7 @@ export default async function PrivacyPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/privacy"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">

@@ -2,14 +2,16 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
   getBalance,
   getBudgetThreshold,
   getInvoices,
   getLedgerEntries,
-  getViewer,
-  type LedgerPage,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+  tolerate,
+} from "@/lib/console/data";
 import { BillingOverview } from "@/components/billing/billing-overview";
 import { CheckoutLauncher } from "@/components/billing/checkout-launcher";
 import { BudgetAlertForm } from "@/components/billing/budget-alert-form";
@@ -18,6 +20,7 @@ import { InvoiceList } from "@/components/billing/invoice-list";
 import { LedgerTable } from "@/components/billing/ledger-table";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/cn";
 
 interface BillingPageProps {
@@ -42,7 +45,7 @@ const TABS: ReadonlyArray<{ id: TabName; label: string }> = [
 ];
 
 export default async function BillingPage({ searchParams }: BillingPageProps) {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -58,9 +61,13 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
   const showCheckout = params.action === "buy";
 
   const [balance, profile, budgetThreshold, recentLedger] = await Promise.all([
-    getBalance(),
-    getAccountProfile(),
-    getBudgetThreshold().catch((): null => null),
+    // A balance the console cannot read is unknown, not zero, and this page is
+    // where a customer comes to find out what it is. tolerate() keeps the rest
+    // of the page (ledger, invoices, buy credits) reachable while the card
+    // says plainly that the figure is unavailable (issue #494).
+    tolerate(getBalance()),
+    requireAccountProfile(),
+    tolerate(getBudgetThreshold()),
     // Issue #856: the Overview tab hardcoded recentEntries={[]} since PR #89
     // (the original Go rewrite), so "No transactions yet" rendered
     // unconditionally regardless of what the ledger held. getLedgerEntries
@@ -69,9 +76,7 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
     // simply never called for this tab. A failed fetch here degrades to an
     // empty preview rather than breaking the page, matching budgetThreshold's
     // own fallback above.
-    getLedgerEntries({ limit: 5 }).catch(
-      (): LedgerPage => ({ entries: [], next_cursor: null }),
-    ),
+    tolerate(getLedgerEntries({ limit: 5 })),
   ]);
 
   return (
@@ -83,7 +88,7 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/billing"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Billing</span>
@@ -122,8 +127,8 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
         <div className="flex flex-col gap-6">
           <BillingOverview
             balance={balance}
-            recentEntries={recentLedger.entries}
-            accountCountryCode={profile.country_code}
+            recentEntries={recentLedger?.entries ?? []}
+            accountCountryCode={profile?.country_code ?? ""}
           />
           <BudgetAlertForm currentThreshold={budgetThreshold} />
           <BillingLinks />
@@ -137,7 +142,7 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
       {activeTab === "invoices" ? <InvoicesTab /> : null}
 
       {showCheckout ? (
-        <CheckoutLauncher accountCountryCode={profile.country_code} />
+        <CheckoutLauncher accountCountryCode={profile?.country_code ?? ""} />
       ) : null}
     </ConsoleShell>
   );
@@ -150,11 +155,25 @@ async function LedgerEntries({
   cursor: string | null;
   typeFilter: string | null;
 }) {
-  const ledgerPage = await getLedgerEntries({
-    limit: 25,
-    cursor: cursor ?? undefined,
-    type: typeFilter ?? undefined,
-  });
+  const ledgerPage = await tolerate(
+    getLedgerEntries({
+      limit: 25,
+      cursor: cursor ?? undefined,
+      type: typeFilter ?? undefined,
+    }),
+  );
+
+  // A ledger that failed to load must not render as a ledger with no entries.
+  // "No transactions" is a claim about the account; this is a claim about the
+  // request (issue #494).
+  if (!ledgerPage) {
+    return (
+      <EmptyState
+        title="Could not load the ledger"
+        description="We could not reach the billing service. Refresh to try again."
+      />
+    );
+  }
 
   return (
     <LedgerTable
@@ -167,6 +186,18 @@ async function LedgerEntries({
 }
 
 async function InvoicesTab() {
-  const invoices = await getInvoices();
+  const invoices = await tolerate(getInvoices());
+
+  // Same rule as the ledger above: an unreachable invoice service is not the
+  // same statement as "you have no invoices".
+  if (!invoices) {
+    return (
+      <EmptyState
+        title="Could not load invoices"
+        description="We could not reach the billing service. Refresh to try again."
+      />
+    );
+  }
+
   return <InvoiceList invoices={invoices} />;
 }

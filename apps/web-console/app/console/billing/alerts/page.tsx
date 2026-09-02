@@ -7,11 +7,13 @@
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
-  getViewer,
   listSpendAlerts,
   type SpendAlert,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { SpendAlertForm } from "@/components/billing/spend-alert-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
@@ -34,12 +36,12 @@ function formatTimestamp(value: string | null): string {
 }
 
 export default async function SpendAlertsPage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
 
-  const profile = await getAccountProfile();
+  const profile = await requireAccountProfile();
   const workspaceId = viewer.current_account.id;
   const isOwner = viewer.current_account.role === "owner";
 
@@ -58,7 +60,7 @@ export default async function SpendAlertsPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/billing"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">

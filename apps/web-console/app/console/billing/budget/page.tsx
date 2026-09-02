@@ -9,44 +9,32 @@
 import { redirect } from "next/navigation";
 
 import {
-  EMPTY_ACCOUNT_PROFILE,
-  getAccountProfile,
   getBudget,
-  getViewer,
-  type Viewer,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { BudgetForm } from "@/components/billing/budget-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
 
 export default async function BudgetSettingsPage() {
-  // getViewer() already retries one transient Supabase Auth hiccup
-  // (lib/control-plane/client.ts). A second failure means the session
-  // genuinely cannot be resolved, so this redirects to sign-in -- the same
-  // destination an expired session already takes (tests/e2e/unauth.spec.ts)
-  // -- instead of letting the throw reach the generic error boundary. There
-  // is nothing else this page can render without a viewer: no role, no
-  // workspace id, no email.
-  let viewer: Viewer;
-  try {
-    viewer = await getViewer();
-  } catch (error) {
-    console.error("BudgetSettingsPage: could not load viewer", error);
-    redirect("/auth/sign-in");
-  }
+  // The redirect-to-sign-in fallback this page used to spell out itself now
+  // lives in requireViewer(), so every console page has it and none of them
+  // carry a private copy that also has to remember to let Next.js's own
+  // control-flow errors past (issue #494).
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
 
-  // A profile-fetch failure is not a session problem -- the page still knows
-  // who the viewer is and which workspace this is, so it degrades to the
-  // same empty/not-yet-set-up profile a fresh account already renders
-  // (EMPTY_ACCOUNT_PROFILE), rather than crashing on a field this page only
-  // needs for a display name fallback.
-  const profile = await getAccountProfile().catch((error: unknown) => {
-    console.error("BudgetSettingsPage: could not load account profile", error);
-    return EMPTY_ACCOUNT_PROFILE;
-  });
+  // A profile-fetch failure is not a session problem: the page still knows
+  // who the viewer is and which workspace this is, and it only needs the
+  // profile for a display-name fallback. requireAccountProfile() resolves it
+  // to null and logs, so this page no longer carries its own copy of that
+  // decision (issue #494).
+  const profile = await requireAccountProfile();
   const workspaceId = viewer.current_account.id;
   const isOwner = viewer.current_account.role === "owner";
 
@@ -61,7 +49,7 @@ export default async function BudgetSettingsPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/billing"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Budget</span>

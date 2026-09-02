@@ -1,11 +1,16 @@
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
   getBillingProfile,
-  getViewer,
   updateBillingProfile,
+  type AccountProfile,
+  type BillingProfile,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+  tolerate,
+} from "@/lib/console/data";
 import {
   billingProfileSchema,
   type BillingProfileFormValues,
@@ -16,10 +21,11 @@ import {
 } from "@/components/profile/billing-contact-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 
 function toFormValues(
-  accountProfile: Awaited<ReturnType<typeof getAccountProfile>>,
-  billingProfile: Awaited<ReturnType<typeof getBillingProfile>>,
+  accountProfile: AccountProfile,
+  billingProfile: BillingProfile,
 ): BillingProfileFormValues {
   return {
     accountType: accountProfile.account_type,
@@ -55,16 +61,24 @@ function readFormValues(formData: FormData): BillingProfileFormValues {
 }
 
 export default async function BillingSettingsPage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
 
   const [accountProfile, billingProfile] = await Promise.all([
-    getAccountProfile(),
-    getBillingProfile(),
+    requireAccountProfile(),
+    tolerate(getBillingProfile()),
   ]);
-  const initialValues = toFormValues(accountProfile, billingProfile);
+  // An account with nothing stored yet is a 404 the client turns into a blank
+  // billing profile, and the blank form is the right render for it. A read
+  // that failed is null, and a blank form is the wrong render for that: it
+  // would show saved details as empty and invite the customer to overwrite
+  // them (issue #494).
+  const initialValues =
+    accountProfile && billingProfile
+      ? toFormValues(accountProfile, billingProfile)
+      : null;
 
   async function saveBillingProfile(
     _state: BillingProfileFormState,
@@ -111,7 +125,7 @@ export default async function BillingSettingsPage() {
       viewer={viewer}
       user={{
         email: viewer.user.email,
-        name: accountProfile.owner_name || null,
+        name: accountProfile?.owner_name || null,
       }}
       active="/console/settings/profile"
       topbar={
@@ -126,11 +140,18 @@ export default async function BillingSettingsPage() {
         description="Optional until checkout or invoicing. Save whatever billing, legal-entity, and tax context you already know — come back later when a payment or invoice flow needs the rest."
       />
 
-      <BillingContactForm
-        action={saveBillingProfile}
-        initialValues={initialValues}
-        submitLabel="Save billing details"
-      />
+      {initialValues ? (
+        <BillingContactForm
+          action={saveBillingProfile}
+          initialValues={initialValues}
+          submitLabel="Save billing details"
+        />
+      ) : (
+        <EmptyState
+          title="Could not load your billing details"
+          description="We could not reach the billing profile service, so this form is not showing what is currently saved. Refresh to try again."
+        />
+      )}
     </ConsoleShell>
   );
 }

@@ -1,25 +1,28 @@
 import { redirect } from "next/navigation";
 
+import { getCatalogModels } from "@/lib/control-plane/client";
 import {
-  getAccountProfile,
-  getCatalogModels,
-  getViewer,
-} from "@/lib/control-plane/client";
+  requireViewer,
+  requireAccountProfile,
+  tolerate,
+} from "@/lib/console/data";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { ModelCatalogBrowser } from "@/components/catalog/model-catalog-browser";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 
 export default async function CatalogPage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
 
   const [models, profile] = await Promise.all([
-    getCatalogModels(),
-    getAccountProfile().catch(
-      (): { owner_name: string } => ({ owner_name: "" }),
-    ),
+    // A catalog that failed to load must not browse as a catalog with no
+    // models in it: that reads as "this deployment routes to nothing"
+    // (issue #494).
+    tolerate(getCatalogModels()),
+    requireAccountProfile(),
   ]);
 
   return (
@@ -31,7 +34,7 @@ export default async function CatalogPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/catalog"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">
@@ -45,7 +48,14 @@ export default async function CatalogPage() {
         description="Available models with per-million-token input, output and prompt-cache pricing. Search, filter by capability, or sort by price."
       />
 
-      <ModelCatalogBrowser models={models} />
+      {models ? (
+        <ModelCatalogBrowser models={models} />
+      ) : (
+        <EmptyState
+          title="Could not load the model catalog"
+          description="We could not reach the catalog service. Refresh to try again."
+        />
+      )}
     </ConsoleShell>
   );
 }
