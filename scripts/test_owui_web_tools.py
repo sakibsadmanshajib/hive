@@ -454,6 +454,83 @@ def test_upstream_builtin_specifications_are_dropped() -> None:
     run_gateway(check)
 
 
+def test_a_turn_with_folder_knowledge_keeps_the_knowledge_tools() -> None:
+    """Upstream stops injecting a folder's files into the request the moment
+    function calling is native and hands the work to these tools. Dropping them
+    on such a turn would silently strand the documents while the interface
+    still offered them."""
+    builtins = {
+        "query_knowledge_files": {"spec": {"name": "query_knowledge_files"}, "type": "builtin"},
+        "view_file": {"spec": {"name": "view_file"}, "type": "builtin"},
+        "get_current_timestamp": {"spec": {"name": "get_current_timestamp"}, "type": "builtin"},
+        "search_chats": {"spec": {"name": "search_chats"}, "type": "builtin"},
+    }
+
+    def check(base, server):
+        metadata = {"message_id": "turn-1", "folder_knowledge": [{"type": "collection", "id": "kb-1"}]}
+        tools = select(base, TOOL_CAPABLE, tools_dict=dict(builtins), metadata=metadata)
+        assert "query_knowledge_files" in tools and "view_file" in tools, sorted(tools)
+        # And nothing else came back with them.
+        assert "get_current_timestamp" not in tools and "search_chats" not in tools, sorted(tools)
+        assert {"web_search", "web_fetch"} <= set(tools)
+
+    run_gateway(check)
+
+
+def test_a_model_with_attached_knowledge_keeps_them_too() -> None:
+    builtins = {"query_knowledge_files": {"spec": {"name": "query_knowledge_files"}, "type": "builtin"}}
+    model = dict(TOOL_CAPABLE) | {"info": {"meta": {"knowledge": [{"type": "collection", "id": "kb"}]}}}
+
+    def check(base, server):
+        tools = select(base, model, tools_dict=dict(builtins))
+        assert "query_knowledge_files" in tools, sorted(tools)
+
+    run_gateway(check)
+
+
+def test_an_ordinary_turn_carries_no_knowledge_tools() -> None:
+    """The payload budget. Keeping them always would put a knowledge tool on
+    every chat request from a user who has no documents at all."""
+    builtins = {"query_knowledge_files": {"spec": {"name": "query_knowledge_files"}, "type": "builtin"}}
+
+    def check(base, server):
+        tools = select(base, TOOL_CAPABLE, tools_dict=dict(builtins))
+        assert set(tools) == {"web_search", "web_fetch"}, sorted(tools)
+
+    run_gateway(check)
+
+
+def test_the_knowledge_tool_names_still_exist_upstream() -> None:
+    """A rename upstream must fail a pull request, not quietly reopen the gap."""
+    tools_py = (REPO / "vendor" / "open-webui" / "backend" / "open_webui" / "utils" / "tools.py").read_text(
+        encoding="utf-8"
+    )
+    imports = tools_py[tools_py.index("from open_webui.tools.builtin import (") :]
+    imports = imports[: imports.index(")")]
+    declared = {line.strip().rstrip(",") for line in imports.splitlines()[1:]}
+    missing = web_tools.KNOWLEDGE_TOOL_NAMES - declared
+    assert not missing, f"these knowledge tools no longer exist upstream: {sorted(missing)}"
+
+
+def test_the_two_unconditional_document_paths_are_untouched() -> None:
+    """A file attached to the message, and a Hive project's files (PR #1707,
+    appended to the same request `files` list), both go through
+    chat_completion_files_handler. Upstream calls it on either path, so the
+    native flip cannot strand them. Pinned, because that is the claim the
+    knowledge handling above rests on."""
+    body = patch_module.handler_body(PATCHED)
+    handler_call = (
+        "            form_data, flags = await chat_completion_files_handler("
+        "request, form_data, extra_params, user)"
+    )
+    assert handler_call in body, "upstream no longer runs the request-files handler here"
+    guard = body[: body.index(handler_call)].splitlines()[-6:]
+    assert not any("legacy" in line for line in guard), (
+        "the request-files handler is now gated on legacy function calling, so "
+        f"the native flip would strand attached files: {guard}"
+    )
+
+
 def test_a_named_builtin_can_be_kept() -> None:
     builtins = {"query_knowledge_files": {"spec": {"name": "query_knowledge_files"}, "type": "builtin"}}
 

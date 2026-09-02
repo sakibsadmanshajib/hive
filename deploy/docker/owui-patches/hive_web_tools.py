@@ -96,9 +96,43 @@ UPSTREAM_AUTH_HEADER = "X-Hive-Upstream-Auth"
 # budget that fails open is the defect it exists to prevent.
 TURN_HEADER = "X-Hive-Tool-Turn"
 
-# Comma separated upstream builtin tool names a deployment wants kept. Empty by
-# default: see the module docstring for the measured reason.
+# Comma separated upstream builtin tool names a deployment wants kept on EVERY
+# request. Empty by default: see the module docstring for the measured reason.
 BUILTIN_ALLOWLIST_ENV = "HIVE_OWUI_BUILTIN_TOOLS"
+
+# Upstream's knowledge tools, kept on the turns that would otherwise lose their
+# documents. Two of Open WebUI's retrieval paths inject documents into the
+# request ONLY under legacy function calling and hand the work to these tools
+# under native: a folder's attached files, which become
+# metadata['folder_knowledge'], and a custom model's own attached knowledge.
+# Dropping the whole builtin set with native turned on would therefore have
+# stranded both, silently, in a deployment where the interface still offers
+# them. They are kept per turn rather than always, so an ordinary chat still
+# carries two specifications and nothing else.
+#
+# NOT covered by this, and not needing to be: a file the user attaches to the
+# message, and a Hive project's files, which PR #1707 appends to the same
+# request `files` list. Both go through chat_completion_files_handler, which
+# upstream calls unconditionally on either path.
+#
+# Names taken from utils/tools.py's own import list; the self check asserts
+# every one of them still exists there, so an upstream rename fails a pull
+# request rather than quietly reopening the gap.
+KNOWLEDGE_TOOL_NAMES = frozenset(
+    {
+        "grep_knowledge_files",
+        "kb_exec",
+        "list_knowledge",
+        "list_knowledge_bases",
+        "query_knowledge_bases",
+        "query_knowledge_files",
+        "search_knowledge_bases",
+        "search_knowledge_files",
+        "view_file",
+        "view_knowledge_file",
+        "view_note",
+    }
+)
 
 # Set to "false" to advertise nothing at all, which restores the behaviour
 # before this module existed without needing to rebuild the image.
@@ -488,6 +522,22 @@ def override_instruction(features, tools) -> str:
     )
 
 
+def has_stranded_knowledge(model, metadata) -> bool:
+    """Whether this turn carries documents only a builtin tool can reach.
+
+    Both sources are ones upstream stops injecting into the request the moment
+    function calling is native: a folder's files, which it moves to
+    metadata['folder_knowledge'], and a custom model's attached knowledge, which
+    it simply skips. On such a turn the knowledge tools are not optional, they
+    are the delivery mechanism.
+    """
+    if isinstance(metadata, dict) and metadata.get("folder_knowledge"):
+        return True
+    if not isinstance(model, dict):
+        return False
+    return bool(((model.get("info") or {}).get("meta") or {}).get("knowledge"))
+
+
 async def select_tools(request, tools_dict, model, metadata, user, environ=None) -> dict:
     """The tool set this deployment advertises for one chat turn.
 
@@ -498,7 +548,9 @@ async def select_tools(request, tools_dict, model, metadata, user, environ=None)
     """
     environ = os.environ if environ is None else environ
     source = tools_dict if isinstance(tools_dict, dict) else {}
-    keep = kept_builtin_names(environ)
+    keep = set(kept_builtin_names(environ))
+    if has_stranded_knowledge(model, metadata):
+        keep |= KNOWLEDGE_TOOL_NAMES
     selected = {
         name: entry
         for name, entry in source.items()

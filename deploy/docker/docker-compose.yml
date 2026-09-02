@@ -1542,12 +1542,15 @@ services:
       # out on a chat request now is roughly a tenth of what failed then, and
       # it only goes out to an alias whose route reports tools_supported.
       #
-      # Cost of the flip, stated rather than discovered later: the classic
-      # document RAG injection is gated the same way, so uploads now route
-      # through upstream's builtin knowledge tools instead. Those are part of
-      # the builtin set this deployment drops, so a deployment that wants them
-      # names them in HIVE_OWUI_BUILTIN_TOOLS below rather than reverting this
-      # variable, which would take the web tools down with them.
+      # Cost of the flip, and how it is paid. Two of Open WebUI's retrieval
+      # paths inject documents into the request only under legacy and hand the
+      # work to builtin knowledge tools under native: a folder's attached files
+      # and a custom model's own knowledge. The patch keeps exactly those tools
+      # on exactly the turns that carry such knowledge, so an ordinary chat
+      # still ships two specifications and a knowledge turn still reaches its
+      # documents. A file attached to the message, and a Hive project's files
+      # (PR #1707 appends them to the same request list), are unaffected either
+      # way: upstream runs chat_completion_files_handler on both paths.
       #
       # Set OWUI_DEFAULT_FUNCTION_CALLING=legacy to go back. Upstream has no env
       # var for this and it is not persisted config either, so the name is read
