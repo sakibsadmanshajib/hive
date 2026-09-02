@@ -16,14 +16,16 @@ renders them showed one at a time.
 | --- | --- | --- | --- |
 | `origin/main` build, `origin/main` wire | 0 of 11 samples | 0 | none, just the summary |
 | `origin/main` build, this branch's wire | 5 of 11 samples | 1 | 1 |
-| This branch, both | 4 of 11 samples | 4 | 3 |
+| This branch, both | 5 of 11 samples | 3 | 3 |
 
-The last row's peak is four and its ending is three because the run's closing
+Three lines rather than six because the two `tool_call` steps collapse into
+their results as those arrive, which is `foldRunSteps` closing each open call
+in place rather than adding a second line for it, and because the run's closing
 message arrives twice, once as a `message` event and once as the task's own
-summary, and `dropSummaryEcho` removes the duplicate when the run settles
-(#1509). The two tool steps also collapse into their results as those arrive,
-which is `foldRunSteps` closing each `tool_call` in place rather than adding a
-line for its result.
+summary, so `dropSummaryEcho` removes the duplicate when the run settles
+(#1509). The peak moves between three and four across runs depending on whether
+a sample lands in the moment the summary echo is still on screen; the number in
+the table is the one in the committed logs.
 
 `capture-*.log` are the runs, with a per sample line naming what the transcript
 showed and, at the end, every agent API call the front end made with its
@@ -113,8 +115,8 @@ OWUI_URL=http://127.0.0.1:3422 OUT_DIR=/tmp/proof1622 LABEL=after WIRE=new \
   PROOF_PASSWORD="$PW" node docs/proof/cowork-step-streaming-1622/capture.mjs
 ```
 
-`playwright` has to resolve for that last line; the capture was run from
-`apps/web-console`, which already has it.
+`@playwright/test` has to resolve for that last line; the capture was run from
+`apps/web-console`, which declares it.
 
 The screenshots and the screen recording are attached to the pull request
 through `scripts/post-pr-visual-proof.sh` and the release it uploads to. The

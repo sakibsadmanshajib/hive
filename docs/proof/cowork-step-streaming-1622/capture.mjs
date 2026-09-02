@@ -32,7 +32,11 @@
  * the before and after pair.
  */
 
-import { chromium } from 'playwright';
+// `@playwright/test`, not `playwright`: the second is only ever present here
+// transitively, while the first is what apps/web-console declares, and it
+// re-exports the same browser handles. A clean install would have failed this
+// import before the capture started.
+import { chromium } from '@playwright/test';
 
 const OWUI = process.env.OWUI_URL || 'http://localhost:8080';
 const OUT = process.env.OUT_DIR || '/out';
