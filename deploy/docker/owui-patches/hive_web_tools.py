@@ -339,6 +339,12 @@ async def _fetch_descriptors(environ=None) -> list:
     # header, an unreachable control plane turned this read of a constant into
     # a ten second timeout and advertised nothing.
     try:
+        # The shared default executor here, unlike a tool call, and deliberately.
+        # `_descriptor_lock` allows one of these in flight at a time and the
+        # result is cached for DESCRIPTOR_TTL_SECONDS, so this holds at most one
+        # shared worker for at most DESCRIPTOR_TIMEOUT_SECONDS. Routing it
+        # through _call_executor would instead let it queue behind eight
+        # ninety second fetches, which is the opposite of what it needs.
         status, payload = await asyncio.to_thread(
             _request, "GET", f"{base}/tools", {}, None, DESCRIPTOR_TIMEOUT_SECONDS
         )
