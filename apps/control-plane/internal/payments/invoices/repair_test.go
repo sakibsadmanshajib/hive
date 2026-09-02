@@ -83,9 +83,20 @@ func cloneInvoice(in Invoice) Invoice {
 // carrying a credit count, no rate, and a PDF object already in the bucket.
 func seedConflatedInvoice(t *testing.T, repo *fakeRepo, ws uuid.UUID, credits int64) Invoice {
 	t.Helper()
-	period := Period{
+	return seedConflatedInvoiceForPeriod(t, repo, ws, Period{
 		Start: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
 		End:   time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+	}, credits)
+}
+
+// seedConflatedInvoiceForPeriod is the same seed with the period chosen by the
+// caller, so a test can put the row on either side of the credit unit rescale.
+// It seeds the matching ledger too: the repair reconciles against it now, and a
+// row with no ledger behind it is refused rather than repaired.
+func seedConflatedInvoiceForPeriod(t *testing.T, repo *fakeRepo, ws uuid.UUID, period Period, credits int64) Invoice {
+	t.Helper()
+	if _, seeded := repo.ledger[wsMonthKey(ws, period.Start)]; !seeded {
+		repo.seedLedger(ws, period.Start, credits)
 	}
 	inv := Invoice{
 		ID:               uuid.New(),

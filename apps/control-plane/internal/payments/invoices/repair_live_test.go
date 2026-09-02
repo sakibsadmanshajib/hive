@@ -359,6 +359,11 @@ func TestListUnconverted_SkipsAnUndecodableRow_Live(t *testing.T) {
 		End:   time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 	}
 	goodID := insertConflatedRow(t, pool, accountID, goodPeriod, conflatedCredits)
+	// The ledger the readable row is reconciled against. Since issue #1702 the
+	// repair refuses to write a credit figure the ledger does not support, so a
+	// row seeded without one is refused rather than repaired and this test
+	// would be asserting the guard instead of the skip it is about.
+	seedUsageCharge(t, pool, accountID, conflatedCredits, "hive-fast", goodPeriod.Start.Add(24*time.Hour))
 
 	rows, err := repo.ListUnconverted(ctx, 0)
 	if err != nil {

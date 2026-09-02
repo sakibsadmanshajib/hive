@@ -381,6 +381,141 @@ func (r *pgxRepository) UpdateConverted(ctx context.Context, in Invoice) (bool, 
 }
 
 // =============================================================================
+// Pre-rescale repair path (issue #1702)
+// =============================================================================
+
+// CreditRescaleAppliedAt reads when the credit unit rescale actually ran
+// against THIS database.
+//
+// public.credit_unit_rescale is migration 20260823_40's own marker, and its
+// applied_at is the clock_timestamp() taken at the END of that migration's
+// work, which its header names as "the wall-clock upper bound of everything
+// this file could have rescaled" and as the boundary for tables without a
+// metadata column. That is exactly the question being asked here, so it is the
+// primary source. The applier's ledger is the fallback for a database that
+// somehow carries the schema without the marker.
+//
+// The filename is a KEY into that ledger and never a source of a date. The date
+// in a migration filename is when the file was authored: on the demo box
+// 20260823_40 ran on 2026-08-24, a day after its own name.
+func (r *pgxRepository) CreditRescaleAppliedAt(ctx context.Context) (time.Time, bool, error) {
+	var at time.Time
+	if err := r.pool.QueryRow(ctx,
+		`SELECT applied_at FROM public.credit_unit_rescale WHERE id = 1`,
+	).Scan(&at); err == nil {
+		return at, true, nil
+	}
+
+	// No marker row, or no marker table at all on a database whose migration
+	// history predates it. Neither is an error worth failing a boot pass over;
+	// ask the applier's ledger instead.
+	err := r.pool.QueryRow(ctx,
+		`SELECT applied_at FROM public.hive_schema_migrations WHERE filename = $1`,
+		creditRescaleMigrationFilename,
+	).Scan(&at)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return time.Time{}, false, nil
+	case err != nil:
+		return time.Time{}, false, fmt.Errorf("invoices: credit rescale applied_at: %w", err)
+	}
+	return at, true, nil
+}
+
+// ListPreRescale returns invoices whose period closed at or before the credit
+// unit rescale, oldest first.
+//
+// Period, not rate, is the predicate. Every row the #1682 pass wrote carries a
+// rate now, correct and incorrect alike, so rate nullity cannot separate them;
+// and a row that ended before the rescale is the only kind whose stored credit
+// figure can be in the old unit. `total_credits IS NOT NULL` leaves the rows
+// that pass still owns to that pass.
+//
+// This is a bounded historical set, not a growing one: the rescale happened
+// once, in the past, so no invoice generated from here on can enter it.
+func (r *pgxRepository) ListPreRescale(ctx context.Context, appliedAt time.Time, limit int) ([]Invoice, error) {
+	sql := `
+		SELECT id, workspace_id, period_start, period_end,
+		       total_bdt_subunits, line_items, pdf_storage_key, generated_at,
+		       usd_bdt_rate::text, total_credits, usd_bdt_rate_source
+		FROM public.invoices
+		WHERE period_end <= $1
+		  AND total_credits IS NOT NULL
+		ORDER BY period_start ASC, id ASC`
+	args := []any{appliedAt}
+	if limit > 0 {
+		sql += `
+		LIMIT $2`
+		args = append(args, limit)
+	}
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("invoices: list pre-rescale: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Invoice
+	for rows.Next() {
+		inv, err := scanInvoice(rows)
+		if err != nil {
+			slog.Default().Warn("invoices: skipping an undecodable pre-rescale row", "error", err)
+			continue
+		}
+		out = append(out, inv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("invoices: pre-rescale rows: %w", err)
+	}
+	return out, nil
+}
+
+// UpdateRescaled writes a corrected credit quantity and the taka derived from
+// it, and reports whether it wrote a row.
+//
+// `total_credits = previousCredits` is the guard, and it is what makes this
+// safe to run repeatedly and concurrently: a second writer arriving after the
+// first committed finds a different quantity and writes nothing, so a row can
+// never be multiplied by the rescale factor twice. The rate and its source are
+// deliberately absent from the SET list. This pass corrects a quantity; it does
+// not re-denominate a closed period.
+func (r *pgxRepository) UpdateRescaled(ctx context.Context, in Invoice, previousCredits *big.Int) (bool, error) {
+	if in.TotalBDTSubunits == nil || !in.TotalBDTSubunits.IsInt64() {
+		return false, fmt.Errorf("invoices: rescaled total must fit bigint, got %v", in.TotalBDTSubunits)
+	}
+	credits, err := nullableCredits(in.TotalCredits)
+	if err != nil {
+		return false, err
+	}
+	if credits == nil {
+		return false, fmt.Errorf("invoices: a rescaled row must carry a credit quantity")
+	}
+	previous, err := nullableCredits(previousCredits)
+	if err != nil {
+		return false, err
+	}
+	if previous == nil {
+		return false, fmt.Errorf("invoices: a rescale write must name the quantity it is replacing")
+	}
+	itemsJSON, err := encodeLineItems(in.LineItems)
+	if err != nil {
+		return false, err
+	}
+
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE public.invoices
+		SET total_bdt_subunits = $2,
+		    line_items         = $3,
+		    total_credits      = $4
+		WHERE id = $1
+		  AND total_credits = $5
+	`, in.ID, in.TotalBDTSubunits.Int64(), itemsJSON, *credits, *previous)
+	if err != nil {
+		return false, fmt.Errorf("invoices: update rescaled: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
 

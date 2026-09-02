@@ -138,7 +138,22 @@ func (s *Service) repairOne(ctx context.Context, inv Invoice) error {
 		return err
 	}
 
-	items, total, totalCredits, err := convertLines(conflatedLines(inv), rate.Rate)
+	// Which credit unit the stored figure is in, decided by the ledger rather
+	// than assumed (issue #1702). This pass shipped assuming today's peg for
+	// every row, which understated three July 2026 invoices by the rescale
+	// factor of 10,000 because they were written when one USD was 100,000
+	// credits. A figure the ledger supports at neither unit is refused here,
+	// before any of it reaches a customer-facing document.
+	ledger, err := s.ledgerCredits(ctx, inv.WorkspaceID, period)
+	if err != nil {
+		return err
+	}
+	factor, err := creditScaleFactor(inv.TotalBDTSubunits, ledger)
+	if err != nil {
+		return fmt.Errorf("invoices: row %s: %w", inv.ID, err)
+	}
+
+	items, total, totalCredits, err := convertLines(conflatedLines(inv, factor), rate.Rate)
 	if err != nil {
 		return err
 	}
@@ -158,9 +173,22 @@ func (s *Service) repairOne(ctx context.Context, inv Invoice) error {
 	// a measurement. Failing loudly leaves the row selectable and names it in
 	// the log, which is the outcome this repository prefers over a quiet
 	// rewrite of stored money.
-	if inv.TotalBDTSubunits != nil && totalCredits.Cmp(inv.TotalBDTSubunits) != 0 {
-		return fmt.Errorf("invoices: row %s line items sum to %s credits but the row stores %s; refusing to rewrite a total from lines that disagree with it",
-			inv.ID, totalCredits, inv.TotalBDTSubunits)
+	if inv.TotalBDTSubunits != nil {
+		expected := new(big.Int).Mul(inv.TotalBDTSubunits, factor)
+		if totalCredits.Cmp(expected) != 0 {
+			return fmt.Errorf("invoices: row %s line items sum to %s credits but the row stores %s; refusing to rewrite a total from lines that disagree with it",
+				inv.ID, totalCredits, expected)
+		}
+	}
+
+	// The general guard (issue #1702): the figure about to be written has to be
+	// the one the ledger holds for this account and period. The comparison
+	// above is between two readings of the same row and cannot catch a correct
+	// decode of a differently scaled number; only a figure from outside the row
+	// can.
+	if !withinLedgerTolerance(totalCredits, ledger) {
+		return fmt.Errorf("invoices: row %s would be written at %s credits but its ledger holds %s; refusing",
+			inv.ID, totalCredits, ledger)
 	}
 
 	if !total.IsInt64() {
@@ -217,17 +245,19 @@ func (s *Service) repairOne(ctx context.Context, inv Invoice) error {
 }
 
 // conflatedLines reads a pre-fix row's line items as what they are: credit
-// quantities stored under a field named after taka.
+// quantities stored under a field named after taka, scaled by `factor` into
+// today's credit unit (one for a row written after the rescale,
+// preRescaleCreditFactor for one written before it).
 //
 // A row with no line items still yields one bucket, from the total, so an
 // invoice whose JSONB was empty is repaired rather than silently zeroed. The
 // literal "unknown" matches the bucket AggregateByModel uses for ledger rows
 // without model metadata.
-func conflatedLines(inv Invoice) []ModelCredits {
+func conflatedLines(inv Invoice, factor *big.Int) []ModelCredits {
 	if len(inv.LineItems) == 0 {
 		credits := new(big.Int)
 		if inv.TotalBDTSubunits != nil {
-			credits.Set(inv.TotalBDTSubunits)
+			credits.Mul(inv.TotalBDTSubunits, factor)
 		}
 		return []ModelCredits{{ModelID: "unknown", RequestCount: 0, Credits: credits}}
 	}
@@ -235,7 +265,7 @@ func conflatedLines(inv Invoice) []ModelCredits {
 	for _, item := range inv.LineItems {
 		credits := new(big.Int)
 		if item.BDTSubunits != nil {
-			credits.Set(item.BDTSubunits)
+			credits.Mul(item.BDTSubunits, factor)
 		}
 		out = append(out, ModelCredits{
 			ModelID:      item.ModelID,
