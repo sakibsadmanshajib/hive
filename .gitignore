@@ -141,3 +141,7 @@ supabase/.temp/
 # post-write hook's `auto-detected` guesses for the rest of the session, which is
 # why it is generated rather than tracked.
 .wolf/buglog.json
+
+# Written by .github/ci/check-provider-balance.mjs (issue #1411). A local run
+# leaves one behind; the scheduled lane carries it in the Actions cache instead.
+provider-balance-state.json
