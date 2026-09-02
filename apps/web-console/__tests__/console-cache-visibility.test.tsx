@@ -651,13 +651,14 @@ describe("model catalog cache pricing columns", () => {
   it("renders both cache prices when the alias publishes them", () => {
     render(<ModelCatalogTable models={[model()]} />);
 
-    expect(screen.getByText("Cache read / 1M")).toBeDefined();
-    expect(screen.getByText("Cache write / 1M")).toBeDefined();
-    // 1,200,000 and 15,000,000 credits per million tokens, rendered as the
-    // dollars-per-million figure the catalog now publishes. Both are well
-    // under a cent and neither may collapse to "$0.00".
-    expect(screen.getByText("$0.0012")).toBeDefined();
-    expect(screen.getByText("$0.015")).toBeDefined();
+    expect(screen.getByText("Cache read credits / 1M")).toBeDefined();
+    expect(screen.getByText("Cache write credits / 1M")).toBeDefined();
+    // Hive credits per million metered tokens, which is the only unit this
+    // table publishes since issue #1694. Rendered as dollars these were
+    // "$0.0012" and "$0.015", two figures a customer could divide against
+    // their own credit spend to recover the peg.
+    expect(screen.getByText("1,200,000")).toBeDefined();
+    expect(screen.getByText("15,000,000")).toBeDefined();
   });
 
   it("renders a dash, never a zero, when a fixed-price alias publishes no cache rate", () => {

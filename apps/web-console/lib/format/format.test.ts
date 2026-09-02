@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  CREDITS_PER_USD,
+  formatCreditAmount,
   formatCreditCount,
+  formatCreditDigits,
   formatCredits,
   formatLatencyMs,
   formatShortDate,
-  formatUsdBalanceFromCredits,
-  SUB_CENT_BALANCE,
 } from "./credits";
 import { formatDateTime, formatLongDate } from "./datetime";
 import { formatCurrency, formatTakaSubunits } from "./money";
+import { CURRENCY_MARK } from "@/tests/support/currency-mark";
 import { intlTag, resolveLocale } from "@/lib/i18n/locales";
 
 describe("resolveLocale", () => {
@@ -151,102 +151,88 @@ describe("money formatting", () => {
 });
 
 /**
- * Issue #1332: the dashboard printed the balance as a bare integer while the
- * API keys table printed the same quantity in dollars. The console settled on
- * dollars, and a balance is spendable money, so this formatter truncates
- * where the pricing formatter rounds.
+ * The guard for issue #1694, at the formatter.
+ *
+ * Every balance, usage and spend surface renders a credit quantity through
+ * formatCreditAmount, and a currency figure appears only on an invoice (owner
+ * ruling, .wolf/decisions.md D-070). What this file pins is that the function
+ * those surfaces call cannot emit a currency figure at all: the leak returns
+ * the moment somebody routes a credit quantity through Intl's currency style
+ * again, and a test that only checked one balance renders "12,345 credits"
+ * would go on passing while a second, dollar-denominated line was added
+ * beside it.
  */
-describe("formatUsdBalanceFromCredits", () => {
-  it("renders one dollar per billion credits", () => {
-    expect(formatUsdBalanceFromCredits(CREDITS_PER_USD)).toBe("$1.00");
+describe("formatCreditAmount", () => {
+  it("renders the exact credit count and its unit, with no currency at all", () => {
+    // The workspace balance observed live on the demo box, 2026-08-29. It used
+    // to render "$99.99", from which a customer who had paid a known price for
+    // a known credit grant could read the peg straight off.
+    expect(formatCreditAmount(99_996_364_207)).toBe("99,996,364,207 credits");
+    expect(formatCreditAmount(1_000_000_000)).toBe("1,000,000,000 credits");
   });
 
-  it("never rounds a balance up to money the customer does not hold", () => {
-    expect(formatUsdBalanceFromCredits(99_996_364_207)).toBe("$99.99");
-  });
-
-  it("truncates in credits, so a float product cannot shave a cent off a real balance", () => {
-    // 8.29 times 100 is 828.9999999999999 in IEEE 754, so truncating in
-    // dollars would print $8.28 here.
-    expect(formatUsdBalanceFromCredits(8_290_000_000)).toBe("$8.29");
-    expect(formatUsdBalanceFromCredits(1_230_000_000)).toBe("$1.23");
-  });
-
-  it("keeps a sub-cent balance visible instead of printing zero", () => {
-    // A bound rather than a figure. It used to print the exact amount at up
-    // to nine decimals, which is the width of one credit: "$0.000000858" is
-    // arithmetically true and carries nothing a reader can act on, and it sat
-    // in chrome the customer cannot dismiss. What the nine decimals were
-    // there to prevent still holds, since the bound is not the string an
-    // empty wallet renders.
-    expect(formatUsdBalanceFromCredits(662_000)).toBe(SUB_CENT_BALANCE);
-    expect(formatUsdBalanceFromCredits(858)).toBe(SUB_CENT_BALANCE);
-    expect(formatUsdBalanceFromCredits(858)).not.toBe("$0.00");
-  });
-
-  it("renders a single credit, the smallest unit there is", () => {
-    expect(formatUsdBalanceFromCredits(1)).toBe(SUB_CENT_BALANCE);
-  });
-
-  it("never prints more than two decimal places, at any magnitude", () => {
-    // The general rule behind the two cases above, asserted across
-    // magnitudes so a future precision change cannot reintroduce a
-    // nine-significant-figure balance somewhere the named cases do not look.
+  it("never emits a currency mark, at any magnitude or sign", () => {
     const samples = [
-      1, 858, 999, 395_640, 499_999_999, 500_000_000, 8_290_000_000,
-      99_996_364_207, 123_456_789_012, -8_295_000_000,
+      0, 1, 858, 999, 395_640, 499_999_999, 500_000_000, 8_290_000_000,
+      99_996_364_207, 123_456_789_012, Number.MAX_SAFE_INTEGER,
+      -1, -8_295_000_000, Number.NaN, Number.POSITIVE_INFINITY,
     ];
     for (const credits of samples) {
-      const shown = formatUsdBalanceFromCredits(credits);
-      // Which side of the bound each sample belongs on is asserted, not
-      // skipped. Skipping every sample that came back as the bound would let
-      // a formatter that returns the bound for a hundred-dollar balance pass
-      // this loop without a single assertion running.
-      if (credits > 0 && credits < CREDITS_PER_USD / 100) {
-        expect(shown).toBe(SUB_CENT_BALANCE);
-        continue;
-      }
-      expect(shown).not.toBe(SUB_CENT_BALANCE);
-      expect(shown).toMatch(/^-?\$[\d,]+\.\d{2}$/);
+      expect(formatCreditAmount(credits)).not.toMatch(CURRENCY_MARK);
     }
   });
 
-  it("never renders more dollars than the balance holds, at any magnitude", () => {
-    // The floor property PR #1343 and PR #1346 established, re-pinned against
-    // the precision change: a displayed balance is never above the real one.
-    const samples = [
-      1, 858, 999, 395_640, 499_999_999, 500_000_000, 8_290_000_000,
-      9_996_364_207, 99_996_364_207, 123_456_789_012,
-    ];
-    for (const credits of samples) {
-      const rendered = formatUsdBalanceFromCredits(credits);
-      if (credits > 0 && credits < CREDITS_PER_USD / 100) {
-        // The bound claims only that the balance is under a cent, which is a
-        // weaker claim than any figure, so it cannot overstate. Pinned to the
-        // samples that are genuinely sub-cent rather than to whichever
-        // samples happened to render the bound.
-        expect(rendered).toBe(SUB_CENT_BALANCE);
-        continue;
-      }
-      expect(rendered).not.toBe(SUB_CENT_BALANCE);
-      const shown = Number(rendered.replace(/[$,]/g, ""));
-      expect(shown).toBeLessThanOrEqual(credits / CREDITS_PER_USD);
-    }
+  it("is exact, so no balance is ever overstated or rounded to nothing", () => {
+    // The whole class of defect the two currency formatters kept producing
+    // (#1344, #1345): one floored to cents, one rounded to nearest, and a
+    // sub-cent figure had to be replaced by a bound because it would otherwise
+    // render as an empty wallet. An integer count of credits has no such case.
+    expect(formatCreditAmount(1)).toBe("1 credit");
+    expect(formatCreditAmount(858)).toBe("858 credits");
+    expect(formatCreditAmount(395_640)).toBe("395,640 credits");
   });
 
-  it("rounds a negative balance down, so an overdrawn account is not flattered", () => {
+  it("renders an empty balance as zero credits, not as an absence", () => {
+    expect(formatCreditAmount(0)).toBe("0 credits");
+  });
+
+  it("renders a negative balance in full, so an overdrawn account is not flattered", () => {
     // available_credits is posted minus reserved, so a workspace whose holds
-    // exceed its posted credits reads negative. Rounding toward zero would
-    // show less of the hole than is there.
-    expect(formatUsdBalanceFromCredits(-8_295_000_000)).toBe("-$8.30");
-  });
-
-  it("renders an empty balance as zero dollars, not as an absence", () => {
-    expect(formatUsdBalanceFromCredits(0)).toBe("$0.00");
+    // exceed its posted credits reads negative.
+    expect(formatCreditAmount(-8_295_000_000)).toBe("-8,295,000,000 credits");
+    expect(formatCreditAmount(-1)).toBe("-1 credit");
   });
 
   it("renders a non-finite value as an absence, never as an empty wallet", () => {
-    expect(formatUsdBalanceFromCredits(Number.NaN)).toBe("—");
-    expect(formatUsdBalanceFromCredits(Number.POSITIVE_INFINITY)).toBe("—");
+    expect(formatCreditAmount(Number.NaN)).toBe("—");
+    expect(formatCreditAmount(Number.POSITIVE_INFINITY)).toBe("—");
+  });
+
+  it("truncates a fractional value rather than inventing a credit", () => {
+    // Credits are whole in storage, so a fraction here is a decode artefact.
+    expect(formatCreditAmount(1.9)).toBe("1 credit");
+    expect(formatCreditAmount(2.9)).toBe("2 credits");
+  });
+});
+
+describe("formatCreditDigits", () => {
+  it("is formatCreditAmount without the unit word, for a stated pair", () => {
+    // The API keys budget cell reads "9,000,000,000 of 10,000,000,000
+    // credits/mo": one unit word for the pair, and both halves grouped the
+    // same way so they cannot read as two different scales.
+    expect(formatCreditDigits(9_000_000_000)).toBe("9,000,000,000");
+    expect(`${formatCreditDigits(9_000_000_000)} of ${formatCreditAmount(10_000_000_000)}`).toBe(
+      "9,000,000,000 of 10,000,000,000 credits",
+    );
+  });
+
+  it("never emits a currency mark", () => {
+    for (const credits of [0, 1, 858, 8_290_000_000, -1, Number.NaN]) {
+      expect(formatCreditDigits(credits)).not.toMatch(CURRENCY_MARK);
+    }
+  });
+
+  it("renders a non-finite value as an absence", () => {
+    expect(formatCreditDigits(Number.NaN)).toBe("—");
   });
 });

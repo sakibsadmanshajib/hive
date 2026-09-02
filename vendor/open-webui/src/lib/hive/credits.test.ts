@@ -9,12 +9,11 @@ import {
 	creditsDismissed,
 	dismissCredits,
 	fetchCreditBalance,
-	formatUsdBalanceFromCredits,
-	formatUsdFromCredits,
+	formatCreditAmount,
 	refreshCreditSnapshot,
-	LOW_CREDITS_THRESHOLD,
-	SUB_CENT_BALANCE
+	LOW_CREDITS_THRESHOLD
 } from './credits';
+import { CURRENCY_MARK } from './currency-mark';
 
 describe('creditState', () => {
 	it('empty at zero or below', () => {
@@ -35,57 +34,64 @@ describe('creditState', () => {
 	});
 });
 
-describe('formatUsdFromCredits', () => {
-	it('renders the literal $0 for an explicit zero, never an absence', () => {
-		expect(formatUsdFromCredits(0)).toBe('$0');
+/**
+ * The guard for issue #1694, on the chat side.
+ *
+ * Both figures this front end shows, the balance and today's spend, render as
+ * Hive credits with no currency at all (owner ruling, .wolf/decisions.md
+ * D-070). They used to go through two currency formatters whose rounding
+ * policies had to be kept apart by hand, which is how #1344 and #1345 shipped.
+ */
+describe('formatCreditAmount', () => {
+	it('renders the exact credit count and its unit', () => {
+		expect(formatCreditAmount(9_996_364_207)).toBe('9,996,364,207 credits');
+		expect(formatCreditAmount(395_640)).toBe('395,640 credits');
+		expect(formatCreditAmount(1)).toBe('1 credit');
 	});
 
-	it('renders a whole-dollar balance cleanly', () => {
-		expect(formatUsdFromCredits(9_789_478_244)).toBe('$9.79');
-	});
-
-	it('never rounds a real non-zero balance down to $0.00', () => {
-		// The exact regression this replaces: a raw integer credit count. A
-		// tiny but real balance must still read as a non-zero dollar figure.
-		const result = formatUsdFromCredits(395_640);
-		expect(result).not.toBe('$0.00');
-		expect(result).not.toBe('$0');
-	});
-
-	it('reports a sub-cent spend as a bound, not as nine significant figures', () => {
-		// The defect: 858 credits of spend rendered "$0.000000858" on the
-		// composer banner and again in Settings, Usage, in chrome the customer
-		// cannot dismiss. Nine decimals is the width of one credit, which is
-		// the right precision for a published per-million rate and carries
-		// nothing a reader of a spend figure can act on.
-		expect(formatUsdFromCredits(858)).toBe(SUB_CENT_BALANCE);
-		expect(formatUsdFromCredits(395_640)).toBe(SUB_CENT_BALANCE);
-	});
-
-	it('never prints more than two decimal places, at any magnitude', () => {
-		// The general rule behind the case above. Asserted across magnitudes
-		// so a future precision change cannot reintroduce a nine-digit figure
-		// somewhere the named cases happen not to look.
-		const samples = [1, 858, 999, 395_640, 4_999_999, 9_789_478_244, 123_456_789_012];
+	it('never emits a currency mark, at any magnitude or sign', () => {
+		const samples = [
+			0, 1, 858, 999, 395_640, 499_999_999, 500_000_000, 9_996_364_207, 99_996_364_207,
+			123_456_789_012, -8_295_000_000, Number.NaN, Number.POSITIVE_INFINITY
+		];
 		for (const credits of samples) {
-			const shown = formatUsdFromCredits(credits);
-			// Which side of the bound each sample belongs on is asserted, not
-			// skipped. Skipping every sample that came back as the bound would
-			// let a formatter that returns the bound for a ten-dollar spend
-			// pass this loop without a single assertion running. This one
-			// rounds, so the boundary is half a cent.
-			if (credits < CREDITS_PER_USD / 200) {
-				expect(shown).toBe(SUB_CENT_BALANCE);
-				continue;
-			}
-			expect(shown).not.toBe(SUB_CENT_BALANCE);
-			expect(shown).toMatch(/^\$[\d,]+\.\d{2}$/);
+			expect(formatCreditAmount(credits)).not.toMatch(CURRENCY_MARK);
 		}
 	});
 
-	it('never throws on non-finite input, and treats it as $0', () => {
-		expect(formatUsdFromCredits(Number.NaN)).toBe('$0');
-		expect(formatUsdFromCredits(Number.POSITIVE_INFINITY)).toBe('$0');
+	it('is exact, so no balance is overstated and no real figure reads as empty', () => {
+		// #1345 in one line: the balance went through the price formatter's
+		// round-to-nearest and claimed ten dollars the account did not hold.
+		// An integer count of credits has no rounding to get wrong, and no
+		// sub-cent case that has to be replaced by a bound.
+		expect(formatCreditAmount(9_996_364_207)).not.toBe('10,000,000,000 credits');
+		expect(formatCreditAmount(858)).toBe('858 credits');
+	});
+
+	it('renders an empty balance as zero credits, not as an absence', () => {
+		expect(formatCreditAmount(0)).toBe('0 credits');
+	});
+
+	it('renders a negative balance in full, so an overdrawn account is not flattered', () => {
+		// available_credits is posted minus reserved with no clamp
+		// (apps/control-plane/internal/ledger/repository.go), so outstanding
+		// holds above posted credits produce a negative balance.
+		expect(formatCreditAmount(-8_295_000_000)).toBe('-8,295,000,000 credits');
+	});
+
+	it('renders a failed decode as an absence, never as an empty wallet', () => {
+		expect(formatCreditAmount(Number.NaN)).toBe('—');
+		expect(formatCreditAmount(Number.POSITIVE_INFINITY)).toBe('—');
+	});
+
+	it('agrees with creditState at the low-credit boundary', () => {
+		// The second half of #1345: the pill and the number contradicted each
+		// other by one credit. They cannot now, because the number is the
+		// credit count creditState itself reads.
+		expect(creditState(LOW_CREDITS_THRESHOLD - 1)).toBe('low');
+		expect(formatCreditAmount(LOW_CREDITS_THRESHOLD - 1)).toBe('499,999,999 credits');
+		expect(creditState(LOW_CREDITS_THRESHOLD)).toBe('healthy');
+		expect(formatCreditAmount(LOW_CREDITS_THRESHOLD)).toBe('500,000,000 credits');
 	});
 });
 
@@ -210,110 +216,53 @@ describe('refreshCreditSnapshot', () => {
 	});
 });
 
-describe('formatUsdBalanceFromCredits', () => {
-	it('rounds a balance down, so the figure never claims more money than the account holds', () => {
-		// The regression (#1345): ported from the PRICE formatter, this
-		// rendered ten dollars flat through round-to-nearest, and the account
-		// does not hold ten dollars. A price rounds to nearest; a balance floors.
-		expect(formatUsdBalanceFromCredits(9_996_364_207)).toBe('$9.99');
-	});
-
-	it('agrees with creditState at the low-credit boundary', () => {
-		// The second half of #1345: 499,999,999 rendered exactly the low
-		// threshold figure while creditState called the same balance low, so
-		// the pill and the number contradicted each other by one credit.
-		expect(creditState(LOW_CREDITS_THRESHOLD - 1)).toBe('low');
-		expect(formatUsdBalanceFromCredits(LOW_CREDITS_THRESHOLD - 1)).toBe('$0.49');
-		expect(creditState(LOW_CREDITS_THRESHOLD)).toBe('healthy');
-		expect(formatUsdBalanceFromCredits(LOW_CREDITS_THRESHOLD)).toBe('$0.50');
-	});
-
-	it('never renders more dollars than the balance holds, at any magnitude', () => {
-		// The boundary above is one instance of the general rule. Asserted
-		// across magnitudes so a future precision change cannot reintroduce an
-		// overstatement somewhere the named cases happen not to look, which is
-		// how the first port shipped: every value it pinned divided exactly.
-		const samples = [
-			1, 858, 999, 395_640, 499_999_999, 500_000_000, 9_996_364_207, 99_996_364_207,
-			123_456_789_012
-		];
-		for (const credits of samples) {
-			const rendered = formatUsdBalanceFromCredits(credits);
-			if (credits > 0 && credits < CREDITS_PER_USD / 100) {
-				// The bound claims only that the balance is under a cent, which
-				// is a weaker claim than any figure, so it cannot overstate.
-				// Pinned to the samples that are genuinely sub-cent rather than
-				// to whichever samples happened to render the bound.
-				expect(rendered).toBe(SUB_CENT_BALANCE);
-				continue;
-			}
-			expect(rendered).not.toBe(SUB_CENT_BALANCE);
-			const shown = Number(rendered.replace(/[$,]/g, ''));
-			expect(shown).toBeLessThanOrEqual(credits / CREDITS_PER_USD);
-		}
-	});
-
-	it('rounds a negative balance down, so an overdrawn account is not flattered', () => {
-		// available_credits is posted minus reserved with no clamp
-		// (apps/control-plane/internal/ledger/repository.go), so outstanding
-		// holds above posted credits produce a negative balance. Rounding
-		// toward zero would show less of the hole than is there. Same case and
-		// same expected string as the console twin's guard in
-		// apps/web-console/lib/format/format.test.ts.
-		expect(formatUsdBalanceFromCredits(-8_295_000_000)).toBe('-$8.30');
-	});
-
-	it('renders an empty balance as zero dollars, not as an absence', () => {
-		expect(formatUsdBalanceFromCredits(0)).toBe('$0.00');
-	});
-
-	it('renders a failed decode as an absence, never as an empty wallet', () => {
-		expect(formatUsdBalanceFromCredits(Number.NaN)).toBe('—');
-		expect(formatUsdBalanceFromCredits(Number.POSITIVE_INFINITY)).toBe('—');
-	});
-
-	it('keeps a tiny real balance visible rather than collapsing it to zero', () => {
-		// A sub-cent balance is still not an empty wallet, so it must not
-		// render the string an empty wallet renders. It reads as a bound
-		// instead of as the nine-decimal figure it used to print: nine
-		// decimals is the width of one credit, which carried nothing a reader
-		// could act on and sat in chrome the customer cannot dismiss.
-		expect(formatUsdBalanceFromCredits(1)).toBe(SUB_CENT_BALANCE);
-		expect(formatUsdBalanceFromCredits(858)).toBe(SUB_CENT_BALANCE);
-		expect(formatUsdBalanceFromCredits(1)).not.toBe('$0.00');
-	});
-
-	it('never prints more than two decimal places, at any magnitude', () => {
-		const samples = [
-			1, 858, 999, 395_640, 499_999_999, 500_000_000, 9_996_364_207, 99_996_364_207,
-			123_456_789_012, -8_295_000_000
-		];
-		for (const credits of samples) {
-			const shown = formatUsdBalanceFromCredits(credits);
-			if (credits > 0 && credits < CREDITS_PER_USD / 100) {
-				expect(shown).toBe(SUB_CENT_BALANCE);
-				continue;
-			}
-			expect(shown).not.toBe(SUB_CENT_BALANCE);
-			expect(shown).toMatch(/^-?\$[\d,]+\.\d{2}$/);
-		}
-	});
-});
-
 describe('the composer banner wiring', () => {
-	it('formats remaining with the balance formatter and spend with the price formatter', () => {
+	it('formats both figures as credits, and imports no currency formatter', () => {
 		// Source level rather than rendered: CreditsBanner takes no props and
 		// only populates itself in onMount, which a server side render never
 		// runs, so its rendered output holds no figure to assert. This pins the
-		// one mutation that reintroduces #1345, putting the remaining figure
-		// back on the round-to-nearest price formatter.
+		// mutation that reintroduces #1694, putting either figure back on a
+		// currency formatter.
 		const src = readFileSync(
 			fileURLToPath(new URL('./CreditsBanner.svelte', import.meta.url)),
 			'utf8'
 		);
-		expect(src).toContain(
-			'remaining: formatUsdBalanceFromCredits(balance?.available_credits ?? 0)'
+		expect(src).toContain('remaining: formatCreditAmount(balance?.available_credits ?? 0)');
+		expect(src).toContain('used: formatCreditAmount(balance?.usage_today_credits ?? 0)');
+		expect(src).not.toMatch(/formatUsd|Intl\.NumberFormat/);
+		// A formatter swapped back in is not the only way the leak returns on
+		// this component. A currency mark typed straight into the i18n message
+		// passes every assertion above and the whole file, and this banner is
+		// the one surface with no rendered guard at all, because it populates
+		// in onMount and a server render holds no figure to assert. A blanket
+		// scan of the source is not available (every `$i18n` and every store
+		// reference would match), so the message literal is scanned on its own.
+		// Both quote styles: this component uses double quotes for the two
+		// messages that contain an apostrophe and single quotes elsewhere, and a
+		// scan that saw only one style would silently skip the other.
+		const messages = [
+			...src.matchAll(/\$i18n\.t\(\s*(?:'([^']+)'|"([^"]+)")/g)
+		].map((m) => m[1] ?? m[2]);
+		// Anti vacuity: the banner has more than one message and the known one
+		// must be among them, so a changed call shape cannot empty this list
+		// and pass the scan below with nothing in it.
+		expect(messages.length).toBeGreaterThan(1);
+		expect(messages.some((m) => m.includes('remaining'))).toBe(true);
+		for (const message of messages) {
+			expect(message).not.toMatch(CURRENCY_MARK);
+		}
+	});
+
+	it('leaves no currency formatter on the Usage tab either', () => {
+		// The same guard on the other surface that reads this module. Both are
+		// checked, because a fix applied to one and not the other is exactly
+		// how the two front ends diverged before.
+		const src = readFileSync(
+			fileURLToPath(new URL('./SettingsUsage.svelte', import.meta.url)),
+			'utf8'
 		);
-		expect(src).toContain('used: formatUsdFromCredits(balance?.usage_today_credits ?? 0)');
+		expect(src).toContain('formatCreditAmount(balance.available_credits)');
+		expect(src).toContain('formatCreditAmount(balance.usage_today_credits)');
+		expect(src).not.toMatch(/formatUsd|Intl\.NumberFormat/);
 	});
 });

@@ -19,6 +19,7 @@ import { render, screen } from "@testing-library/react";
 
 import { ModelDetail } from "@/components/catalog/model-detail";
 import type { CatalogModel } from "@/lib/control-plane/client";
+import { CURRENCY_MARK } from "@/tests/support/currency-mark";
 
 function fixture(overrides: Partial<CatalogModel["pricing"]> = {}): CatalogModel {
   return {
@@ -50,18 +51,21 @@ function renderDetail(model: CatalogModel) {
 }
 
 describe("ModelDetail price states", () => {
-  it("shows a real cache rate in dollars and credits", () => {
-    renderDetail(fixture());
-    expect(screen.getAllByText("$0.00298").length).toBeGreaterThan(0);
+  it("shows a real cache rate in credits, and in no other unit", () => {
+    const { container } = renderDetail(fixture());
     expect(screen.getAllByText("2,982,000").length).toBeGreaterThan(0);
+    // Issue #1694: this page printed the dollar figure and the credit integer
+    // for the same rate side by side, which is a conversion table. One unit
+    // now, and no currency anywhere on the page.
+    expect(container.textContent ?? "").not.toMatch(CURRENCY_MARK);
   });
 
-  it("renders a published zero as $0, never Unknown", () => {
+  it("renders a published zero as 0, never Unknown", () => {
     // hive-default publishes cache_write_price_credits = 0; zero is a
     // decision, not an absence.
     renderDetail(fixture({ cache_write_price_credits: 0 }));
     expect(screen.queryAllByText("Unknown")).toHaveLength(0);
-    expect(screen.getAllByText("$0").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("0").length).toBeGreaterThan(0);
   });
 
   it("never shows Unknown for a missing cache rate on a fixed alias", () => {

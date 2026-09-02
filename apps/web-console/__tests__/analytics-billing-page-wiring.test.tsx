@@ -17,6 +17,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { CURRENCY_MARK } from "@/tests/support/currency-mark";
 
 const mockGetSession = vi.fn();
 const mockGetUser = vi.fn();
@@ -146,10 +147,8 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
                 group_key: "hive-auto",
                 total_input_tokens: 18,
                 total_output_tokens: 4,
-                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
-                // A round dollar figure keeps the rendered-text assertion
-                // below stable; the tile now formats this through
-                // formatUsdFromCredits rather than the raw integer.
+                // Rendered by the Total spend tile through formatCreditAmount
+                // (issue #1694): Hive credits, grouped, with no currency.
                 total_credits_spent: 3_000_000_000,
                 request_count: 7,
               },
@@ -176,7 +175,7 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     const page = await mod.default({
       searchParams: Promise.resolve({ tab: "overview", window: "24h" }),
     });
-    render(page);
+    const { container } = render(page);
 
     // Regex, not a string: the rendered banner is the single text node
     // "Unable to load analytics. Refresh to try again." and queryByText
@@ -191,7 +190,12 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     screen.getByText("7");
     screen.getByText("18");
     screen.getByText("4");
-    screen.getByText("$3.00");
+    screen.getByText("3,000,000,000 credits");
+    // Issue #1694, and the half a positive assertion cannot make: the Total
+    // spend tile, the Blended price tile and the Top API keys card all render
+    // here, and a credit figure with a dollar figure added beside it satisfies
+    // every assertion above. Nothing on this tab may carry a currency mark.
+    expect(container.textContent ?? "").not.toMatch(CURRENCY_MARK);
   });
 
   it("renders 'Unavailable' for the tile deltas and the top-keys panel when their own fetches fail, never the same 'No prior data' / empty text a real zero would render", async () => {
@@ -329,10 +333,8 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
                 group_key: "hive-auto",
                 total_input_tokens: 18,
                 total_output_tokens: 4,
-                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
-                // A round dollar figure keeps the rendered-text assertion
-                // below stable; the tile now formats this through
-                // formatUsdFromCredits rather than the raw integer.
+                // Rendered by the Total spend tile through formatCreditAmount
+                // (issue #1694): Hive credits, grouped, with no currency.
                 total_credits_spent: 3_000_000_000,
                 request_count: 7,
               },
@@ -399,10 +401,8 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
                 group_key: "hive-auto",
                 total_input_tokens: 18,
                 total_output_tokens: 4,
-                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
-                // A round dollar figure keeps the rendered-text assertion
-                // below stable; the tile now formats this through
-                // formatUsdFromCredits rather than the raw integer.
+                // Rendered by the Total spend tile through formatCreditAmount
+                // (issue #1694): Hive credits, grouped, with no currency.
                 total_credits_spent: 3_000_000_000,
                 request_count: 7,
               },
@@ -462,10 +462,8 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
                 group_key: "hive-auto",
                 total_input_tokens: 18,
                 total_output_tokens: 4,
-                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
-                // A round dollar figure keeps the rendered-text assertion
-                // below stable; the tile now formats this through
-                // formatUsdFromCredits rather than the raw integer.
+                // Rendered by the Total spend tile through formatCreditAmount
+                // (issue #1694): Hive credits, grouped, with no currency.
                 total_credits_spent: 3_000_000_000,
                 request_count: 7,
               },

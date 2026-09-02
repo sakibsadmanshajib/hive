@@ -3,8 +3,12 @@ import Link from "next/link";
 import type { ApiKey } from "@/lib/control-plane/client";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/ui/data-table";
-import { formatPercent, formatShortDate } from "@/lib/format/credits";
-import { formatUsdFromCredits } from "@/lib/format/model-pricing";
+import {
+  formatCreditAmount,
+  formatCreditDigits,
+  formatPercent,
+  formatShortDate,
+} from "@/lib/format/credits";
 import { cn } from "@/lib/cn";
 import { RevokeConfirmPanel } from "./revoke-confirm-panel";
 
@@ -37,10 +41,18 @@ function statusTone(status: string): { label: string; tone: ToneName } {
 }
 
 /**
- * How much of a key's budget is gone: the dollar figures for the exact number,
+ * How much of a key's budget is gone: the credit figures for the exact number,
  * and a bar for the proportion at a glance (issue #1683). Before this the
- * column pair was plain text and the reader had to divide two dollar amounts
- * in their head.
+ * column pair was plain text and the reader had to divide two amounts in their
+ * head.
+ *
+ * The unit is Hive credits and no currency appears here at all, per the owner
+ * ruling recorded as .wolf/decisions.md D-070 (issue #1694). This column
+ * shipped rendering both figures in US dollars, which is the pairing the
+ * ruling forbids: a key cap set in dollars beside a credit-denominated spend
+ * hands the reader the credit peg. Only the numbers changed; the numerator,
+ * the clamping, the zero-cap case, the absent-counter case and the accessible
+ * value are all as issue #1683 left them.
  *
  * The numerator is budget_spend_credits, which is the counter edge-api
  * enforces against (api_key_budget_windows consumed plus reserved), and NOT
@@ -60,7 +72,7 @@ function statusTone(status: string): { label: string; tone: ToneName } {
  * step with the rendered fill.
  */
 function BudgetUsageCell({ row }: { row: ApiKey }) {
-  const lifetimeText = formatUsdFromCredits(row.spend_credits);
+  const lifetimeText = formatCreditAmount(row.spend_credits);
   const limit = row.budget_limit_credits;
 
   if (limit === null) {
@@ -78,7 +90,7 @@ function BudgetUsageCell({ row }: { row: ApiKey }) {
     );
   }
 
-  const limitText = `${formatUsdFromCredits(limit)}${limitSuffix(row.budget_summary.kind)}`;
+  const limitText = `${formatCreditAmount(limit)}${limitSuffix(row.budget_summary.kind)}`;
   // Coalesced rather than read straight: a control-plane that predates the
   // field sends no key at all, and undefined would sail past a === null check
   // into the arithmetic below.
@@ -117,7 +129,11 @@ function BudgetUsageCell({ row }: { row: ApiKey }) {
   // ever does is not worth the risk of finding out.
   const fill = Number((Math.min(Math.max(ratio, 0), 1) * 100).toFixed(1));
   const percentText = formatPercent(ratio);
-  const budgetSpendText = formatUsdFromCredits(budgetSpend);
+  // Digits without the unit word: the limit beside it carries the unit, and
+  // "9,000,000,000 credits of 10,000,000,000 credits/mo" says it twice in one
+  // breath. Both halves go through the same en-US grouping, so the pair cannot
+  // read as two different scales.
+  const budgetSpendText = formatCreditDigits(budgetSpend);
 
   return (
     <div className="flex min-w-[12rem] max-w-[16rem] flex-col gap-1.5">

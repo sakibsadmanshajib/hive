@@ -3,8 +3,7 @@
 
 	import {
 		creditState,
-		formatUsdBalanceFromCredits,
-		formatUsdFromCredits,
+		formatCreditAmount,
 		refreshCreditSnapshot,
 		type CreditBalance,
 		type CreditSnapshot
@@ -47,14 +46,13 @@
 	 * re-fetching or re-formatting: one source of truth for what the
 	 * signed-in user's balance means and how it prints, so this tab and the
 	 * banner can never say two different things about the same account.
-	 * Both figures print through ./credits, and through the formatter each
-	 * one needs: the balance through formatUsdBalanceFromCredits, which
-	 * rounds DOWN so the number never claims more money than the account
-	 * holds, and today's spend through formatUsdFromCredits, the port of the
-	 * console's price formatter. Both carry the same honesty invariant: a
-	 * real figure, zero included, always renders as a dollar amount, never as
-	 * the bare integer credit count a prior defect once put in front of a
-	 * customer.
+	 * Both figures print through ./credits, and through the one formatter
+	 * there now is: formatCreditAmount, which renders the exact credit count
+	 * and its unit. Currency is gone from this tab, per the owner ruling
+	 * recorded as .wolf/decisions.md D-070 (issue #1694), and with it the pair
+	 * of rounding policies that had to be kept apart by hand (#1344, #1345):
+	 * an integer count of credits is exact, so a balance can no longer claim
+	 * more than the account holds.
 	 */
 
 	/*
@@ -131,7 +129,7 @@
 						</span>
 					{/if}
 					<span class="text-sm font-medium" data-testid="usage-available-credits">
-						{formatUsdBalanceFromCredits(balance.available_credits)}
+						{formatCreditAmount(balance.available_credits)}
 					</span>
 				</div>
 			</div>
@@ -141,7 +139,7 @@
 					{$i18n.t('Organization usage today')}
 				</div>
 				<span class="text-sm" data-testid="usage-today-credits">
-					{formatUsdFromCredits(balance.usage_today_credits)}
+					{formatCreditAmount(balance.usage_today_credits)}
 				</span>
 			</div>
 
