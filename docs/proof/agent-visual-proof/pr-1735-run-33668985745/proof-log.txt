@@ -1,0 +1,15 @@
+scenarios: attachment-reaches-the-sandbox
+launcher runtime dir: /mnt/agent-runtime, live sessions at start: 0
+signed in as user 999b4ef1-8c55-4436-b98c-8b88593c8fac
+token claims: aal,amr,app_metadata,aud,email,exp,iat,is_anonymous,iss,owui_role,phone,role,session_id,sub,tenant_id,tenants,user_metadata
+token tenant claim: 1d409570-3007-2019-fb37-fcc242a85a6d · role=OWNER · aal=aal1
+--- scenario: attachment-reaches-the-sandbox ---
+amended the create with 1 attachment (66 bytes)
+create answered HTTP 201 in 90ms, status=queued
+the sandbox workspace holds service-record.txt carrying HIVE-1065-68985745
+row "proof-33668985745 attachment: read servi…" reached Running
+GET /v1/agent/tasks/{id}/files answered HTTP 200: {"files":[{"name":".git","size":4096,"mtime":"2026-09-02T18:52:40.389060827Z"},{"name":"service-record.txt","size":66,"mtime":"2026-09-02T18:52:29.768111848Z"}]}
+
+wrote /home/runner/work/hive/hive/docs/proof/agent-visual-proof/run-33668985745/attachment-reaches-the-sandbox-01-attachment-inside-the-sandbox.png
+row "proof-33668985745 attachment: read servi…" reached Cancelled
+scenario attachment-reaches-the-sandbox: ok
