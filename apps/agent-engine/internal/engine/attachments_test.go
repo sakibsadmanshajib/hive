@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // Issue #1065: a file attached in the composer before a Cowork run is started
@@ -179,5 +181,24 @@ func TestSandboxEngine_Launch_LeavesTheInitialMessageAloneWithoutAttachments(t *
 	req := fake.startConversationRequest()
 	if req.InitialMessage == nil || req.InitialMessage.Content[0].Text != task.Instructions {
 		t.Fatalf("initial message = %+v, want exactly the instructions", req.InitialMessage)
+	}
+}
+
+// The working directory's name is the one place a task id becomes a path, and
+// the id arrives as JSON over the launcher socket. uuid.UUID cannot hold a
+// separator, so this is a guard against a future formatter change rather than
+// a reachable input, which is exactly why it needs a test: nothing else would
+// notice if it were deleted.
+func TestWorkspaceDirName(t *testing.T) {
+	id := uuid.New()
+	name, err := workspaceDirName(id)
+	if err != nil {
+		t.Fatalf("workspaceDirName(%s): %v", id, err)
+	}
+	if name != id.String() {
+		t.Fatalf("workspaceDirName = %q, want %q", name, id)
+	}
+	if _, err := workspaceDirName(uuid.Nil); err != nil {
+		t.Fatalf("the nil UUID is still a legal directory name: %v", err)
 	}
 }

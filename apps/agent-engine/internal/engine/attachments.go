@@ -15,8 +15,33 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+
+	"github.com/google/uuid"
 )
+
+// canonicalUUID is the exact shape uuid.UUID.String() emits, and nothing else.
+var canonicalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// workspaceDirName renders a task id as the single path segment its working
+// directory is named after, or refuses it.
+//
+// The id reaches this process as JSON over the launcher socket, so although it
+// is a uuid.UUID by the time it gets here, the value originates with a caller
+// and this is the one place it becomes a filesystem path. uuid.UUID.String()
+// formats sixteen bytes as hex and cannot emit a separator or a dot, so the
+// check can never fire today; it is here because "cannot emit" is a property
+// of a formatter that someone could change, because a path built from caller
+// data should carry its own proof rather than borrow one from a type two hops
+// away, and because static analysis reads the proof rather than the type.
+func workspaceDirName(id uuid.UUID) (string, error) {
+	name := id.String()
+	if !canonicalUUID.MatchString(name) {
+		return "", fmt.Errorf("engine: task id is not a usable directory name")
+	}
+	return name, nil
+}
 
 // maxAttachmentNameSuffixes bounds the collision rename below. Ten is well
 // past any real case (the surfaces upstream cap a run at five attachments) and

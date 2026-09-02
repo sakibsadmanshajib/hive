@@ -648,7 +648,13 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		return "", fmt.Errorf("engine: create session directory under %s: %w", e.cfg.RunDir, err)
 	}
 	controlDir := filepath.Join(sessionDir, "c")
-	workingDir := filepath.Join(e.cfg.WorkspaceRoot, t.ID.String())
+	// The task id becomes a path here and nowhere else; workspaceDirName is
+	// where that is checked rather than assumed from its type.
+	taskDirName, err := workspaceDirName(t.ID)
+	if err != nil {
+		return "", err
+	}
+	workingDir := filepath.Join(e.cfg.WorkspaceRoot, taskDirName)
 
 	// Single deferred cleanup for every failure branch below: closes
 	// whatever got started so far and removes both directories.
