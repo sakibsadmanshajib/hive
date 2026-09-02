@@ -662,7 +662,8 @@ jobs:
                 WHERE r.alias_id = a.alias_id
                   AND r.health_state <> 'disabled'
                   AND c.supports_chat_completions)
-            ORDER BY (coalesce(a.input_price_credits, 0) + coalesce(a.output_price_credits, 0)) ASC,
+            ORDER BY (a.pricing_mode = 'fixed') DESC,
+                     (coalesce(a.input_price_credits, 0) + coalesce(a.output_price_credits, 0)) ASC,
                      a.alias_id ASC
             LIMIT 1;")
           if [ -z "$control" ]; then
@@ -678,6 +679,11 @@ jobs:
              WHERE r.route_id = c.route_id
                AND r.alias_id = '$control';"
 
+          # Fixed pricing first, cheapest second. A deliberate spend wants an
+          # alias whose cost is knowable before the turn rather than the
+          # cheapest column value, and the cheapest column value here belongs to
+          # a router priced on upstream actuals, which is also the worst control
+          # for a second reason: which model answers is not decided in advance.
           # Asserted, not assumed: a silent no-op here would send the control
           # turn to a tool capable alias, and its rendered sources would then be
           # read as a broken gate rather than as a broken control.
