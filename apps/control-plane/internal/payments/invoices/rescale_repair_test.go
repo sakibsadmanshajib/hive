@@ -112,6 +112,7 @@ func (f *fakeRepo) UpdateRescaled(_ context.Context, in Invoice, previousCredits
 	merged.TotalBDTSubunits = in.TotalBDTSubunits
 	merged.TotalCredits = in.TotalCredits
 	merged.LineItems = in.LineItems
+	merged.PDFStorageKey = in.PDFStorageKey
 	f.byID[in.ID] = merged
 	f.byWorkspaceMonth[wsMonthKey(merged.WorkspaceID, merged.PeriodStart)] = merged
 	return true, nil

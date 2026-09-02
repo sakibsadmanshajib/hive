@@ -501,14 +501,19 @@ func (r *pgxRepository) UpdateRescaled(ctx context.Context, in Invoice, previous
 		return false, err
 	}
 
+	// pdf_storage_key travels with the write because the pass fills in a key
+	// for a row that has none, and it has just uploaded the regenerated
+	// document there. Leaving the column behind would put a corrected PDF in
+	// the bucket that no download path can reach.
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE public.invoices
 		SET total_bdt_subunits = $2,
 		    line_items         = $3,
-		    total_credits      = $4
+		    total_credits      = $4,
+		    pdf_storage_key    = $5
 		WHERE id = $1
-		  AND total_credits = $5
-	`, in.ID, in.TotalBDTSubunits.Int64(), itemsJSON, *credits, *previous)
+		  AND total_credits = $6
+	`, in.ID, in.TotalBDTSubunits.Int64(), itemsJSON, *credits, in.PDFStorageKey, *previous)
 	if err != nil {
 		return false, fmt.Errorf("invoices: update rescaled: %w", err)
 	}

@@ -141,6 +141,12 @@ func (s *Service) RepairPreRescaleInvoices(ctx context.Context) (int, error) {
 			repaired++
 		case errors.Is(err, errRowAlreadyAtLedgerScale):
 			skipped++
+		case errors.Is(err, errRepairedConcurrently):
+			// Another writer corrected it between this pass's SELECT and its
+			// UPDATE. The row is right, this pass simply did not do it, and it
+			// is not a failure. Counted with the rows that needed nothing,
+			// which is what it now is.
+			skipped++
 		default:
 			s.logger.WarnContext(ctx, "invoice rescale repair: row failed",
 				"invoice_id", inv.ID,
