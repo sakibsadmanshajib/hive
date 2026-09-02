@@ -160,6 +160,15 @@ jobs:
       # trust for its JWKS fetch and the name to reach the TLS front by, which
       # is exactly what this job needs too.
       COMPOSE_FILE: docker-compose.yml:docker-compose.override.yml:docker-compose.agent-proof.yml
+      # The same reasoning one step further. Four services in this file carry no
+      # `profiles:` key, so a compose call without the profile still resolves a
+      # valid project made of exactly those four, succeeds, and reports on a
+      # stack missing the service being asked about. Measured on run
+      # 33671163466: open-webui exited during boot and the failure log dump,
+      # which named the service explicitly, returned only edge-api,
+      # control-plane, litellm and markitdown, so the one log that could explain
+      # the failure was silently absent. A job-level profile is what stops that.
+      COMPOSE_PROFILES: local
       # SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, the two
       # NEXT_PUBLIC_ mirrors, SUPABASE_JWT_ISSUER and SUPABASE_JWKS_URL are
       # deliberately NOT job-level entries. They are written to $GITHUB_ENV by
@@ -362,7 +371,17 @@ jobs:
           # inside those containers is the container itself; the docker0 gateway
           # is routable from every bridge network compose creates. No pooler
           # here and none wanted: this job touches no shared project.
-          dsn="postgres://postgres:postgres@${gw}:5432/hive_ci?sslmode=disable"
+          #
+          # postgresql://, NOT postgres://. Both Go services take either, because
+          # pgx accepts the alias, and Open WebUI does not: compose hands the
+          # same string to it as PGVECTOR_DB_URL, SQLAlchemy resolves the scheme
+          # to a dialect plugin by name, and there is no dialect registered under
+          # "postgres". Measured on run 33671163466, where the chat container
+          # died fourteen seconds into boot with
+          # `NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:postgres`
+          # and compose reported only "dependency failed to start". A DSN is per
+          # driver and the one place three drivers share one is here.
+          dsn="postgresql://postgres:postgres@${gw}:5432/hive_ci?sslmode=disable"
           {
             echo "SUPABASE_DB_URL=$dsn"
             echo "SUPABASE_DB_POOL_URL=$dsn"
@@ -524,16 +543,70 @@ jobs:
         working-directory: deploy/docker
         run: |
           set -euo pipefail
-          docker compose --env-file ../../.env.ci --profile local up -d --build
+          # The `up` is guarded rather than left to set -e. A service that exits
+          # during boot fails the `up` itself, and an unguarded failure there
+          # skips straight past the diagnostics below to the job's own dump,
+          # which is one step and one redaction pass further from the cause.
+          dump() {
+            docker compose --env-file ../../.env.ci ps
+            for svc in open-webui edge-api control-plane litellm; do
+              echo "--- $svc ---"
+              docker compose --env-file ../../.env.ci logs --no-color --tail=150 "$svc" \
+                | python3 ../../scripts/redact-log-credentials.py || true
+            done
+          }
+
+          # Two waves, and caddy-owui is deliberately not in the first.
+          #
+          # It declares `depends_on: open-webui: service_healthy`, and Open WebUI
+          # cold boots slowly: measured on a fresh database, 112 seconds from
+          # container start to its first passing health check, most of it its own
+          # alembic chain. Its healthcheck allows a 30 second start period and
+          # five retries, so on a throwaway database it is marked unhealthy
+          # before it is up, compose treats that as a hard dependency failure,
+          # and the whole `up` aborts with "dependency failed to start" naming no
+          # cause. Docker itself recovers, flipping the container back to healthy
+          # on the first successful check, so the only thing that actually needed
+          # to happen was waiting.
+          #
+          # This job waits with a deadline it chooses and an error message that
+          # says what did not happen, instead of inheriting a compose file's
+          # judgement about how long a warm deployment should take. The
+          # healthcheck itself is left alone on purpose: widening it would change
+          # how every deployment detects a genuinely dead chat container, which
+          # is a product decision and not this job's to make.
+          if ! docker compose --env-file ../../.env.ci up -d --build \
+                 redis litellm markitdown searxng control-plane edge-api open-webui; then
+            echo "::error::the chat stack did not come up"
+            dump
+            exit 1
+          fi
+
+          deadline=$(( $(date +%s) + 420 ))
+          until docker compose --env-file ../../.env.ci exec -T open-webui \
+                  curl -fsS -o /dev/null http://localhost:8080/health 2>/dev/null; do
+            if [ "$(date +%s)" -gt "$deadline" ]; then
+              echo "::error::Open WebUI never answered its own /health inside the container within 420s"
+              dump
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "Open WebUI is serving"
+
+          if ! docker compose --env-file ../../.env.ci up -d caddy-owui caddy-artifacts; then
+            echo "::error::the chat front did not start"
+            dump
+            exit 1
+          fi
           healthy=0
-          for _ in $(seq 1 90); do
+          for _ in $(seq 1 60); do
             if curl -fsS http://localhost:3003/health >/dev/null 2>&1; then healthy=1; break; fi
             sleep 2
           done
           if [ "$healthy" -ne 1 ]; then
-            echo "::error::the chat front never answered /health"
-            docker compose --env-file ../../.env.ci ps
-            docker compose --env-file ../../.env.ci logs --no-color --tail=200 open-webui edge-api control-plane
+            echo "::error::the chat front never answered /health on the published port"
+            dump
             exit 1
           fi
           echo "chat front is serving on $CHAT_ORIGIN"
