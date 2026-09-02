@@ -356,6 +356,41 @@ func TestRepairUnconvertedInvoices_DoesNotWriteTheRowWhenThePDFCannotBeStored(t 
 	}
 }
 
+// TestRepairUnconvertedInvoices_TerminatesOnAPermanentlyFailingRow guards the
+// batch loop. A failed row keeps its NULL rate and is therefore returned by the
+// next SELECT, so a loop that continued on batch size rather than on progress
+// would fetch the same row forever. The pass must end and report what it could
+// not do, not spin.
+func TestRepairUnconvertedInvoices_TerminatesOnAPermanentlyFailingRow(t *testing.T) {
+	t.Parallel()
+
+	repo := newFakeRepo()
+	repo.updateErr = errors.New("write refused")
+	ws := uuid.New()
+	seedConflatedInvoice(t, repo, ws, conflatedCredits)
+
+	svc := NewService(repo, newFakeStorage(), &stubPDF{}, &fakeAccess{}, &fakeNamer{}, nil)
+
+	done := make(chan struct{})
+	var repaired int
+	var err error
+	go func() {
+		repaired, err = svc.RepairUnconvertedInvoices(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("repair pass did not terminate on a row it can never write")
+	}
+	if err != nil {
+		t.Fatalf("pass reported an error for one failed row: %v", err)
+	}
+	if repaired != 0 {
+		t.Fatalf("counted %d repairs while every write was refused", repaired)
+	}
+}
+
 func keysOf(m map[string][]byte) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

@@ -3,6 +3,7 @@ package invoices
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 )
@@ -45,15 +46,18 @@ import (
 //	consumption the original one did.
 // =============================================================================
 
-// repairBatchLimit bounds one pass. The live population is a handful of rows,
-// so this is a guard against a pathological query rather than a paging scheme:
-// a pass that hits the limit repairs what it selected, and the next pass, on
-// the next boot, picks up the rest.
-//
-// ponytail: no cursor loop. Add one if the unconverted population ever exceeds
-// this in practice, which it cannot on any deployment that has run the monthly
-// cron for fewer than five hundred workspace-months.
+// repairBatchLimit bounds ONE SELECT, not the whole pass. The pass keeps
+// fetching batches until one of them repairs nothing, so a population larger
+// than this is finished by the same boot rather than waiting for the next one.
+// Bounding the query at all is a guard against loading an unbounded result set
+// into memory; the live population is a handful of rows.
 const repairBatchLimit = 500
+
+// errRepairedConcurrently marks the one non-failure that stops a row mid-pass:
+// another replica wrote it between this pass's SELECT and its UPDATE. The row
+// is correct, this pass simply did not do it, and it must not be logged as a
+// failure or the loop below would read it as a lack of progress.
+var errRepairedConcurrently = errors.New("invoices: row repaired concurrently")
 
 // RepairUnconvertedInvoices converts every stored invoice whose amounts are a
 // conflated credit count, regenerating its PDF, and returns how many rows it
@@ -65,31 +69,55 @@ const repairBatchLimit = 500
 // rows at all is returned as a pass-level error, because that leaves the caller
 // with no idea whether there was anything to do.
 func (s *Service) RepairUnconvertedInvoices(ctx context.Context) (int, error) {
-	pending, err := s.repo.ListUnconverted(ctx, repairBatchLimit)
-	if err != nil {
-		return 0, fmt.Errorf("invoices: list unconverted: %w", err)
-	}
-	if len(pending) == 0 {
-		return 0, nil
+	repaired, seen := 0, 0
+	for {
+		pending, err := s.repo.ListUnconverted(ctx, repairBatchLimit)
+		if err != nil {
+			return repaired, fmt.Errorf("invoices: list unconverted: %w", err)
+		}
+		if len(pending) == 0 {
+			break
+		}
+		seen += len(pending)
+
+		// Progress, not batch size, is the loop condition. A row that fails
+		// keeps its NULL rate and is therefore selected again by the next
+		// SELECT, so counting batches would spin forever on a permanently
+		// broken row. Counting repairs cannot: a batch that repairs nothing
+		// ends the pass and leaves the rest for the next boot, with every
+		// failure already named in the log.
+		progress := 0
+		for _, inv := range pending {
+			err := s.repairOne(ctx, inv)
+			switch {
+			case err == nil:
+				repaired++
+				progress++
+			case errors.Is(err, errRepairedConcurrently):
+				// Another replica did it. Not a failure, and not this pass's
+				// progress either; the row is gone from the predicate, so the
+				// next SELECT will not return it.
+				progress++
+			default:
+				s.logger.WarnContext(ctx, "invoice repair: row failed",
+					"invoice_id", inv.ID,
+					"workspace_id", inv.WorkspaceID,
+					"period_start", inv.PeriodStart.Format("2006-01-02"),
+					"error", err,
+				)
+			}
+		}
+		if progress == 0 {
+			break
+		}
 	}
 
-	repaired := 0
-	for _, inv := range pending {
-		if err := s.repairOne(ctx, inv); err != nil {
-			s.logger.WarnContext(ctx, "invoice repair: row failed",
-				"invoice_id", inv.ID,
-				"workspace_id", inv.WorkspaceID,
-				"period_start", inv.PeriodStart.Format("2006-01-02"),
-				"error", err,
-			)
-			continue
-		}
-		repaired++
+	if seen > 0 {
+		s.logger.InfoContext(ctx, "invoice repair: pass complete",
+			"unconverted_seen", seen,
+			"invoices_repaired", repaired,
+		)
 	}
-	s.logger.InfoContext(ctx, "invoice repair: pass complete",
-		"unconverted_seen", len(pending),
-		"invoices_repaired", repaired,
-	)
 	return repaired, nil
 }
 
@@ -142,9 +170,7 @@ func (s *Service) repairOne(ctx context.Context, inv Invoice) error {
 		return fmt.Errorf("invoices: persist repair: %w", err)
 	}
 	if !wrote {
-		// Another replica repaired it between the SELECT and the UPDATE. Not an
-		// error; the row is correct and this pass simply did not do it.
-		return fmt.Errorf("invoices: row %s was repaired concurrently", inv.ID)
+		return fmt.Errorf("%w: %s", errRepairedConcurrently, inv.ID)
 	}
 
 	s.logger.InfoContext(ctx, "invoice repaired",

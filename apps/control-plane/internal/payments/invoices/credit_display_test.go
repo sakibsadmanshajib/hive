@@ -123,7 +123,10 @@ func TestRender_PrintsCreditsAndTakaSeparately(t *testing.T) {
 		t.Fatalf("rendered text prints the credit count as taka:\n%s", text)
 	}
 	// The inverse defect: the taka amount multiplied up and called credits.
-	if strings.Contains(text, "Credits") && strings.Contains(text, "524700") {
+	// Case-insensitive on the label, because the column header is "Hive
+	// credits" with a lower-case c and an exact match on "Credits" would make
+	// this assertion unable to fail at all.
+	if strings.Contains(strings.ToLower(text), "credit") && strings.Contains(text, "524700") {
 		t.Fatalf("rendered text derives credits from the taka amount:\n%s", text)
 	}
 	if !strings.Contains(strings.ToLower(text), "credit") {
