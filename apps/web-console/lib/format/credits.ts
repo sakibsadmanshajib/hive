@@ -174,6 +174,14 @@ export function formatPercent(
  * Truncated rather than rounded: credits are whole in storage, so a
  * fractional value here can only be a decode artefact, and truncating never
  * invents a credit that is not there.
+ *
+ * formatCreditAmount below repeats these four lines rather than calling this
+ * function, which is deliberate: it is compared declaration for declaration
+ * against the chat front end's twin by
+ * tools/lint-credit-balance-formatter-parity.mjs, and a call out to a helper
+ * that exists in only one of the two builds would make the two declarations
+ * differ while behaving identically, which is a failure the linter cannot
+ * distinguish from a real divergence.
  */
 export function formatCreditDigits(credits: number): string {
   if (!Number.isFinite(credits)) {
