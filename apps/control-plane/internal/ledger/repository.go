@@ -435,10 +435,18 @@ func normalizeMetadata(metadata map[string]any) map[string]any {
 // credit unit it speaks: 1 USD = 1e9 credits, effective with migration
 // 20260823_40_credit_unit_rescale_billion.sql. Rows carrying the LEGACY key
 // value ("legacy-1usd-100k-credits") were rescaled by that migration; rows
-// stamped v2 are native new-unit; a nonzero entry carrying NEITHER was
-// written by a pre-stamp binary after the rescale and is an unscaled
-// straggler (the post-deploy detector in the migration header queries
-// exactly that). Callers that pass their own credit_unit value win.
+// stamped v2 are native new-unit.
+//
+// A nonzero entry carrying NEITHER is NOT evidence of an old unit, corrected
+// after issue #1704: this stamp is applied here, in the Go writer, so every
+// row written straight to the schema (seed scripts, fixture SQL, an operator's
+// INSERT) is unstamped at the current unit. What tells that apart from a row a
+// pre-stamp binary wrote during the rescale's container recreate is WHEN it
+// was written, against public.credit_unit_rescale.applied_at, and the only
+// sanctioned query for it is public.credit_unit_straggler_candidates
+// (supabase/migrations/20260902_02_credit_unit_straggler_detector.sql).
+//
+// Callers that pass their own credit_unit value win.
 const CreditUnitV2 = "v2-1usd-1e9"
 
 // stampCreditUnit returns a copy of metadata carrying CreditUnitV2 unless the

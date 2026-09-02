@@ -252,6 +252,10 @@ def main() -> None:
     assert row["idempotency_key"] == seed_demo_owner.grant_idempotency_key(A)
     assert row["metadata"]["reason"]
     assert row["metadata"]["source"] == "scripts/seed-demo-owner.py"
+    # The unit the amount is in, claimed by this writer because the row never
+    # passes through ledger.stampCreditUnit. Dropping it puts the row back in
+    # front of the straggler detector as a candidate (issue #1704).
+    assert row["metadata"]["credit_unit"] == "v2-1usd-1e9"
 
     print(
         "ok: seed-demo-owner.py slug-collision guards + password_to_set + env_or + "

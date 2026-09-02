@@ -71,12 +71,16 @@
 --   2. The NEW binary stamps every ledger entry it writes and every payment
 --      intent it creates with {"credit_unit": "v2-1usd-1e9"} (ledger
 --      repository PostEntry and payments.InitiateCheckout, same pull
---      request). Together with 1 this makes every writer identifiable PER
---      ROW on both sides of the deploy, which closes the detection gap: an
---      OLD-unit row written between this migration's COMMIT and the
---      container recreate carries NO credit_unit key at all, because the old
---      binaries predate stamping. Zero-delta rows carry no flag because zero
---      means the same thing in both units.
+--      request). Together with 1 this makes every GO writer identifiable PER
+--      ROW on both sides of the deploy. Zero-delta rows carry no flag because
+--      zero means the same thing in both units.
+--      What this does NOT close, corrected after issue #1704: stamping lives
+--      in the Go writers, so anything writing this schema directly (seed
+--      scripts, fixture SQL, an operator's INSERT, PostgREST) produces an
+--      unstamped row at the CURRENT unit, indistinguishable by metadata alone
+--      from an old-binary row written during the container recreate. The
+--      absence of a stamp is therefore not evidence of a unit, and only the
+--      boundary in 3 can tell the two apart. See STRAGGLER DETECTOR below.
 --   3. public.credit_unit_rescale holds exactly one row whose applied_at is
 --      clock_timestamp() taken at the END of the work (now() would be
 --      transaction START): the wall-clock upper bound of everything this
@@ -112,16 +116,25 @@
 --   -- owner account balance should read ~99,997,990,000 (was 9,999,799):
 --   SELECT sum(credits_delta) FROM public.credit_ledger_entries
 --    WHERE account_id = '<owner-account-uuid>';
---   -- STRAGGLER DETECTOR, covers BOTH window halves (rows the scan missed
---   -- pre-boundary AND old-binary rows written during the recreate window):
---   -- every writer stamps its rows EXCEPT the unscaled ones, so ANY hit is
---   -- an unscaled row needing one flagged UPDATE x10000. Expected: 0 rows.
---   SELECT account_id, count(*), sum(credits_delta)
---     FROM public.credit_ledger_entries
---    WHERE credits_delta <> 0 AND NOT (metadata ? 'credit_unit')
---    GROUP BY account_id;
---   SELECT id, status, credits FROM public.payment_intents
---    WHERE credits <> 0 AND NOT (metadata ? 'credit_unit');
+--   -- STRAGGLER DETECTOR. The query that used to sit here read "nonzero and
+--   -- carrying no credit_unit key" as proof of an old unit, and told the
+--   -- operator to multiply every match by the factor. Both halves were wrong,
+--   -- and on the live box the remedy would have inflated 221 billion credits
+--   -- of correctly scaled grants (issue #1704). A missing stamp is evidence of
+--   -- a WRITER THAT DOES NOT STAMP, which every seed script and every hand-run
+--   -- INSERT is, since stamping lives in the Go writer and not in the schema.
+--   -- What separates the populations is the boundary this file records, and it
+--   -- is compared in OPPOSITE directions per table (the ledger was stamped as
+--   -- it was scaled; payment_intents at step 6 below was scaled and stamped
+--   -- nowhere). That logic now has one definition, in
+--   -- supabase/migrations/20260902_02_credit_unit_straggler_detector.sql:
+--   SELECT source_table, count(*), sum(credits)
+--     FROM public.credit_unit_straggler_candidates
+--    GROUP BY source_table;   -- expected: 0 rows
+--   -- A hit is a CANDIDATE, not a verdict, and there is no blanket remedy.
+--   -- Reconcile that one account against public.credit_ledger_entries first,
+--   -- in the shape apps/control-plane/internal/payments/invoices/
+--   -- rescale_repair.go uses, and correct one row at a time.
 --   -- catalog spot check (hive-default was 5250 / 21000):
 --   SELECT input_price_credits, output_price_credits FROM public.model_aliases
 --    WHERE alias_id = 'hive-default';   -- expect 52500000 / 210000000

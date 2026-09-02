@@ -117,9 +117,16 @@ WITH u AS (
 )
 INSERT INTO public.credit_ledger_entries
   (account_id, entry_type, credits_delta, idempotency_key, metadata)
+-- credit_unit is the stamp ledger.stampCreditUnit puts on every entry the
+-- control-plane writes. This INSERT bypasses that writer entirely, so it makes
+-- the claim itself: the amount above is in today's unit (1 USD = 1e9 credits).
+-- An unstamped row is what issue #1704's straggler detector mistook for a
+-- pre-rescale one, and the remedy documented next to it would have multiplied
+-- it by 10,000.
 SELECT k.account_id, 'grant', :'grant_credits'::bigint,
        'ci-throwaway-grant-' || k.id::text,
-       jsonb_build_object('source', 'scripts/ci-seed-api-key.sh')
+       jsonb_build_object('source', 'scripts/ci-seed-api-key.sh',
+                          'credit_unit', 'v2-1usd-1e9')
 FROM k;
 
 -- hive-free and hive-free-tools are visibility='restricted' as of
@@ -169,6 +176,10 @@ assert "the account has a positive credit balance" t \
   "SELECT coalesce(sum(l.credits_delta), 0) > 0 FROM public.credit_ledger_entries l
      JOIN public.api_keys k ON k.account_id = l.account_id
     WHERE k.token_hash = '$token_hash'"
+assert "the seeded grant states the credit unit it is in" t \
+  "SELECT l.metadata->>'credit_unit' = 'v2-1usd-1e9' FROM public.credit_ledger_entries l
+     JOIN public.api_keys k ON k.account_id = l.account_id
+    WHERE k.token_hash = '$token_hash' AND l.entry_type = 'grant'"
 assert "the tenant is granted both restricted free-pool aliases" 2 \
   "SELECT count(*) FROM public.tenant_model_visibility v
      JOIN public.tenants t ON t.id = v.tenant_id
