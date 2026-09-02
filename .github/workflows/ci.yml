@@ -75,10 +75,17 @@ jobs:
   #
   #     live-integration and web-e2e carry conditions more complex than a
   #     single boolean (event type, fork-PR exclusion, an opt-in label, a
-  #     narrower path gate), so each computes its decision once in an
-  #     early `gate` step and every later step reads
+  #     narrower path gate). live-integration computes its decision once in
+  #     an early `gate` step and every later step reads
   #     `steps.gate.outputs.run` instead of repeating the whole
-  #     expression. agent-console-unit and the other single-boolean
+  #     expression. web-e2e repeats the whole expression on every real step
+  #     instead, because it runs Playwright and
+  #     tools/verify-spec-wiring.mjs statically proves PR-reachability from
+  #     workflow YAML alone; that guard's recognised-atom vocabulary covers
+  #     job/needs-output expressions and github.event checks, not an
+  #     arbitrary step's computed output, so a `gate` step here would read
+  #     as never reachable on a pull request (see the REQUIRED CHECK note
+  #     on that job). agent-console-unit and the other single-boolean
   #     required jobs repeat `needs.changes.outputs.run != 'false'`
   #     directly, matching web-unit and repo-policy-lints.
   #
@@ -90,15 +97,15 @@ jobs:
   #
   # The step-level condition is `!= 'false'` rather than `== 'true'` so
   # that a `changes` job that failed or was cancelled leaves an empty
-  # output and the real suite runs anyway. live-integration's and
-  # web-e2e's `gate` steps keep the stricter `== 'true'` they had before
-  # this required-job conversion, unchanged in polarity: their conditions
-  # were already narrow opt-in gates (a label, an event type) layered on
-  # top of the path check, not the path check alone, so the anti-false-skip
-  # case above does not carry over verbatim. A `changes` job failure or
-  # cancellation still means these two report a trivial success rather than
-  # running the real suite; tightening that is tracked separately, not
-  # folded into this mechanical always()-conversion.
+  # output and the real suite runs anyway. live-integration's `gate` step
+  # and web-e2e's repeated condition both keep the stricter `== 'true'`
+  # they had before this required-job conversion, unchanged in polarity:
+  # their conditions were already narrow opt-in gates (a label, an event
+  # type) layered on top of the path check, not the path check alone, so
+  # the anti-false-skip case above does not carry over verbatim. A
+  # `changes` job failure or cancellation still means these two report a
+  # trivial success rather than running the real suite; tightening that is
+  # tracked separately, not folded into this mechanical always()-conversion.
   #
   # Polarity is deliberate. This is an allow-list of paths that are safe
   # to ignore, and ANYTHING else means run=true, including an
@@ -2386,16 +2393,27 @@ jobs:
     # job had to stop being skipped on a cancellation.
     #
     # REQUIRED CHECK. Always runs and always reports its own conclusion; the
-    # decision below is applied per step via the `gate` step's output
-    # instead of a job-level `if:`. See the note above `changes`.
+    # decision below is applied per step instead of a job-level `if:`. See
+    # the note above `changes`. Repeated verbatim on every real step, rather
+    # than computed once in a `gate` step and referenced as
+    # `steps.gate.outputs.*`: tools/verify-spec-wiring.mjs statically proves,
+    # from workflow YAML alone, which specs this job's own Playwright step
+    # can select on an ordinary pull request, and its recognised-atom
+    # vocabulary is job/needs-output expressions and github.event checks, not
+    # an arbitrary step's computed output. A `gate` step's output is opaque
+    # to it by design (see that file's isKnownSurvivingAtom), so it would
+    # read this job as never reachable on a pull request and fail the specs
+    # this job actually does run there — this repository's issue #813
+    # camouflage shape 14 in miniature, caught by CI on 2026-09-02 when this
+    # job first tried the `gate` indirection.
     #
-    # What the gate encodes: `needs.changes.outputs.web_e2e` (see the
-    # `changes` job's decide step for the path reasoning), instead of the
-    # blanket `needs.changes.outputs.run` every other job here uses. Two of
-    # the four PRs above, the migration baseline script and its probe,
-    # touched no path that can reach the booted browser flow and should not
-    # have run this job at all; this gate is deterministic and reviewable in
-    # a diff, unlike a queue race.
+    # `needs.changes.outputs.web_e2e` (see the `changes` job's decide step
+    # for the path reasoning) is used here instead of the blanket
+    # `needs.changes.outputs.run` every other job here uses. Two of the four
+    # PRs above, the migration baseline script and its probe, touched no path
+    # that can reach the booted browser flow and should not have run this
+    # job at all; this gate is deterministic and reviewable in a diff, unlike
+    # a queue race.
     #
     # It was kept after the throwaway stack landed because the minutes argument
     # stands on its own. The shared-pool argument for it does not, and #631 is
@@ -2493,35 +2511,43 @@ jobs:
     steps:
       # The condition that used to sit on this job's own `if:` (see the
       # REQUIRED CHECK note above): a changed path can affect the browser
-      # flow AND the trigger is push to main or a same-repo PR. Computed
-      # once here so every step below can gate on `steps.gate.outputs.run`
-      # instead of repeating the whole boolean.
-      - name: Decide whether this run's real suite must run
-        id: gate
-        run: |
-          echo "run=${{
-            needs.changes.outputs.run == 'true' &&
-            needs.changes.outputs.web_e2e == 'true' &&
-            (github.event_name == 'push' ||
-             (github.event_name == 'pull_request' &&
-              github.event.pull_request.head.repo.full_name == github.repository))
-          }}" >> "$GITHUB_OUTPUT"
-
+      # flow AND the trigger is push to main or a same-repo PR. Repeated
+      # verbatim on every real step below.
       - uses: actions/checkout@v7
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
 
       - uses: docker/setup-buildx-action@v4
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
 
       - uses: actions/setup-node@v7
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         with:
           node-version: '24'
           cache: 'npm'
           cache-dependency-path: apps/web-console/package-lock.json
 
       - name: Start a throwaway Supabase (Postgres, GoTrue, PostgREST)
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         shell: bash
         run: |
           set -euo pipefail
@@ -2614,7 +2640,12 @@ jobs:
           echo "SUPABASE_DB_POOL_URL=$dsn" >> "$GITHUB_ENV"
 
       - name: Cache third-party images (redis, litellm)
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         id: img-cache
         uses: actions/cache@v6
         with:
@@ -2622,7 +2653,12 @@ jobs:
           key: docker-images-redis-8.4-alpine-litellm-v1.77.7-stable
 
       - name: Load or pull + save third-party images
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         shell: bash
         run: |
           set -euo pipefail
@@ -2638,7 +2674,12 @@ jobs:
           fi
 
       - name: Build stack images (reuse GHA cache from live-integration)
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         uses: docker/bake-action@v7
         with:
           source: .
@@ -2651,7 +2692,12 @@ jobs:
             *.cache-to=type=gha,scope=stack,mode=max
 
       - name: Start core stack (no rebuild — images already loaded)
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         working-directory: deploy/docker
         env:
           # control-plane calls GET /auth/v1/user on SUPABASE_URL from inside a
@@ -2665,7 +2711,12 @@ jobs:
           docker compose --profile local up -d --no-build redis litellm control-plane edge-api
 
       - name: Wait for services to become healthy
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         working-directory: deploy/docker
         run: |
           set -euo pipefail
@@ -2688,12 +2739,22 @@ jobs:
           done
 
       - name: Install web-console deps
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         working-directory: apps/web-console
         run: npm ci
 
       - name: Read Playwright version
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         id: pw
         working-directory: apps/web-console
         run: |
@@ -2701,7 +2762,12 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright browsers
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         id: pw-cache
         uses: actions/cache@v6
         with:
@@ -2709,17 +2775,34 @@ jobs:
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
 
       - name: Install Playwright browsers
-        if: steps.gate.outputs.run == 'true' && steps.pw-cache.outputs.cache-hit != 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository)) &&
+          steps.pw-cache.outputs.cache-hit != 'true'
         working-directory: apps/web-console
         run: npx playwright install --with-deps chromium
 
       - name: Install Playwright system deps (cache hit path)
-        if: steps.gate.outputs.run == 'true' && steps.pw-cache.outputs.cache-hit == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository)) &&
+          steps.pw-cache.outputs.cache-hit == 'true'
         working-directory: apps/web-console
         run: npx playwright install-deps chromium
 
       - name: Build + start Next.js (points at booted control-plane)
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         working-directory: apps/web-console
         env:
           # NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY and
@@ -2738,7 +2821,12 @@ jobs:
           echo "::error::Next.js did not start"; cat /tmp/nextjs.log; exit 1
 
       - name: Generate the fixture credentials
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         # Random per job, and masked, because the seeder stores the token's
         # sha256 as a live pending invitation. A value anybody can derive from
         # the public run page is a published credential for as long as the run
@@ -2775,7 +2863,12 @@ jobs:
           done
 
       - name: Run UI Playwright suite (unauth + credentialed)
-        if: steps.gate.outputs.run == 'true'
+        if: >-
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         working-directory: apps/web-console
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
@@ -2886,13 +2979,25 @@ jobs:
       # it does not depend on which flavour of cancellation arrives. The cost
       # is a few seconds and one small log artifact on a green run.
       - name: Dump compose logs
-        if: always() && steps.gate.outputs.run == 'true'
+        if: >-
+          always() &&
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         working-directory: deploy/docker
         # Piped through the redactor: see the sdk-tests dump step above.
         run: docker compose logs --no-color --timestamps --tail=500 2>&1 | python3 ../../scripts/redact-log-credentials.py > /tmp/compose-web-e2e-api.log || true
 
       - name: Upload compose logs
-        if: always() && steps.gate.outputs.run == 'true'
+        if: >-
+          always() &&
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         uses: actions/upload-artifact@v7
         with:
           name: compose-logs-web-e2e-api
@@ -2901,7 +3006,13 @@ jobs:
           retention-days: 5
 
       - name: Redact the Next.js server log
-        if: always() && steps.gate.outputs.run == 'true'
+        if: >-
+          always() &&
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         # The console renders an error boundary ("Something went wrong on this
         # page", plus a digest) when a server component throws, and the cause is
         # only ever in this log. On 2026-08-16 an invitation-acceptance spec
@@ -2919,7 +3030,13 @@ jobs:
           fi
 
       - name: Upload the redacted Next.js server log
-        if: always() && steps.gate.outputs.run == 'true'
+        if: >-
+          always() &&
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         uses: actions/upload-artifact@v7
         with:
           name: nextjs-log-web-e2e
@@ -2928,7 +3045,13 @@ jobs:
           retention-days: 5
 
       - name: Upload Playwright report
-        if: always() && steps.gate.outputs.run == 'true'
+        if: >-
+          always() &&
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-api
@@ -2953,12 +3076,24 @@ jobs:
           retention-days: 5
 
       - name: Tear down stack
-        if: always() && steps.gate.outputs.run == 'true'
+        if: >-
+          always() &&
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         working-directory: deploy/docker
         run: docker compose down -v --remove-orphans || true
 
       - name: Tear down the throwaway Supabase
-        if: always() && steps.gate.outputs.run == 'true'
+        if: >-
+          always() &&
+          needs.changes.outputs.run == 'true' &&
+          needs.changes.outputs.web_e2e == 'true' &&
+          (github.event_name == 'push' ||
+           (github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository))
         # The network too, not just the containers. It is a no-op on a hosted
         # runner, which is discarded whole, but scripts/ci-supabase-stack.sh is
         # also run by hand during development and there the leftovers do
