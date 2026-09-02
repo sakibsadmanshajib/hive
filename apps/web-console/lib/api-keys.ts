@@ -140,7 +140,10 @@ export function validateLimits(input: KeyLimitsInput): string | null {
 // the atom of the ledger, so there is no fractional part to accept: "10.5
 // credits" is not a quantity the control plane can store, and silently
 // truncating it would set a cap the customer did not type.
-const CREDIT_INPUT_RE = /^\d{1,3}(,\d{3})*$|^\d+$/;
+// One alternation per shape, and no leading zero in any of them but a bare
+// "0": "0,123" would otherwise parse to 123 while "1,00,000" was refused,
+// which is two different answers to the same malformed input.
+const CREDIT_INPUT_RE = /^(0|[1-9]\d{0,2}(,\d{3})*|[1-9]\d*)$/;
 
 /**
  * Convert a customer-typed credit string (the New Key modal's "Credit limit"
@@ -157,7 +160,8 @@ const CREDIT_INPUT_RE = /^\d{1,3}(,\d{3})*$|^\d+$/;
  * Grouping separators are accepted because the credit unit puts a real cap in
  * the billions and "10000000000" is unreadable to type or to check. They are
  * accepted only in the canonical three-digit positions, so "1,0,0" is refused
- * rather than quietly read as 100.
+ * rather than quietly read as 100, and a grouped value may not carry a leading
+ * zero, so "0,123" is refused rather than read as 123.
  *
  * Returns null for blank input (the field is optional; blank means no cap),
  * for anything that is not a plain non-negative integer, for zero (a zero cap

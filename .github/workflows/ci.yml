@@ -827,6 +827,13 @@ jobs:
       # place both files are readable at once.
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:credits-parity
+      # The companion policy check to the parity one above. Parity is a
+      # relative test between two copies of one formatter; this one holds every
+      # file in both front ends against the rule itself, so a currency
+      # formatter imported into a sixth surface written next month fails here
+      # rather than waiting for someone to notice it has no test.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:no-currency-surfaces
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:litellm-routing
       - if: needs.changes.outputs.run != 'false'

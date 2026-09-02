@@ -334,6 +334,21 @@ describe("ApiKeyCreateForm limit cadence feedback", () => {
     fireEvent.change(limitField(), { target: { value: "0" } });
     expect(summary()).toContain("no limit will be applied");
   });
+
+  it("warns on a cap small enough to be a figure typed in the old unit", () => {
+    // The field kept its name and its syntax and changed its unit, so the
+    // customer most at risk is the one who typed "10" before this shipped and
+    // types "10" again now. Ten credits is refused on the first request, and
+    // the figure itself reads as reasonable, so the sentence has to say so.
+    render(<ApiKeyCreateForm {...formProps} />);
+    fireEvent.change(limitField(), { target: { value: "10" } });
+    expect(summary()).toContain("10 credits");
+    expect(summary()).toContain("very small cap");
+    // And the warning stays off a cap that is a real one, or it becomes noise
+    // every customer learns to scroll past.
+    fireEvent.change(limitField(), { target: { value: "10,000,000,000" } });
+    expect(summary()).not.toContain("very small cap");
+  });
 });
 
 describe("ApiKeyCreateForm credit limit on the wire", () => {

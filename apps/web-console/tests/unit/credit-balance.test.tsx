@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 import { CreditBalance } from "@/components/billing/credit-balance";
+import { CURRENCY_MARK } from "@/tests/support/currency-mark";
 
 // The workspace balance observed live on the demo box, 2026-08-29.
 const balance = {
@@ -37,7 +38,7 @@ describe("CreditBalance", () => {
     // peg sentence in particular is gone rather than reworded.
     const { container } = render(<CreditBalance balance={balance} />);
     const text = container.textContent ?? "";
-    expect(text).not.toMatch(/[$৳€£¥]|USD|BDT/);
+    expect(text).not.toMatch(CURRENCY_MARK);
     expect(text).not.toMatch(/per \$1|credits per|1,000,000,000 credits per/);
   });
 });

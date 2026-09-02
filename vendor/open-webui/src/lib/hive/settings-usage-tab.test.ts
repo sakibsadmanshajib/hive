@@ -10,6 +10,7 @@ import {
 	type CreditBalance,
 	type CreditSnapshot
 } from './credits';
+import { CURRENCY_MARK } from './currency-mark';
 
 /*
  * Regression guard for the P0.5 settings retitle plus Usage tab wave (parity
@@ -250,7 +251,7 @@ describe('Usage tab, rendered', () => {
 		// Written against the whole rendered pane rather than the two known
 		// slots, so a third figure added later in dollars fails here too.
 		const html = renderUsage(snapshotFixture());
-		expect(html).not.toMatch(/[$\u09F3\u20AC\u00A3\u00A5]|USD|BDT/);
+		expect(html).not.toMatch(CURRENCY_MARK);
 		// The bare ungrouped integer stays absent: the figures are grouped and
 		// carry their unit, which is what the customer who once read
 		// "9,789,478,244" with no unit at all was missing.

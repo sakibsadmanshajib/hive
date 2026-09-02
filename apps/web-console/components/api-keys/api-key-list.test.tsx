@@ -13,6 +13,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 
 import type { ApiKey } from "@/lib/control-plane/client";
 import { ApiKeyList } from "./api-key-list";
+import { CURRENCY_MARK } from "@/tests/support/currency-mark";
 
 afterEach(() => {
   cleanup();
@@ -333,8 +334,6 @@ describe("ApiKeyList budget usage bar", () => {
  * has its own strings, unchecked if only the partial case were covered.
  */
 describe("ApiKeyList budget usage bar renders credits, never currency", () => {
-  const CURRENCY_MARK = /[$\u09F3\u20AC\u00A3\u00A5]|USD|BDT/;
-
   const everyState: ApiKey[] = [
     // Partial.
     baseKey({
@@ -378,18 +377,24 @@ describe("ApiKeyList budget usage bar renders credits, never currency", () => {
     );
 
     expect(container.textContent ?? "").not.toMatch(CURRENCY_MARK);
+    // textContent reads text nodes only, so the accessible half of this
+    // assertion has to read attributes separately. Every element carrying one
+    // of the three, rather than the two attributes on the progress element:
+    // a currency figure added to a badge's title or a button's label is a
+    // leak this test's own name promises to catch.
+    for (const el of container.querySelectorAll(
+      "[aria-label],[aria-valuetext],[title]",
+    )) {
+      for (const attr of ["aria-label", "aria-valuetext", "title"]) {
+        expect(el.getAttribute(attr) ?? "").not.toMatch(CURRENCY_MARK);
+      }
+    }
     const bars = container.querySelectorAll("progress");
     // Three of the five states draw a bar. The uncapped key has no limit to
     // divide by and the absent-counter key has no numerator, so both
     // deliberately draw none. Asserted so an empty NodeList cannot pass this
     // loop silently.
     expect(bars.length).toBe(3);
-    for (const bar of bars) {
-      expect(bar.getAttribute("aria-label") ?? "").not.toMatch(CURRENCY_MARK);
-      expect(bar.getAttribute("aria-valuetext") ?? "").not.toMatch(
-        CURRENCY_MARK,
-      );
-    }
     // And the credit unit is still stated, so the integers are not left
     // unlabelled by a fix that only removed the dollar sign.
     expect(screen.getByText("5,000,000,000 credits total")).toBeTruthy();

@@ -18,6 +18,7 @@
     "lint:dead-supabase-secrets": "node tools/lint-no-dead-supabase-secrets.mjs",
     "lint:no-client-cost-fields": "node tools/lint-no-client-cost-fields.mjs",
     "lint:credits-parity": "node tools/lint-credit-balance-formatter-parity.mjs",
+    "lint:no-currency-surfaces": "node tools/lint-no-currency-on-credit-surfaces.mjs",
     "lint:sync-child-process": "node tools/lint-no-sync-child-process-in-tests.mjs",
     "lint:deploy-diagnosability": "node tools/lint-deploy-diagnosability.mjs",
     "lint:compose-required-vars": "node tools/lint-compose-required-vars.mjs",

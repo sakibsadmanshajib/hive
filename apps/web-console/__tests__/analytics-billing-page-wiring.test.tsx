@@ -17,6 +17,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { CURRENCY_MARK } from "@/tests/support/currency-mark";
 
 const mockGetSession = vi.fn();
 const mockGetUser = vi.fn();
@@ -174,7 +175,7 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     const page = await mod.default({
       searchParams: Promise.resolve({ tab: "overview", window: "24h" }),
     });
-    render(page);
+    const { container } = render(page);
 
     // Regex, not a string: the rendered banner is the single text node
     // "Unable to load analytics. Refresh to try again." and queryByText
@@ -190,6 +191,11 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     screen.getByText("18");
     screen.getByText("4");
     screen.getByText("3,000,000,000 credits");
+    // Issue #1694, and the half a positive assertion cannot make: the Total
+    // spend tile, the Blended price tile and the Top API keys card all render
+    // here, and a credit figure with a dollar figure added beside it satisfies
+    // every assertion above. Nothing on this tab may carry a currency mark.
+    expect(container.textContent ?? "").not.toMatch(CURRENCY_MARK);
   });
 
   it("renders 'Unavailable' for the tile deltas and the top-keys panel when their own fetches fail, never the same 'No prior data' / empty text a real zero would render", async () => {

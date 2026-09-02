@@ -46,6 +46,17 @@ describe("parseCreditLimitInput", () => {
     expect(parseCreditLimitInput("100,")).toBeNull();
   });
 
+  it("refuses a leading zero, in a grouped value and a plain one alike", () => {
+    // The first revision of this parser accepted "007" as 7 and refused
+    // "1,00,000", which meant "0,123" parsed to 123 while an equally
+    // malformed value beside it was rejected. One answer to malformed input,
+    // and it is a refusal the summary line states rather than a silent
+    // reinterpretation of a money control.
+    expect(parseCreditLimitInput("0,123")).toBeNull();
+    expect(parseCreditLimitInput("007")).toBeNull();
+    expect(parseCreditLimitInput("0000")).toBeNull();
+  });
+
   it("trims surrounding whitespace", () => {
     expect(parseCreditLimitInput("  5,000  ")).toBe(5_000);
   });

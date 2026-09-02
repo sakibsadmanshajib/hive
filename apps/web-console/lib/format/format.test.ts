@@ -10,6 +10,7 @@ import {
 } from "./credits";
 import { formatDateTime, formatLongDate } from "./datetime";
 import { formatCurrency, formatTakaSubunits } from "./money";
+import { CURRENCY_MARK } from "@/tests/support/currency-mark";
 import { intlTag, resolveLocale } from "@/lib/i18n/locales";
 
 describe("resolveLocale", () => {
@@ -161,8 +162,6 @@ describe("money formatting", () => {
  * would go on passing while a second, dollar-denominated line was added
  * beside it.
  */
-const CURRENCY_MARK = /[$\u09F3\u20AC\u00A3\u00A5]|USD|BDT|EUR/;
-
 describe("formatCreditAmount", () => {
   it("renders the exact credit count and its unit, with no currency at all", () => {
     // The workspace balance observed live on the demo box, 2026-08-29. It used

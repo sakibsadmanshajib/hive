@@ -13,6 +13,7 @@ import {
 	refreshCreditSnapshot,
 	LOW_CREDITS_THRESHOLD
 } from './credits';
+import { CURRENCY_MARK } from './currency-mark';
 
 describe('creditState', () => {
 	it('empty at zero or below', () => {
@@ -42,8 +43,6 @@ describe('creditState', () => {
  * policies had to be kept apart by hand, which is how #1344 and #1345 shipped.
  */
 describe('formatCreditAmount', () => {
-	const CURRENCY_MARK = /[$\u09F3\u20AC\u00A3\u00A5]|USD|BDT/;
-
 	it('renders the exact credit count and its unit', () => {
 		expect(formatCreditAmount(9_996_364_207)).toBe('9,996,364,207 credits');
 		expect(formatCreditAmount(395_640)).toBe('395,640 credits');
@@ -231,6 +230,27 @@ describe('the composer banner wiring', () => {
 		expect(src).toContain('remaining: formatCreditAmount(balance?.available_credits ?? 0)');
 		expect(src).toContain('used: formatCreditAmount(balance?.usage_today_credits ?? 0)');
 		expect(src).not.toMatch(/formatUsd|Intl\.NumberFormat/);
+		// A formatter swapped back in is not the only way the leak returns on
+		// this component. A currency mark typed straight into the i18n message
+		// passes every assertion above and the whole file, and this banner is
+		// the one surface with no rendered guard at all, because it populates
+		// in onMount and a server render holds no figure to assert. A blanket
+		// scan of the source is not available (every `$i18n` and every store
+		// reference would match), so the message literal is scanned on its own.
+		// Both quote styles: this component uses double quotes for the two
+		// messages that contain an apostrophe and single quotes elsewhere, and a
+		// scan that saw only one style would silently skip the other.
+		const messages = [
+			...src.matchAll(/\$i18n\.t\(\s*(?:'([^']+)'|"([^"]+)")/g)
+		].map((m) => m[1] ?? m[2]);
+		// Anti vacuity: the banner has more than one message and the known one
+		// must be among them, so a changed call shape cannot empty this list
+		// and pass the scan below with nothing in it.
+		expect(messages.length).toBeGreaterThan(1);
+		expect(messages.some((m) => m.includes('remaining'))).toBe(true);
+		for (const message of messages) {
+			expect(message).not.toMatch(CURRENCY_MARK);
+		}
 	});
 
 	it('leaves no currency formatter on the Usage tab either', () => {

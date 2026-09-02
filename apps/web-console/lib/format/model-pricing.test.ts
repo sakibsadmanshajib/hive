@@ -5,6 +5,7 @@ import {
   formatInOutPrice,
   formatModelPrice,
 } from "./model-pricing";
+import { CURRENCY_MARK } from "@/tests/support/currency-mark";
 
 // This is a billing surface. The whole point of these branches is that
 // "deliberately free", "variable by design", "no such rate" and "we could not
@@ -16,7 +17,6 @@ import {
 // printed the dollar figure and the credit integer for the same rate side by
 // side, which is a conversion table: two renderings of one quantity publish
 // the credit peg (owner ruling, .wolf/decisions.md D-070).
-const CURRENCY_MARK = /[$৳€£¥]|USD|BDT/;
 
 describe("formatModelPrice", () => {
   it("prints a published rate as credits per million tokens", () => {

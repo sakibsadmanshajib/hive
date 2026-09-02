@@ -38,6 +38,17 @@ const LIMIT_HINT: Record<ResetCadence, string> = {
 const BUDGET_NOT_APPLIED =
   "Key created, but the credit limit could not be applied. The key is live and uncapped. Set the limit from the key's settings.";
 
+// Below this, a cap is almost certainly a figure typed in the unit this field
+// used to take. The catalog's own rates are the reason for the magnitude: the
+// cheapest published alias charges tens of thousands of credits per million
+// tokens and hive-default charges 89,460,000, so a single ordinary request
+// costs on the order of a hundred thousand credits and a cap under a million
+// refuses within a handful of them.
+const SMALL_LIMIT_CREDITS = 1_000_000;
+
+const SMALL_LIMIT_WARNING =
+  "That is a very small cap: an ordinary request costs on the order of a hundred thousand credits, so this key would be refused almost immediately.";
+
 const CADENCE_PHRASE: Record<ResetCadence, string> = {
   never: "spent in total",
   monthly: "spent in the current calendar month",
@@ -61,6 +72,15 @@ const CADENCE_PHRASE: Record<ResetCadence, string> = {
  * ruling recorded as .wolf/decisions.md D-070 (issue #1694). It was US
  * dollars, which put a dollar cap on the same row as a credit spend figure in
  * the keys table and published the credit peg between them.
+ *
+ * That unit change is why a small figure carries a warning. The field kept its
+ * name and its accepted syntax, so a customer who typed "10" before this
+ * shipped and meant ten dollars, and types "10" again after it, now gets a ten
+ * credit ceiling that the budget check refuses on the first request. Stating
+ * the figure back is not enough on its own, because the figure is exactly what
+ * reads as reasonable. A currency equivalent would explain it and is precisely
+ * what may not be shown, so the warning talks in credits about what requests
+ * actually cost.
  */
 export function limitSummaryText(rawLimit: string, cadence: ResetCadence): string {
   if (rawLimit.trim() === "") {
@@ -70,9 +90,12 @@ export function limitSummaryText(rawLimit: string, cadence: ResetCadence): strin
   if (credits === null) {
     return "Credit limit must be a whole, positive number of credits, so no limit will be applied.";
   }
-  return `Enforced: a request is refused once it would push this key past ${formatCreditAmount(
+  const enforced = `Enforced: a request is refused once it would push this key past ${formatCreditAmount(
     credits,
   )} ${CADENCE_PHRASE[cadence]}.`;
+  return credits < SMALL_LIMIT_CREDITS
+    ? `${enforced} ${SMALL_LIMIT_WARNING}`
+    : enforced;
 }
 
 interface CreateApiKeyResponse {

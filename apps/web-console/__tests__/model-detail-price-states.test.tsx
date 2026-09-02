@@ -19,6 +19,7 @@ import { render, screen } from "@testing-library/react";
 
 import { ModelDetail } from "@/components/catalog/model-detail";
 import type { CatalogModel } from "@/lib/control-plane/client";
+import { CURRENCY_MARK } from "@/tests/support/currency-mark";
 
 function fixture(overrides: Partial<CatalogModel["pricing"]> = {}): CatalogModel {
   return {
@@ -56,7 +57,7 @@ describe("ModelDetail price states", () => {
     // Issue #1694: this page printed the dollar figure and the credit integer
     // for the same rate side by side, which is a conversion table. One unit
     // now, and no currency anywhere on the page.
-    expect(container.textContent ?? "").not.toMatch(/[$৳€£¥]|USD|BDT/);
+    expect(container.textContent ?? "").not.toMatch(CURRENCY_MARK);
   });
 
   it("renders a published zero as 0, never Unknown", () => {
