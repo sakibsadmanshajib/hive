@@ -1,4 +1,4 @@
-import { notFound, redirect } from "next/navigation";
+import { notFound, redirect, unstable_rethrow } from "next/navigation";
 
 import { isWorkspaceAdminViewer } from "@/lib/viewer-gates";
 import { ShieldAlert } from "lucide-react";
@@ -44,6 +44,10 @@ export default async function FeatureGatesPage() {
   try {
     gates = await getFeatureGates();
   } catch (err) {
+    // Framework control flow first: a DynamicServerError or a redirect is
+    // not a permission problem and must not be classified as one
+    // (issue #494).
+    unstable_rethrow(err);
     if (err instanceof ControlPlaneError && err.status === 403) {
       notPermitted = true;
     } else {

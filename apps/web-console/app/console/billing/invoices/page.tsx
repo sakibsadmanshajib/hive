@@ -4,7 +4,7 @@
 // download links. Member-readable (any workspace member can list); the
 // backend gates cross-workspace access.
 
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 
 import {
   listWorkspaceInvoices,
@@ -45,7 +45,12 @@ export default async function WorkspaceInvoicesPage() {
   let fetchFailed = false;
   try {
     invoices = await listWorkspaceInvoices(workspaceId);
-  } catch {
+  } catch (error) {
+    // Next.js signals redirect(), notFound() and "this route read cookies
+    // so it cannot be prerendered" by throwing. Answering those with a
+    // fallback turns a framework instruction into a fabricated result
+    // (issue #494).
+    unstable_rethrow(error);
     fetchFailed = true;
   }
 

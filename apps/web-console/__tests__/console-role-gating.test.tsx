@@ -45,14 +45,22 @@ const {
   mockGetMarketplaceEntries: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({
-  redirect: () => {
-    throw Object.assign(new Error("NEXT_REDIRECT"), {
-      digest: "NEXT_REDIRECT",
-    });
-  },
-  notFound: mockNotFound,
-}));
+// Only redirect() and notFound() are replaced. unstable_rethrow() stays real:
+// these pages call it first in their catch so a framework throw is never
+// classified as a permission failure, and a stubbed-out version would make
+// the assertions below pass whether or not that holds.
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return {
+    ...actual,
+    redirect: () => {
+      throw Object.assign(new Error("NEXT_REDIRECT"), {
+        digest: "NEXT_REDIRECT",
+      });
+    },
+    notFound: mockNotFound,
+  };
+});
 
 vi.mock("@/components/app-shell/console-shell", () => ({
   ConsoleShell: ({ children }: { children: React.ReactNode }) => (

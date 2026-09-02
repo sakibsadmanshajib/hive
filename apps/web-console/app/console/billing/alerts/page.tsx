@@ -13,6 +13,7 @@ import {
 import {
   requireViewer,
   requireAccountProfile,
+  tolerate,
 } from "@/lib/console/data";
 import { SpendAlertForm } from "@/components/billing/spend-alert-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
@@ -45,11 +46,15 @@ export default async function SpendAlertsPage() {
   const workspaceId = viewer.current_account.id;
   const isOwner = viewer.current_account.role === "owner";
 
-  const alerts: SpendAlert[] = await listSpendAlerts(workspaceId).catch(
-    (): SpendAlert[] => [],
+  // null when the list could not be read, which is not the same as an
+  // account with no alerts. Collapsing the two claimed "No spend alerts
+  // configured yet" about an account that may well have several, and it also
+  // emptied existingThresholds, which is the only thing stopping the form
+  // below from accepting a duplicate threshold. A validation that silently
+  // stops validating is worse than one that says it cannot run (issue #494).
+  const alerts: SpendAlert[] | null = await tolerate(
+    listSpendAlerts(workspaceId),
   );
-
-  const existingThresholds = alerts.map((a) => a.threshold_pct);
 
   return (
     <ConsoleShell
@@ -79,12 +84,14 @@ export default async function SpendAlertsPage() {
           <CardHeader>
             <CardTitle>Active alerts</CardTitle>
             <CardDescription>
-              {alerts.length === 0
-                ? "No spend alerts configured yet."
-                : `${alerts.length} alert${alerts.length === 1 ? "" : "s"} active.`}
+              {alerts === null
+                ? "We could not read your spend alerts just now. Refresh to try again."
+                : alerts.length === 0
+                  ? "No spend alerts configured yet."
+                  : `${alerts.length} alert${alerts.length === 1 ? "" : "s"} active.`}
             </CardDescription>
           </CardHeader>
-          {alerts.length > 0 ? (
+          {alerts !== null && alerts.length > 0 ? (
             <CardContent className="px-5 py-5">
               <table className="w-full text-sm">
                 <thead>
@@ -121,11 +128,20 @@ export default async function SpendAlertsPage() {
           ) : null}
         </Card>
 
-        <SpendAlertForm
-          workspaceId={workspaceId}
-          readOnly={!isOwner}
-          existingThresholds={existingThresholds}
-        />
+        {/*
+          Withheld while the existing alerts are unknown. The form's only
+          duplicate check is existingThresholds, so offering it against an
+          empty list we do not believe would let a customer create a second
+          alert at a threshold they already have, under a UI that says it
+          prevents exactly that.
+        */}
+        {alerts !== null ? (
+          <SpendAlertForm
+            workspaceId={workspaceId}
+            readOnly={!isOwner}
+            existingThresholds={alerts.map((a) => a.threshold_pct)}
+          />
+        ) : null}
       </div>
     </ConsoleShell>
   );

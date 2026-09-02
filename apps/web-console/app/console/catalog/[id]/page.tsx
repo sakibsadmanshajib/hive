@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
 import { ArrowRight, ArrowUpRight } from "lucide-react";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 
 import { chatModelUrl, isChatCapable } from "@/lib/chat-link";
 
@@ -111,7 +111,12 @@ export default async function ModelDetailPage(
       window: USAGE_WINDOW,
     });
     usage = rows.find((row) => row.group_key === model.id) ?? null;
-  } catch {
+  } catch (error) {
+    // Next.js signals redirect(), notFound() and "this route read cookies
+    // so it cannot be prerendered" by throwing. Answering those with a
+    // fallback turns a framework instruction into a fabricated result
+    // (issue #494).
+    unstable_rethrow(error);
     usageUnavailable = true;
   }
 

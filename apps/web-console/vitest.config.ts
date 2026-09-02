@@ -8,14 +8,14 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     // Several of these specs server-render a whole console page against a
-    // mocked control-plane, which costs a second or two each on an idle
-    // machine. Vitest's 5s default leaves no headroom for that under a loaded
-    // suite, and the failure is ugly: a timed-out case never unmounts, so the
-    // next case in the same file then fails with "found multiple elements"
-    // and the report points at two innocent tests. Which specs tip over
-    // changes from run to run, which is the signature of scheduler contention
-    // rather than of any one spec. Nothing here asserts latency, so a real
-    // hang still fails, just later.
+    // mocked control-plane. The cost is cold transform and import time, and
+    // it already exceeded vitest's 5s default on main before this setting
+    // existed: the analytics overview spec was measured at 3127ms cold there
+    // and 5133ms here, so the margin was gone either way. The failure is also
+    // ugly beyond the one spec, because a timed-out case never unmounts and
+    // the next case in the same file then fails with "found multiple
+    // elements", pointing the report at an innocent test. Nothing here
+    // asserts latency, so a genuine hang still fails, just later.
     testTimeout: 20_000,
     setupFiles: [],
     include: ["**/__tests__/**/*.test.{ts,tsx}", "**/*.test.{ts,tsx}"],
