@@ -52,6 +52,31 @@ type EventSyncer struct {
 	// including into terminal states).
 	seen map[uuid.UUID]Task
 
+	// offsets tracks how many of a task's sandbox events have already been
+	// appended, so a pass writes only what is new. The source hands back the
+	// conversation's whole event log every time, and AppendEvents issues one
+	// INSERT per event inside a transaction holding a per-task advisory lock,
+	// so re-appending the history every pass and letting the dedup index
+	// throw it away costs work that grows with the square of the run's
+	// length. At a cadence slow enough to be useless (the old 15s) that was
+	// merely wasteful; at one fast enough for a step to appear while it is
+	// happening it is the difference between affordable and not.
+	//
+	// An optimisation over a source this process does not control, so it is
+	// never the only thing standing between an event and the database:
+	// FlushTask reads the run from the beginning, and dedup makes the overlap
+	// free.
+	offsets map[uuid.UUID]int
+
+	// syncedFiles is the same idea for the workspace listing, which has no
+	// offset because it is a listing rather than a log: it is the set of file
+	// event ids already appended for a task, and an entry whose name, size and
+	// mtime are unchanged since the last pass is not written again. Without
+	// it every pass re-writes one row per workspace file, which is the same
+	// square-of-the-run cost the offset above removes, arriving by the other
+	// door. Bounded by the workspace's top level and dropped with the task.
+	syncedFiles map[uuid.UUID]map[string]bool
+
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	doneCh  chan struct{}
@@ -68,7 +93,15 @@ func NewEventSyncer(repo Repository, src EventSource, cfg PollerConfig) *EventSy
 	}
 	interval := cfg.Interval
 	if interval <= 0 {
-		interval = 15 * time.Second
+		interval = DefaultEventSyncInterval
+	}
+	// Floor, not just a default. HIVE_AGENT_TASK_EVENT_INTERVAL reaches here
+	// unvalidated, and while 0s falls through the guard above, 50ms does not:
+	// it would be accepted and would put the launcher under twenty reads a
+	// second per active task, each one a paging /events call plus a workspace
+	// walk. Nothing else rate limits this loop.
+	if interval < minEventSyncInterval {
+		interval = minEventSyncInterval
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -80,8 +113,33 @@ func NewEventSyncer(repo Repository, src EventSource, cfg PollerConfig) *EventSy
 		interval: interval,
 		logger:   logger,
 		seen:     make(map[uuid.UUID]Task),
+		offsets:  make(map[uuid.UUID]int),
+
+		syncedFiles: make(map[uuid.UUID]map[string]bool),
 	}
 }
+
+// DefaultEventSyncInterval is how often an active task's sandbox is asked what
+// it has done since the last pass.
+//
+// It is not the status poller's interval and must not be folded back into it.
+// The two answer different questions on different clocks: a status is a fact
+// about a run that is either over or not, while a step is something a person
+// is waiting to watch happen, and a step that surfaces fifteen seconds after
+// the agent took it is indistinguishable from a hang (issues #1622, #1504).
+// This is deliberately close to the chat transcript's own 3s follow poll
+// (COWORK_POLL_INTERVAL_MS in Chat.svelte), because the two are in series:
+// the worst case a person waits is one of each.
+const DefaultEventSyncInterval = 2 * time.Second
+
+// minEventSyncInterval is the floor NewEventSyncer clamps to, whatever the
+// deployment asks for. See the clamp for what it is protecting.
+const minEventSyncInterval = 500 * time.Millisecond
+
+// eventPullTimeout bounds one read of a session's events and workspace
+// listing. See pullSessionEvents for why the transport's own timeout is not a
+// bound this code can rely on.
+const eventPullTimeout = 10 * time.Second
 
 // RunOnce performs exactly one sync pass over every active task plus the
 // tracked tasks that went terminal since the last pass. The returned error,
@@ -171,15 +229,114 @@ func (s *EventSyncer) Stop() {
 // the workspace listing. Every failure here logs against this task alone and
 // never reaches RunOnce's return value.
 func (s *EventSyncer) syncTask(ctx context.Context, t Task) {
-	events := append([]TaskEvent{statusEvent(t)}, s.pullTaskEvents(ctx, t)...)
+	pulled, next := s.pullTaskEvents(ctx, t, s.offsets[t.ID], s.syncedFiles[t.ID])
+
+	// A pass that pulled nothing new and sees the same status it saw last time
+	// is a batch every row of which is already stored, so the write would be a
+	// transaction whose only statement the dedup index is guaranteed to
+	// reject: a tenant GUC, an advisory lock, a MAX(seq) aggregate and one
+	// discarded INSERT. That was tolerable every fifteen seconds and is worth
+	// skipping every two, on a pool this deployment shares with live chat.
+	//
+	// The zero value of seen[t.ID] has an empty Status, so a task's first pass
+	// never takes this branch and its initial status row always lands. The
+	// bookkeeping still advances: `next` can have moved past events that
+	// mapped to nothing (a SystemPromptEvent, say), and leaving the offset
+	// behind them would re-read them for the rest of the run.
+	if len(pulled) == 0 && s.seen[t.ID].Status == t.Status {
+		s.offsets[t.ID] = next
+		s.remember(t)
+		return
+	}
+
+	events := append([]TaskEvent{statusEvent(t)}, pulled...)
 
 	if err := s.repo.AppendEvents(ctx, t, events); err != nil {
 		// Retried whole-batch next pass; dedup makes the retry idempotent.
+		// The offset is deliberately NOT advanced here, so the events this
+		// batch carried are pulled again rather than skipped.
 		s.logger.WarnContext(ctx, "agenttask: event append failed, retrying next pass",
 			"task_id", t.ID, "error", err)
 		return
 	}
+	s.offsets[t.ID] = next
+	s.rememberFiles(t.ID, events)
 	s.remember(t)
+}
+
+// FlushTask appends everything t's session can still tell us, read from the
+// beginning of its event log, and is the one pass that has to be complete.
+//
+// The poller calls it immediately before it records a terminal status
+// (PollerConfig.FlushEvents). That ordering is the whole point: the chat
+// transcript stops following a run the moment it reads a terminal status
+// (followCoworkRun in vendor/open-webui/src/lib/components/chat/Chat.svelte),
+// so a step written afterwards is written for nobody.
+//
+// Flushing before the transition is necessary and NOT sufficient on its own.
+// The reader closes it from its side by reading the status before the events,
+// so a reading that sees a terminal status always asks for events afterwards,
+// which is after the transition commit, which is after this flush commits.
+// Reversing that order in readCoworkRun, or collapsing the two awaits into a
+// Promise.all, reopens issue #1504 with every test on this side still passing:
+// the events request could then be served from before this flush while the
+// status request is served from after the transition. That order is pinned
+// from the other side by cowork-step-chain.test.ts. Before this existed,
+// the terminal transition and the tail pull were two loops on two unrelated
+// schedules, and a run shorter than the sync interval lost that race every
+// time: it rendered as a blank box for its whole life and then as a bare
+// summary with no steps at all, which is issue #1504's live observation.
+//
+// Reading from zero rather than from the tracked offset is what makes this
+// the reconciliation pass: dedup makes the overlap free, and anything the
+// incremental pulls missed still lands. Failures are logged and swallowed,
+// because this must never be able to stop a terminal status from being
+// recorded: a run whose outcome is known and unwritten is worse than a run
+// with missing steps.
+// Called from the poller's goroutine while this syncer's own loop may be
+// running, and deliberately touches none of the syncer's per-task bookkeeping
+// (it reads from zero and skips nothing), so there is no shared mutable state
+// between the two callers and nothing here needs a lock.
+func (s *EventSyncer) FlushTask(ctx context.Context, t Task) {
+	flushTaskEvents(ctx, s.repo, s.src, s.logger, t)
+}
+
+// flushTaskEvents is the shared body of that flush, because there are TWO
+// writers of a terminal status and the invariant has to hold for both: the
+// poller, for a run the engine finished, and Service.Cancel, for one the user
+// stopped. A guarantee that holds on one of them is not a guarantee, and a
+// cancelled run whose steps were recorded afterwards is the same blank box
+// this change is about.
+//
+// Never able to stop a terminal status from being written: a nil source, a
+// task that never launched, an unreadable session and a failed append all
+// return quietly. A run whose outcome is known and unwritten is worse than a
+// run with missing steps.
+func flushTaskEvents(ctx context.Context, repo Repository, src EventSource, logger *slog.Logger, t Task) {
+	if src == nil || t.EngineSessionRef == "" {
+		return
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	events, _, err := pullSessionEvents(ctx, src, logger, t, 0, nil)
+	if err != nil {
+		// The WARN pullSessionEvents already logged is worded for the routine
+		// two second loop, where a failed read is retried a moment later and
+		// means nothing. Here it means the terminal status about to be written
+		// will be published with an incomplete step record and nothing will
+		// retry it in front of a follower that has already stopped reading, so
+		// it gets its own line to grep for.
+		logger.WarnContext(ctx, "agenttask: terminal flush could not read the session, publishing a terminal status with an incomplete step record",
+			"task_id", t.ID, "error", err)
+	}
+	if len(events) == 0 {
+		return
+	}
+	if err := repo.AppendEvents(ctx, t, events); err != nil {
+		logger.WarnContext(ctx, "agenttask: final event flush failed",
+			"task_id", t.ID, "error", err)
+	}
 }
 
 // pullTaskEvents pulls t's sandbox events and workspace listing and maps them
@@ -191,26 +348,71 @@ func (s *EventSyncer) syncTask(ctx context.Context, t Task) {
 // seconds and never recorded the tool_call/tool_result events a genuine
 // terminal command and file write produced. Every failure here logs against
 // t alone; the caller still gets whatever partial slice was built.
-func (s *EventSyncer) pullTaskEvents(ctx context.Context, t Task) []TaskEvent {
-	var events []TaskEvent
+func (s *EventSyncer) pullTaskEvents(ctx context.Context, t Task, offset int, skipFiles map[string]bool) (events []TaskEvent, next int) {
+	events, next, _ = pullSessionEvents(ctx, s.src, s.logger, t, offset, skipFiles)
+	return events, next
+}
 
-	sandboxEvents, err := s.pullSandboxEvents(ctx, t.EngineSessionRef)
-	if err != nil {
-		s.logger.WarnContext(ctx, "agenttask: event sync pull failed",
-			"task_id", t.ID, "error", err)
-		return events
-	}
-	for _, se := range sandboxEvents {
-		if ev, ok := mapSandboxEvent(se); ok {
-			events = append(events, ev)
+// pullSessionEvents is that pull with no syncer attached, so the shared flush
+// above can use it too.
+// The returned error reports that one of the two reads failed and the slice is
+// therefore partial. Every caller on the routine loop ignores it, because
+// there the WARN below is the whole story and the next pass retries; the
+// terminal flush is the one caller that cannot retry and says so separately.
+func pullSessionEvents(ctx context.Context, src EventSource, logger *slog.Logger, t Task, offset int, skipFiles map[string]bool) (events []TaskEvent, next int, err error) {
+	next = offset
+
+	// Bounded here, at the one place every caller of a session read goes
+	// through, because the client underneath has no bound worth the name:
+	// agentengine.Remote's HTTP timeout is five minutes, sized for Launch,
+	// which legitimately blocks while a cold sandbox starts. Reading what a
+	// session has done is not that, and this call now sits inside the status
+	// poller's own pass, which walks active tasks serially: unbounded, one
+	// wedged sandbox would hold every other tenant's status transition behind
+	// it for five minutes, which is precisely the shared-loop failure the
+	// poller's per-task error scoping was written to end (see RunOnce). A
+	// caller with a tighter budget still wins, since the earlier deadline is
+	// the one that fires: Service.Cancel sets three seconds, because there a
+	// person is waiting for an answer.
+	ctx, done := context.WithTimeout(ctx, eventPullTimeout)
+	defer done()
+
+	// The two reads are independent, and a failure of one does not make the
+	// other's answer worthless: they hit different surfaces (the sandbox's
+	// control socket, and a host directory the launcher lists), so an event
+	// read that fails while the workspace listing succeeds is a reachable
+	// state. This used to return here, which meant that state dropped every
+	// file the run had produced, and on the flush path a terminal status could
+	// then be published with none of them recorded (raised in review on
+	// PR #1709). The offset is left where it was, so the events this pass
+	// could not read are read again next time rather than skipped.
+	sandboxEvents, eventsErr := src.Events(ctx, t.EngineSessionRef)
+	if eventsErr != nil {
+		err = eventsErr
+		logger.WarnContext(ctx, "agenttask: event sync pull failed",
+			"task_id", t.ID, "error", eventsErr)
+	} else {
+		// The conversation's event log only grows, so what this pass has not
+		// seen is its tail. A shorter log than the offset (a source that reset
+		// under us) reads as everything being new rather than as a negative
+		// slice.
+		next = len(sandboxEvents)
+		if offset > 0 && offset <= len(sandboxEvents) {
+			sandboxEvents = sandboxEvents[offset:]
+		}
+		for _, se := range sandboxEvents {
+			if ev, ok := mapSandboxEvent(se); ok {
+				events = append(events, ev)
+			}
 		}
 	}
 
-	files, ferr := s.src.Files(ctx, t.EngineSessionRef)
+	files, ferr := src.Files(ctx, t.EngineSessionRef)
 	if ferr != nil {
-		s.logger.WarnContext(ctx, "agenttask: workspace listing failed",
+		err = errors.Join(err, ferr)
+		logger.WarnContext(ctx, "agenttask: workspace listing failed",
 			"task_id", t.ID, "error", ferr)
-		return events
+		return events, next, err
 	}
 	for _, f := range files {
 		// A dot-prefixed entry (.git, .cache, ...) is workspace scaffolding,
@@ -222,9 +424,32 @@ func (s *EventSyncer) pullTaskEvents(ctx context.Context, t Task) []TaskEvent {
 		if strings.HasPrefix(f.Name, ".") {
 			continue
 		}
-		events = append(events, fileEvent(f))
+		ev := fileEvent(f)
+		// Unchanged since the last successful append, so the row is already
+		// stored and re-sending it only asks the database to reject it. Skipped
+		// only on the incremental path: skipFiles is empty for FlushTask, which
+		// has to write the complete listing.
+		if skipFiles[ev.SourceEventID] {
+			continue
+		}
+		events = append(events, ev)
 	}
-	return events
+	return events, next, err
+}
+
+// rememberFiles records the file event ids in an appended batch, so the next
+// pass can skip the entries that have not changed. Called only after the batch
+// landed: an entry recorded ahead of a failed append would be skipped forever.
+func (s *EventSyncer) rememberFiles(id uuid.UUID, events []TaskEvent) {
+	for _, ev := range events {
+		if ev.Kind != EventFile {
+			continue
+		}
+		if s.syncedFiles[id] == nil {
+			s.syncedFiles[id] = make(map[string]bool)
+		}
+		s.syncedFiles[id][ev.SourceEventID] = true
+	}
 }
 
 // remember records t as still-active-seen.
@@ -256,13 +481,16 @@ func (s *EventSyncer) finishVanished(ctx context.Context, active map[uuid.UUID]b
 			// tail one last time before recording the terminal status, or
 			// whatever tool calls and file writes happened between the last
 			// active pass and completion are lost for good, never a retry.
-			events := append(s.pullTaskEvents(ctx, final), statusEvent(final))
+			tail, _ := s.pullTaskEvents(ctx, final, s.offsets[id], s.syncedFiles[id])
+			events := append(tail, statusEvent(final))
 			if aerr := s.repo.AppendEvents(ctx, t, events); aerr != nil {
 				s.logger.WarnContext(ctx, "agenttask: final event append failed",
 					"task_id", id, "error", aerr)
 			}
 		}
 		delete(s.seen, id)
+		delete(s.offsets, id)
+		delete(s.syncedFiles, id)
 	}
 }
 
@@ -285,18 +513,6 @@ func fileEvent(f WorkspaceFile) TaskEvent {
 		Kind:          EventFile,
 		Payload:       payload,
 	}
-}
-
-// pullSandboxEvents pages through the source's search endpoint until it
-// reports exhaustion or maxSyncPages is hit.
-func (s *EventSyncer) pullSandboxEvents(ctx context.Context, sessionRef string) ([]SandboxEvent, error) {
-	var all []SandboxEvent
-	page, err := s.src.Events(ctx, sessionRef)
-	if err != nil {
-		return nil, err
-	}
-	all = append(all, page...)
-	return all, nil
 }
 
 // mapSandboxEvent translates one normalized sandbox event into our six-kind

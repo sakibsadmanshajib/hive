@@ -727,6 +727,19 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: node .github/ci/check-offbox-backup-freshness.test.mjs
 
+      # Regression guard for the OpenRouter balance alarm (issue #1411). Proves
+      # the negative controls that matter: an unreachable, erroring or
+      # malformed API FAILS rather than reporting a healthy balance, a runway
+      # under the threshold FAILS, the threshold boundary is exact, and a first
+      # run with no stored sample still produces a runway instead of passing
+      # because it had nothing to compare against. It also asserts
+      # provider-balance-watch.yml still invokes the check on its schedule,
+      # still persists the sample between runs, and still files AND closes its
+      # tracking issue, so deleting any half of the alarm turns this required
+      # job red. Offline: the suite serves its own stub of the provider API.
+      - if: needs.changes.outputs.run != 'false'
+        run: node .github/ci/check-provider-balance.test.mjs
+
       - if: needs.changes.outputs.run != 'false'
         run: bash scripts/test-pull-box-backups.sh
 

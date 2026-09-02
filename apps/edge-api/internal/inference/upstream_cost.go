@@ -87,19 +87,16 @@ const maxCostLiteralBytes = 64
 // is a belt-and-braces assertion rather than the only line of defence.
 const maxChargeableCredits = 10_000_000_000
 
-// MarginNumerator / MarginDenominator express the 1.4 margin EXACTLY, as a
-// rational. Not 1.4 the float: this multiplies a money figure, and the repo
-// rule is math/big everywhere near a charge.
+// No margin multiplier lives on this path. A burn costs exactly what the
+// provider charged us, converted at the credit peg (D-064, owner ruling
+// 2026-09-02). The 1.4 factor that used to be applied here, and that was baked
+// into every authored `fixed` price by hand at migration time (D-032), is
+// retired: margin is taken once, at purchase (D-065), and never again per
+// request.
 //
-// Until now this margin has only ever been applied by hand, at migration
-// authoring time, when someone multiplied a provider list price by 1.4 and
-// wrote the result into model_aliases (D-032). Billing at actual cost is the
-// first time it has to exist at RUNTIME, so this is a new constant rather than
-// a reused one; there was no runtime constant to reuse.
-const (
-	MarginNumerator   = 7
-	MarginDenominator = 5
-)
+// Nothing replaces it. If a later reader is looking for the constant that used
+// to sit here, it is gone deliberately, and
+// TestCreditsForUpstreamCostCarriesNoMultiplier is what stops it coming back.
 
 // CreditsPerUSD mirrors payments.CreditsPerUSD (1 USD = 1,000,000,000
 // credits, since the 2026-08-23 credit unit rescale; migration
@@ -238,10 +235,14 @@ func SanitizeVariablePriceFrame(payload []byte, aliasID, mintedID string) ([]byt
 }
 
 // CreditsForUpstreamCost converts a provider-reported USD cost into whole
-// credits at the standard margin: cost x 7/5 x CreditsPerUSD (1e9 since the
-// 2026-08-23 rescale), summed as one exact
-// rational and rounded half up exactly once, the same rounding discipline
-// metering.ChargeCredits applies to the per-million path (D-031).
+// credits at the credit peg and nothing else: cost x CreditsPerUSD (1e9 since
+// the 2026-08-23 rescale), taken as one exact rational and rounded half up
+// exactly once, the same rounding discipline metering.ChargeCredits applies to
+// the per-million path (D-031).
+//
+// There is no margin factor here and there must not be one. D-064 retired it,
+// and TestCreditsForUpstreamCostCarriesNoMultiplier pins the identity for a
+// known cost so a reintroduced factor anywhere in this chain goes red.
 //
 // math/big throughout. A nonzero cost floors at one credit, so a request that
 // cost us real money is never settled free.
@@ -256,7 +257,7 @@ func CreditsForUpstreamCost(costUSD *big.Rat) (int64, error) {
 		return 0, ErrUpstreamCostZero
 	}
 
-	scaled := new(big.Rat).Mul(costUSD, big.NewRat(MarginNumerator*CreditsPerUSD, MarginDenominator))
+	scaled := new(big.Rat).Mul(costUSD, new(big.Rat).SetInt64(CreditsPerUSD))
 
 	quotient, remainder := new(big.Int).QuoRem(scaled.Num(), scaled.Denom(), new(big.Int))
 	// Round half up: a remainder at least half the denominator bumps by one.

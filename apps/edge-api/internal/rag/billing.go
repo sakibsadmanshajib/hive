@@ -16,9 +16,9 @@ package rag
 // and how a completed generation turns into a charge.
 //
 // Nothing here invents pricing. The charge goes through the same two helpers
-// the API-key path and session chat use, so all three carry one margin, one
-// credit unit, one rounding rule and one never-free floor rather than three
-// arithmetics that could disagree.
+// the API-key path and session chat use, so all three carry one credit unit,
+// one rounding rule and one never-free floor rather than three arithmetics
+// that could disagree.
 
 import (
 	"encoding/json"
@@ -134,7 +134,8 @@ type settlement struct {
 //
 //   - upstream_actual (hive-auto, per D-059): the catalog carries no token
 //     price, so the charge is the cost the upstream reported for this
-//     generation times the standard margin. A cost that is missing, unreadable
+//     generation, converted at the credit peg with no margin factor (D-064).
+//     A cost that is missing, unreadable
 //     or a confident zero settles at the HOLD rather than at nothing, which is
 //     the point: a delivered response is never free.
 //   - fixed price: the charge is the alias's own catalog rate applied to the

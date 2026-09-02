@@ -2317,6 +2317,26 @@
 	 * worse-looking run, while a status that stops arriving is a wrong one.
 	 */
 	const readCoworkRun = async (_chatId, messageId: string, taskId: string) => {
+		/*
+		 * The status first, the events second, and never both at once.
+		 *
+		 * This order is load bearing and is half of the fix for #1504. The
+		 * server flushes a run's remaining steps immediately before it writes
+		 * the terminal status (EventSyncer.FlushTask, called from the poller,
+		 * from chargeFailureBudget and from Service.Cancel). That is necessary
+		 * and not sufficient: what closes the race is that this function reads
+		 * the status before the events, so a reading that observes a terminal
+		 * status necessarily issues its events request afterwards, and so after
+		 * the flush that preceded that status.
+		 *
+		 * A Promise.all over these two awaits is an obvious looking
+		 * optimisation on a three second poll. It reopens the bug and every
+		 * test on the server side still passes: the events request can be
+		 * served from before the flush commits while the status request is
+		 * served from after the transition commits, the follower reads
+		 * terminal, stops, and the tail is never asked for again. Pinned by
+		 * cowork-step-chain.test.ts.
+		 */
 		const task = await getTask(localStorage.token, taskId);
 
 		let steps = coworkSteps(messageId);

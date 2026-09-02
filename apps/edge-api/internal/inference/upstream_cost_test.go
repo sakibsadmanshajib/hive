@@ -137,47 +137,46 @@ func TestCreditsForUpstreamCostMagnitude(t *testing.T) {
 	}{
 		{
 			// The figure measured from a real OpenRouter usage block.
-			// Exact product: 0.0123456 x 1.4 x 1e9 = 17,283,840 with no
-			// remainder, so no rounding applies. Same real money as the
-			// pre-rescale unit's 1728 old credits.
+			// Exact product: 0.0123456 x 1e9 = 12,345,600 with no remainder,
+			// so no rounding applies. No margin factor: D-064 retired it on
+			// 2026-09-02 and margin now sits on the purchase price.
 			name: "measured cost, exact product",
 			cost: "0.0123456",
-			want: 17_283_840,
+			want: 12_345_600,
 		},
 		{
-			// 1.00 x 1.4 x 1e9 = 1,400,000,000 exactly. If the margin were
-			// dropped this reads 1e9; if it were applied twice, 1.96e9.
-			name: "one dollar is exactly the margin times the credit rate",
+			// 1.00 x 1e9 = 1,000,000,000 exactly: a dollar of provider cost is
+			// a dollar of credit. If the retired 1.4 margin came back this
+			// reads 1,400,000,000, which is the single figure to look at when
+			// this test goes red.
+			name: "one dollar of cost is one dollar of credit",
 			cost: "1.00",
-			want: 1_400_000_000,
+			want: 1_000_000_000,
 		},
 		{
-			// 0.0000000025 x 1.4e9 = 3.5 exactly: the half-up boundary.
-			// Round half DOWN gives 3, truncation gives 3, only half-up
-			// gives 4. (Pre-rescale this boundary sat at 0.000025.)
+			// 0.0000000035 x 1e9 = 3.5 exactly: the half-up boundary. Round
+			// half DOWN gives 3, truncation gives 3, only half-up gives 4.
 			name: "exact half rounds up",
-			cost: "0.0000000025",
+			cost: "0.0000000035",
 			want: 4,
 		},
 		{
-			// 0.123456789 x 1.4e9 = 172,839,504.6 -> 172,839,505
+			// 0.1234567896 x 1e9 = 123,456,789.6 -> 123,456,790
 			name: "long decimal rounds up",
-			cost: "0.123456789",
-			want: 172_839_505,
+			cost: "0.1234567896",
+			want: 123_456_790,
 		},
 		{
-			// Exact product this time: 0.0000001 x 1.4e9 = 140 credits with
-			// no rounding involved (the pre-rescale unit floored its 0.014-credit
-			// product to 1; that comparison is era trivia, not arithmetic).
+			// Exact product this time: 0.0000001 x 1e9 = 100 credits with no
+			// rounding involved.
 			name: "a tiny but real cost floors at one credit, never zero",
 			cost: "0.0000001",
-			want: 140,
+			want: 100,
 		},
 		{
-			// 1e-12 USD x 1.4e9 = 0.0014 floors to 1: at the finer new unit
-			// the floor still catches costs far below one credit. This case
-			// is a FLOORING case, not a scaled one: the product is far below
-			// one credit in both units.
+			// 1e-12 USD x 1e9 = 0.001 floors to 1: even at the finer credit
+			// unit the floor still catches costs far below one credit, so a
+			// request that cost real money is never settled free.
 			name: "a sub-floor cost still charges one credit",
 			cost: "0.000000000001",
 			want: 1,
@@ -307,11 +306,11 @@ func TestUpstreamActualSettlementChargesTheReportedCost(t *testing.T) {
 	if !delivered || !confirmed {
 		t.Fatalf("expected a confirmed delivered settlement, got delivered=%v confirmed=%v", delivered, confirmed)
 	}
-	// 0.0123456 x 1.4 x 100000 = 1728.384 -> 1728. Compared against the KNOWN
+	// 0.0123456 x 1e9 = 12,345,600 exactly. Compared against the KNOWN
 	// upstream cost, not against the hold and not against zero. If settlement
 	// ever fell back to the hold on a readable cost this reads 200000.
-	if credits != 17_283_840 {
-		t.Fatalf("expected 17283840 credits for a reported cost of 0.0123456, got %d", credits)
+	if credits != 12_345_600 {
+		t.Fatalf("expected 12345600 credits for a reported cost of 0.0123456, got %d", credits)
 	}
 	if reason != "upstream_cost" {
 		t.Fatalf("expected reason upstream_cost, got %q", reason)

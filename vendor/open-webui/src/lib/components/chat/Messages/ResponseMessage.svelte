@@ -85,6 +85,14 @@
 			query?: string;
 		};
 		done: boolean;
+		/*
+		 * Present only on a Cowork run's assistant turn, stamped by
+		 * submitCoworkRun in Chat.svelte. Read here for one reason: a run's
+		 * step chain is the whole of what it shows while it works, so it opens
+		 * rather than sitting collapsed behind the newest line (issues #1622,
+		 * #1504, D-045).
+		 */
+		hive_agent_task_id?: string;
 		error?: boolean | { content: string };
 		sources?: string[];
 		code_executions?: {
@@ -668,7 +676,18 @@
 				<div class="chat-{message.role} w-full min-w-full markdown-prose">
 					<div>
 						{#if model?.info?.meta?.capabilities?.status_updates ?? true}
-							<StatusHistory statusHistory={message?.statusHistory} />
+							<!--
+								Expanded for a run, collapsed for a chat turn. A chat turn's
+								statuses are scaffolding around an answer, and the answer is
+								what the reader came for; a run's steps ARE the output until
+								it finishes, and collapsed they render as one line that
+								replaces itself, which is indistinguishable from a task that
+								has done one thing very slowly.
+							-->
+							<StatusHistory
+								statusHistory={message?.statusHistory}
+								expand={!!message?.hive_agent_task_id}
+							/>
 						{/if}
 
 						{#if message?.files && message.files?.filter( (f) => ['image', 'file'].includes(f.type) ).length > 0}

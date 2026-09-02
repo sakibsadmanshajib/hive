@@ -106,6 +106,15 @@ const launchTimeout = 5 * time.Minute
 // launcher frees the slot even if this call's context dies first.
 const engineCancelTimeout = 10 * time.Second
 
+// cancelFlushTimeout bounds the event flush a cancel does before it commits.
+// Deliberately short and well inside the 15 second budget edge-api's
+// control-plane client allows: the cancellation itself is the answer the
+// caller is waiting for, so a sandbox too wedged to say what it did in this
+// long must not be able to make a cancel look like a failure. Missing the last
+// steps of a run somebody stopped is the degraded outcome; not cancelling it
+// is the wrong one.
+const cancelFlushTimeout = 3 * time.Second
+
 // CreateTask persists a new task and hands it to the agent-engine on a
 // background goroutine, returning the persisted StatusQueued task as soon as
 // the row exists (issue #881).
@@ -572,6 +581,34 @@ func (s *Service) Files(ctx context.Context, tenantID, userID, id uuid.UUID) ([]
 // sixteen minutes, and two cancels exhausted the user's ceiling and refused
 // every subsequent create.
 func (s *Service) Cancel(ctx context.Context, tenantID, userID, id uuid.UUID) (Task, error) {
+	// Before the transition, for the reason the poller flushes before its own
+	// (issues #1622, #1504): the chat transcript stops following a run the
+	// instant it reads a terminal status, and `cancelled` is one, so a step
+	// recorded after this line is recorded for nobody. A cancelled run's steps
+	// are the record of how far it got, which is the one thing a person who
+	// stopped it wants to see.
+	//
+	// One narrowing this does not close, and cannot: the engine stop runs
+	// after the transition, in the background, so steps the sandbox produces
+	// between this flush and the actual kill are invisible to the live
+	// follower. They are not lost from the record, because finishVanished
+	// picks them up and a reopened conversation shows them, but the person who
+	// just clicked stop will not see them. That is intrinsic to cancelling,
+	// and it is the one way this guarantee is weaker than the poller's.
+	//
+	// The read is what makes this cheap in the ordinary case: a queued task
+	// has no session, so the flush returns immediately and cancelling one
+	// costs a single indexed read. A failed read never blocks the
+	// cancellation, and the Transition below is still the only guard on
+	// double-cancelling: this is not a pre-check.
+	if s.src != nil {
+		if existing, gerr := s.repo.Get(ctx, tenantID, userID, id); gerr == nil {
+			flushCtx, done := context.WithTimeout(ctx, cancelFlushTimeout)
+			flushTaskEvents(flushCtx, s.repo, s.src, slog.Default(), existing)
+			done()
+		}
+	}
+
 	cancelled, err := s.repo.Transition(ctx, tenantID, userID, id, StatusCancelled, "", "", "")
 	if err != nil {
 		return Task{}, err

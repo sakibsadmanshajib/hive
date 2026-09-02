@@ -1,0 +1,314 @@
+name: provider-balance-watch
+
+# Answers one question nothing in this repository asked before issue #1411:
+# "how much money is left in the account every paid route bills against, and
+# how long does that last at the rate it is being spent?"
+#
+# ── Why this exists ──────────────────────────────────────────────────────
+#
+# On 2026-08-29 the OpenRouter account held 1.59 USD of 10 purchased. Four
+# days later it held 1.46 and was still draining. Every paid route in
+# deploy/litellm/config.yaml bills against that one balance, and that file
+# declares no chat fallback on purpose, so at zero those routes refuse rather
+# than degrade. Nothing read the number on any schedule: the free-pool health
+# report probes only free endpoints, which the balance does not affect, and
+# ci.yml's out-of-credit classifier only runs after a job has already failed.
+# The first available signal was a paid request failing in front of an
+# audience.
+#
+# ── Cadence ──────────────────────────────────────────────────────────────
+#
+# Every six hours. This repository is public, so hosted-runner minutes cost
+# nothing, and the check is two GETs against an endpoint that bills no
+# inference. Six hours is chosen against the quantity being measured rather
+# than for its own sake: the threshold is denominated in days of runway, so a
+# sampling interval a quarter of a day long can never let the account cross
+# from "over the threshold" to "empty" between two samples unless the burn
+# rate rises by more than an order of magnitude inside one interval, and the
+# account-wide delta the check stores would catch even that on the next run.
+#
+# ── How a human actually notices ─────────────────────────────────────────
+#
+# This is the part that matters, and the reason this file is longer than the
+# check it runs. A red square in the Actions tab is not a notification:
+# nobody is subscribed to a workflow they did not trigger, and this
+# repository already has a documented case of a monitoring job sitting
+# quietly red for days (deploy-demo-box.yml's own tracking-issue reporter,
+# issue #1416). So the alarm's primary channel is a deduplicated GitHub
+# issue, labelled priority:critical / money-path / demo-surface so it lands
+# in the same filters the demo hotfix work is already read through, and
+# GitHub emails it to everyone watching the repository. The failing run is
+# the secondary channel, which GitHub separately emails to whoever last
+# touched this file's schedule.
+#
+# The issue is filed when none is open and CLOSED on the first healthy run
+# after it. Both halves are load-bearing. Without the close, a stale open
+# issue would suppress every later alert while detection kept working, which
+# is the quietest possible way to break a monitor and is exactly the defect
+# issue #1416 records: a tracking issue sat open through twenty-one green
+# runs still claiming a failure. Without the dedupe, this would file four
+# issues a day about one unchanged fact, which is how a monitor gets muted.
+#
+# ── Where the burn rate comes from ───────────────────────────────────────
+#
+# Two sources, larger wins. See the header of check-provider-balance.mjs for
+# why. One of them is a stored sample of the account's cumulative usage,
+# which is what the cache steps below carry between runs. The cache is best
+# effort: an eviction degrades the check to the provider's own weekly usage
+# figure, which is still a runway number, rather than taking the alarm
+# offline.
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      min_runway_days:
+        description: >-
+          Override the runway threshold in days, for proving the alarm fires
+          on demand without waiting for the balance to actually fall. Leave
+          blank for the real threshold.
+        type: string
+        default: ''
+  # Label-gated, the same shape and for the same reason as
+  # deploy-drift-watchdog.yml's own proof hooks: workflow_dispatch is unusable
+  # until this file exists on the default branch, so the pull request that adds
+  # it needs its own way to prove the alarm fires red and then goes quiet,
+  # before merge.
+  pull_request:
+    types: [labeled, synchronize]
+
+# One balance, one reading at a time. Overlapping runs would race on the
+# cache entry and could file two issues about the same shortfall.
+concurrency:
+  group: provider-balance-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  balance:
+    name: Check the OpenRouter balance and runway
+    if: >-
+      ${{
+        github.event_name == 'schedule'
+        || github.event_name == 'workflow_dispatch'
+        || (github.event_name == 'pull_request'
+            && github.event.pull_request.head.repo.full_name == github.repository
+            && contains(github.event.pull_request.labels.*.name, 'run-provider-balance-watch'))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATE_FILE: provider-balance-state.json
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      # Rolling key: actions/cache/save refuses to overwrite an existing key,
+      # so each run writes its own and the prefix restore-key picks up the
+      # most recently created match. A cache miss is a supported state, not a
+      # failure: the check falls back to the provider's weekly usage figure
+      # and says so in its output.
+      - name: Restore the previous usage sample
+        uses: actions/cache/restore@v4
+        with:
+          path: provider-balance-state.json
+          key: provider-balance-state-${{ github.run_id }}
+          restore-keys: |
+            provider-balance-state-
+
+      - name: Read the balance and compute runway
+        id: check
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PROVIDER_BALANCE_STATE_FILE: provider-balance-state.json
+          # Empty on a schedule run, so the script's own default applies.
+          PROVIDER_BALANCE_MIN_RUNWAY_DAYS: ${{ inputs.min_runway_days }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        # No pipe around the checker: its exit status is the entire result, and
+        # the default shell here is `bash -e` without pipefail, so putting it on
+        # the left of a `| tee` would take tee's status instead and print a
+        # success line over a real failure.
+        run: |
+          set -uo pipefail
+          # An unset input arrives as the empty string, which the script would
+          # reject as a malformed threshold rather than defaulting.
+          if [ -z "${PROVIDER_BALANCE_MIN_RUNWAY_DAYS:-}" ]; then
+            unset PROVIDER_BALANCE_MIN_RUNWAY_DAYS
+          fi
+          # Label-gated proof hooks, one per half of the alarm. Both halves need
+          # proving before merge, and the balance cannot be made to move on
+          # demand, so the thresholds move instead. Squeezing a threshold rather
+          # than faking a balance keeps the run honest: each of these reads the
+          # real account and measures the real number, only against a bar it
+          # certainly does or certainly does not clear.
+          #
+          # The shortfall case is checked first, so a pull request carrying both
+          # labels gets the louder of the two rather than a silent pass.
+          case "${PR_LABELS:-}" in
+            *'"provider-balance-test:simulate-low"'*)
+              export PROVIDER_BALANCE_MIN_RUNWAY_DAYS=100000
+              echo "simulating a shortfall: runway threshold raised to 100000 days" ;;
+            *'"provider-balance-test:simulate-healthy"'*)
+              export PROVIDER_BALANCE_MIN_RUNWAY_DAYS=0.001
+              export PROVIDER_BALANCE_MIN_USD=0
+              echo "simulating recovery: thresholds lowered under the real balance, to prove the tracking issue gets closed" ;;
+          esac
+          if node .github/ci/check-provider-balance.mjs > balance-check.txt 2>&1; then
+            low=false
+          else
+            low=true
+          fi
+          cat balance-check.txt
+          # The number belongs on the run's summary page whether it is healthy
+          # or not, so the balance is readable at a glance without opening a log.
+          {
+            echo '### OpenRouter balance'
+            echo ''
+            echo '```'
+            cat balance-check.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "low=$low" >> "$GITHUB_OUTPUT"
+
+      # Saved even when the check went red, and even on a pull_request run: the
+      # sample is a measurement of the account, not of this run's verdict, and
+      # the next run needs it either way.
+      - name: Save the usage sample for the next run
+        if: always()
+        # Best effort, and never allowed to decide the run's colour. On a run
+        # that could not read the API at all the script exits before writing
+        # the file, and with no cache to restore there is then no path to save,
+        # which actions/cache/save reports as an error. Letting that fail the
+        # job would paint a red square whose cause has nothing to do with the
+        # balance, on top of the alarm that already fired correctly. Losing a
+        # sample only degrades the check to the provider's weekly figure.
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: provider-balance-state.json
+          key: provider-balance-state-${{ github.run_id }}
+
+      - name: File the tracking issue and fail
+        if: steps.check.outputs.low == 'true'
+        env:
+          TITLE: the OpenRouter balance is low or unreadable
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          detail=$(cat balance-check.txt 2>/dev/null || echo '(the check produced no output, see the run log)')
+          body=$(printf '%s\n' \
+            '```' \
+            "$detail" \
+            '```' \
+            "" \
+            "Run: $RUN_URL" \
+            "" \
+            "Every paid route in deploy/litellm/config.yaml bills against this one" \
+            "OpenRouter balance, and that file declares no chat fallback on purpose, so" \
+            "at zero those routes refuse outright rather than degrading to another" \
+            "model. Top up at https://openrouter.ai/settings/credits." \
+            "" \
+            "If the block above begins with FATAL rather than LOW, the balance could not be" \
+            "read at all, and no amount of topping up will clear it: check the" \
+            "OPENROUTER_API_KEY repository secret and whether the endpoint answered. That" \
+            "case is reported here too, deliberately, because a monitor that stays quiet" \
+            "when it cannot see the number is the failure this alarm exists to remove." \
+            "" \
+            "This check runs every six hours and closes this issue itself on the first" \
+            "healthy run after the top-up, so there is nothing to close by hand. It is" \
+            "issue #1411's own failure mode: the balance was readable the whole time and" \
+            "nothing read it.")
+          # Deduplicate on title AND author, not title alone. This repository is
+          # public with issues enabled, so anyone at all can open an issue with
+          # this exact title; matching the title by itself would let a stranger
+          # suppress the alert channel indefinitely while detection kept
+          # working, which is the quietest possible way to break a monitor.
+          #
+          # A failed listing does not abort the step. The default shell is
+          # `bash -e`, so an unguarded command substitution would end the run
+          # before the ::error:: and the exit 1 below ever execute, replacing
+          # the designed alert with a bare shell failure. It falls through to
+          # filing instead, because a duplicate alert is recoverable and a
+          # missing one is the thing being fixed.
+          num=""
+          if listing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+                         --search "in:title \"$TITLE\"" --json number,title,author \
+                         -q '.[] | [(.number|tostring), .author.login, .title] | @tsv' 2>&1); then
+            # `app/github-actions` is what gh reports for an issue filed by
+            # GITHUB_TOKEN. The other spellings are accepted so a gh release
+            # that changes the rendering degrades into a duplicate issue rather
+            # than into silence.
+            num=$(printf '%s\n' "$listing" \
+              | awk -F'\t' -v t="$TITLE" \
+                  '($2 == "app/github-actions" || $2 == "github-actions" || $2 == "github-actions[bot]") && $3 == t { print $1; exit }')
+          else
+            echo "::warning::could not list open issues to deduplicate ($listing), filing anyway"
+          fi
+          if [ -n "${num:-}" ]; then
+            echo "tracking issue #$num is already open, not commenting again"
+          elif gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body" \
+                 --label priority:critical --label money-path --label demo-surface; then
+            echo "opened the tracking issue"
+          elif gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body"; then
+            # Labels are the routing, not the alert. If one has been renamed or
+            # deleted, an unlabelled issue still reaches every watcher, which is
+            # strictly better than a create that fails and notifies nobody.
+            echo "::warning::opened the tracking issue without labels, at least one label no longer exists"
+          else
+            # Saying "opened the tracking issue" after a failed create would be a
+            # success line printed over a failure, which is the exact shape this
+            # change exists to remove. The job still exits 1 below, so the run is
+            # red either way; this only stops the log from claiming a
+            # notification that was never delivered.
+            echo "::warning::gh issue create FAILED, so no tracking issue was filed for this balance"
+          fi
+          echo "::error::the OpenRouter balance is low, see the tracking issue"
+          exit 1
+
+      - name: Close the tracking issue on recovery
+        if: steps.check.outputs.low == 'false'
+        env:
+          TITLE: the OpenRouter balance is low or unreadable
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Without this, one shortfall would leave an issue open forever, and the
+        # dedupe above would then swallow every later alert as "already open"
+        # while the check kept running green. That is issue #1416's defect, and
+        # it is worse than not alerting at all, because the open issue reads as
+        # a live problem long after it stopped being one.
+        run: |
+          set -uo pipefail
+          num=""
+          if listing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+                         --search "in:title \"$TITLE\"" --json number,title,author \
+                         -q '.[] | [(.number|tostring), .author.login, .title] | @tsv' 2>&1); then
+            num=$(printf '%s\n' "$listing" \
+              | awk -F'\t' -v t="$TITLE" \
+                  '($2 == "app/github-actions" || $2 == "github-actions" || $2 == "github-actions[bot]") && $3 == t { print $1; exit }')
+          else
+            echo "::warning::could not list open issues to close ($listing)"
+          fi
+          if [ -z "${num:-}" ]; then
+            echo "no open balance issue to close"
+            exit 0
+          fi
+          detail=$(cat balance-check.txt 2>/dev/null || echo '(no output)')
+          gh issue close "$num" --repo "$GITHUB_REPOSITORY" \
+            --comment "$(printf '%s\n' \
+              'Recovered. The balance is back above the thresholds:' \
+              '' \
+              '```' \
+              "$detail" \
+              '```' \
+              '' \
+              "Run: $RUN_URL")" \
+            || echo "::warning::could not close tracking issue #$num"

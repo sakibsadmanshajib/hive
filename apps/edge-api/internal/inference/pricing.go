@@ -304,8 +304,8 @@ func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, freshInputTok
 // filters out endpoints above a per-million ceiling; it does not bound how many
 // tokens one request may contain. openrouter/auto-beta advertises a 2,000,000
 // token context, so at the configured ceiling a single request near that
-// context could cost roughly 6.00 USD of prompt alone, which is 840,000 credits
-// after margin, against a 200,000 credit hold. Settlement charges the reported
+// context could cost roughly 6.00 USD of prompt alone, which is 6,000,000,000
+// credits at the peg, against the catalog's 2,000,000,000 credit envelope. Settlement charges the reported
 // cost rather than the hold, so without a bound on the REQUEST one call could
 // settle several times past the solvency gate the hold is supposed to be.
 //
@@ -314,9 +314,15 @@ func ChatSettlementCredits(route SelectRouteResult, hasUsage bool, freshInputTok
 //	prompt:     262,144 bytes is a rigorous upper bound of 262,144 tokens,
 //	            because a token can never be fewer than one UTF-8 byte, and the
 //	            body also carries JSON structure that is not prompt text.
-//	            262,144 x 3.00 USD/M x 1.4 = 1.10 USD = 110,096 credits.
-//	completion: 16,384 tokens x 15.00 USD/M x 1.4 = 0.35 USD = 34,406 credits.
-//	total:      about 144,502 credits, comfortably inside the 200,000 hold.
+//	            262,144 x 3.00 USD/M = 0.786432 USD = 786,432,000 credits.
+//	completion: 16,384 tokens x 15.00 USD/M = 0.24576 USD = 245,760,000 credits.
+//	total:      1,032,192,000 credits for the largest body the cap allows.
+//
+// No margin factor appears in either product. D-064 retired it on 2026-09-02,
+// and a hold is now the worst-case provider cost at the peg. The figures above
+// are the arithmetic, not the hold a real request takes: ReservationCredits
+// sizes from the body's own length and takes the smaller of that and the
+// catalog envelope.
 //
 // Change either constant, or provider.max_price in deploy/litellm/config.yaml,
 // and reservation_estimate_credits in the migration has to be re-derived. The
@@ -595,7 +601,7 @@ func variablePriceRequestHold(endpoint string, body []byte) (int64, bool) {
 //   - delivered false means nothing was produced. The caller releases the hold
 //     in full and charges nothing. This is the ONLY path that charges zero, and
 //     it is reached only when no tokens and no content exist.
-//   - a usable reported cost settles at that cost times margin, confirmed.
+//   - a usable reported cost settles at that cost, at the peg, confirmed.
 //   - EVERY other outcome, absent cost, unparseable cost, negative cost, a
 //     confident zero alongside real tokens, settles at the FULL HOLD flagged
 //     unconfirmed. Not zero. A failed cost lookup is the one thing that must

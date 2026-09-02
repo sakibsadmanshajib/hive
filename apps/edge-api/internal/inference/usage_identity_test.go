@@ -206,9 +206,9 @@ func TestUsageIdentity_EmbeddingsTotalFollowsPromptTokens(t *testing.T) {
 	var usage *UsageResponse
 	logs := captureLogs(t, func() {
 		var err error
-		normalized, usage, err = normalizeEmbeddings(body, "hive-embedding-default")
+		normalized, usage, err = NormalizeEmbeddings(body, "hive-embedding-default")
 		if err != nil {
-			t.Fatalf("normalizeEmbeddings: %v", err)
+			t.Fatalf("NormalizeEmbeddings: %v", err)
 		}
 	})
 	if usage == nil || usage.TotalTokens != 12 {
@@ -521,9 +521,9 @@ func TestUsageIdentity_EmbeddingsWithZeroPromptTokensZeroesTheTotal(t *testing.T
 	var usage *UsageResponse
 	logs := captureLogs(t, func() {
 		var err error
-		normalized, usage, err = normalizeEmbeddings(body, "hive-embedding-default")
+		normalized, usage, err = NormalizeEmbeddings(body, "hive-embedding-default")
 		if err != nil {
-			t.Fatalf("normalizeEmbeddings: %v", err)
+			t.Fatalf("NormalizeEmbeddings: %v", err)
 		}
 	})
 	if usage == nil || usage.TotalTokens != 0 || usage.PromptTokens != 0 {

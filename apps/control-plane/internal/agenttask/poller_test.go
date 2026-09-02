@@ -2,6 +2,7 @@ package agenttask_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -690,4 +691,206 @@ func assertPanics(t *testing.T, fn func()) {
 		}
 	}()
 	fn()
+}
+
+// ---------------------------------------------------------------------------
+// Step streaming (issues #1622, #1504)
+//
+// A run's steps have to be readable at the moment its terminal status first
+// becomes visible. The follower in the chat transcript
+// (vendor/open-webui/src/lib/components/chat/Chat.svelte, followCoworkRun)
+// stops the moment it reads a terminal status, so anything written after that
+// transition is written for nobody: the run renders as a blank box for its
+// whole life and then as a bare summary. Before this was closed, the poller
+// wrote the terminal status and the event syncer pulled the tail on its own
+// unrelated schedule, so which of the two landed first was a race that a short
+// run lost every time.
+// ---------------------------------------------------------------------------
+
+// scriptedEventSource serves a fixed sandbox event list. It counts its calls
+// so a test can tell one pull from a re-read of the whole run.
+type scriptedEventSource struct {
+	mu     sync.Mutex
+	events []agenttask.SandboxEvent
+	files  []agenttask.WorkspaceFile
+	calls  int
+}
+
+func (s *scriptedEventSource) Events(context.Context, string) ([]agenttask.SandboxEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	return append([]agenttask.SandboxEvent(nil), s.events...), nil
+}
+
+func (s *scriptedEventSource) Files(context.Context, string) ([]agenttask.WorkspaceFile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]agenttask.WorkspaceFile(nil), s.files...), nil
+}
+
+// multiStepRun is one real shape of a Cowork task: read a file, write a file,
+// answer. Five sandbox events, each of which has to reach the transcript as
+// its own line, which is why the assertions below are on the sequence of
+// kinds and on the previews rather than on a count.
+func multiStepRun() []agenttask.SandboxEvent {
+	return []agenttask.SandboxEvent{
+		{ID: "e1", Kind: "ActionEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "list the workspace"},
+		{ID: "e2", Kind: "ObservationEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "AGENTS.md"},
+		{ID: "e3", Kind: "ActionEvent", ToolName: "str_replace_editor", ToolCallID: "c2", TextPreview: "write sixcap.txt"},
+		{ID: "e4", Kind: "ObservationEvent", ToolName: "str_replace_editor", ToolCallID: "c2", TextPreview: "wrote 13 bytes"},
+		{ID: "e5", Kind: "MessageEvent", Source: "agent", TextPreview: "sixcap.txt now holds HIVE-COWORK-OK"},
+	}
+}
+
+func TestPoller_StoresEveryStepBeforeItPublishesATerminalStatus(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-1")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-1": {status: agenttask.StatusSucceeded, resultSummary: "sixcap.txt now holds HIVE-COWORK-OK"},
+	}}
+	src := &scriptedEventSource{
+		events: multiStepRun(),
+		files:  []agenttask.WorkspaceFile{{Name: "sixcap.txt", Size: 13}},
+	}
+	syncer := agenttask.NewEventSyncer(repo, src, agenttask.PollerConfig{Logger: quietPollerLogger()})
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{
+		Logger:      quietPollerLogger(),
+		FlushEvents: syncer.FlushTask,
+	})
+
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	// The snapshot the fake took at the instant the terminal status was
+	// written. Reading the repository afterwards would prove nothing: the
+	// events land eventually either way, and "eventually" is the defect.
+	stored := repo.eventsAtTransition(task.ID)
+	if len(stored) == 0 {
+		t.Fatal("the terminal status was published with no step stored: the transcript stops following at that moment, so every step of this run is invisible")
+	}
+
+	var kinds []agenttask.TaskEventKind
+	previews := map[string]bool{}
+	for _, ev := range stored {
+		kinds = append(kinds, ev.Kind)
+		var payload map[string]any
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("event payload %s: %v", ev.Payload, err)
+		}
+		if text, ok := payload["preview"].(string); ok && text != "" {
+			previews[text] = true
+		}
+	}
+
+	// One distinguishable row per step, in the order the sandbox produced
+	// them, plus the workspace file the run wrote. Asserting only that some
+	// event exists would pass on a feed of five identical status rows, which
+	// is exactly what the transcript cannot render.
+	want := []agenttask.TaskEventKind{
+		agenttask.EventToolCall, agenttask.EventToolResult,
+		agenttask.EventToolCall, agenttask.EventToolResult,
+		agenttask.EventMessage, agenttask.EventFile,
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("stored kinds %v, want %v", kinds, want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("stored kinds %v, want %v", kinds, want)
+		}
+	}
+	if len(previews) != 5 {
+		t.Fatalf("five steps produced %d distinguishable previews: %v", len(previews), previews)
+	}
+}
+
+func TestPoller_TerminalFlushIsOptional(t *testing.T) {
+	// Every deployment without an event source wired (no agent engine at all)
+	// still has to advance its tasks, so the hook stays optional.
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-1")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-1": {status: agenttask.StatusSucceeded},
+	}}
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Logger: quietPollerLogger()})
+
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	got, err := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != agenttask.StatusSucceeded {
+		t.Fatalf("status=%q want succeeded", got.Status)
+	}
+}
+
+// The third writer of a terminal status: the poller giving up on a task whose
+// status calls keep failing (issues #1622, #1504, raised in review on
+// PR #1709). chargeFailureBudget's own reasoning is that this path leaves the
+// session very likely still live, which is why it stops it, and a live session
+// is a readable one. Dropping its steps here costs the most, because a task
+// that burned its whole failure budget is by definition one that looked stuck
+// for a long time.
+func TestPoller_StoresTheRunsStepsBeforeItGivesUpOnATask(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-1")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-1": {err: errors.New("launcher answered, session is wedged")},
+	}}
+	src := &scriptedEventSource{events: multiStepRun()}
+	syncer := agenttask.NewEventSyncer(repo, src, agenttask.PollerConfig{Logger: quietPollerLogger()})
+	// A five minute budget over a five minute interval is one pass, so this
+	// gives up immediately instead of looping the budget out.
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{
+		Interval:    5 * time.Minute,
+		Logger:      quietPollerLogger(),
+		FlushEvents: syncer.FlushTask,
+	})
+
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	got, err := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != agenttask.StatusFailed {
+		t.Fatalf("status=%q want failed", got.Status)
+	}
+	if stored := repo.eventsAtTransition(task.ID); len(stored) < len(multiStepRun()) {
+		t.Fatalf("gave up on the task with %d steps stored, want the run's %d: the transcript stops at that status, so this is the run a person is most likely staring at when it goes blank",
+			len(stored), len(multiStepRun()))
+	}
+}
+
+// ErrEngineSessionGone stays the one terminal path with no flush: the engine
+// has said it has no memory of the session, so there is nothing to read.
+func TestPoller_DoesNotFlushASessionTheEngineHasForgotten(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-1")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-1": {err: agenttask.ErrEngineSessionGone},
+	}}
+	src := &scriptedEventSource{events: multiStepRun()}
+	syncer := agenttask.NewEventSyncer(repo, src, agenttask.PollerConfig{Logger: quietPollerLogger()})
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{
+		Logger:      quietPollerLogger(),
+		FlushEvents: syncer.FlushTask,
+	})
+
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	got, _ := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+	if got.Status != agenttask.StatusFailed {
+		t.Fatalf("status=%q want failed", got.Status)
+	}
+	if src.calls != 0 {
+		t.Fatalf("read a session the engine says it has never heard of (%d calls)", src.calls)
+	}
 }

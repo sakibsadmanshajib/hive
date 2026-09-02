@@ -148,16 +148,19 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 	// 4. Tax treatment.
 	taxResult := CalculateTax(billingProfile)
 
-	// 5. Compute amounts.
-	// amountUSD is in USD cents: credits / (CreditIncrement), where one
-	// CreditIncrement is exactly one cent (CreditsPerUSD / 100).
-	amountUSD := credits / (CreditsPerUSD / 100)
-
-	var amountLocal int64
+	// 5 and 6. Compute amounts, in the fixed order purchase_price.go documents:
+	// credits, then USD at the peg, then the 6 percent markup, then FX for a
+	// local-currency payer, then one truncation per currency. The FX snapshot
+	// has to exist before the price does on a BD rail, so the two steps are one
+	// block rather than two.
+	//
+	// A USD purchase reaches PriceForCredits with an empty rate and therefore
+	// takes no FX markup at all, which is the property issue #1693 asks to be
+	// tested specifically.
+	var effectiveRate string
 	var localCurrency string
 	var fxSnapshotID *uuid.UUID
 
-	// 6. BD rails: create FX snapshot and compute BDT paisa amount.
 	if isBDRail(rail) {
 		snap, err := s.fx.CreateSnapshot(ctx, s.repo, accountID)
 		if err != nil {
@@ -166,12 +169,15 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 		snapID := snap.ID
 		fxSnapshotID = &snapID
 		localCurrency = "BDT"
-
-		amountLocal, err = usdCentsToLocalPaisa(amountUSD, snap.EffectiveRate)
-		if err != nil {
-			return nil, fmt.Errorf("payments: %w", err)
-		}
+		effectiveRate = snap.EffectiveRate
 	}
+
+	price, err := PriceForCredits(credits, effectiveRate)
+	if err != nil {
+		return nil, err
+	}
+	amountUSD := price.USDCents
+	amountLocal := price.LocalMinor
 
 	taxAmountLocal := ApplyTax(amountLocal, taxResult)
 
@@ -194,7 +200,20 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 		// Credit-unit stamp (see ledger.CreditUnitV2): lets the post-deploy
 		// straggler detector tell a pre-rescale intent that missed the
 		// migration from a native new-unit one.
-		Metadata:       map[string]any{"credit_unit": "v2-1usd-1e9"},
+		//
+		// purchase_markup_rate is the second stamp and it is here for the same
+		// class of reason. The markup is a constant today, so a reader could
+		// recompute this row from the constant in force when they read it,
+		// which is exactly the assumption that made issue #1682 possible: the
+		// rate on the row is the rate that was applied to the row. The FX half
+		// of the chain is already recorded, on the fx_snapshots row
+		// fx_snapshot_id points at, so amount_local reproduces from
+		// credits, purchase_markup_rate and that snapshot's effective_rate with
+		// no constant from the current build involved.
+		Metadata: map[string]any{
+			"credit_unit":          "v2-1usd-1e9",
+			"purchase_markup_rate": price.MarkupRate,
+		},
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -640,13 +659,13 @@ func MostRestrictiveMaxCredits(options []RailOption) int64 {
 // GetCheckoutOptions returns available payment rails, predefined tiers, and
 // the per-country resolved pricing primitive for the account.
 //
-// Branching:
-//   - BD accounts → resolve via FX snapshot to BDT paisa using `math/big`.
-//     `PricePerBlockMinor = effectiveRate * 100` paisa per
-//     `CreditBlockSize` (= `CreditsPerUSD`) credits.
-//   - non-BD accounts → 100 cents per `CreditBlockSize` (= `CreditsPerUSD`)
-//     credits (1 USD = 100 cents, computed via `math/big` for parity with
-//     the BD path — no `float64` arithmetic on the resolved value).
+// Branching, in both cases through PriceForCredits so the quote carries the
+// same 6 percent markup the charge does:
+//   - BD accounts → resolve via FX snapshot to BDT paisa. PricePerBlockMinor is
+//     the marked-up USD price of one block converted at the effective rate,
+//     which already has the FX markup folded into it.
+//   - non-BD accounts → 106 cents per `CreditBlockSize` (= `CreditsPerUSD`)
+//     credits: 1 USD at the peg plus the markup, and no FX markup at all.
 //
 // FX rate is computed server-side only and never returned. If FX is
 // unavailable for a BD account, the FX provider error surfaces.
@@ -691,25 +710,26 @@ func (s *Service) GetCheckoutOptions(ctx context.Context, accountID uuid.UUID) (
 // All arithmetic uses `math/big` to avoid float64 corruption (per
 // `CLAUDE.md` math/big mandate for financial calcs).
 func (s *Service) resolvePricePerUSDBlock(ctx context.Context, countryCode string, accountID uuid.UUID) (int64, string, error) {
+	// One block is CreditsPerUSD credits, and it is priced through the SAME
+	// function InitiateCheckout prices a real purchase with. The quoted price
+	// and the charged price cannot disagree about the markup, because there is
+	// only one place either of them can get it from.
 	if countryCode == "BD" {
-		// 1 USD = 100 cents. BD: convert via FX snapshot to BDT paisa.
-		// paisa_per_block = effectiveRate * 100.
 		snap, err := s.fx.CreateSnapshot(ctx, s.repo, accountID)
 		if err != nil {
 			return 0, "", fmt.Errorf("payments: create FX snapshot: %w", err)
 		}
-		effectiveRat := new(big.Rat)
-		if _, ok := effectiveRat.SetString(snap.EffectiveRate); !ok {
-			return 0, "", fmt.Errorf("payments: invalid effective rate %q", snap.EffectiveRate)
+		price, err := PriceForCredits(CreditsPerUSD, snap.EffectiveRate)
+		if err != nil {
+			return 0, "", err
 		}
-		paisaRat := new(big.Rat).Mul(effectiveRat, new(big.Rat).SetInt64(100))
-		// Integer truncation via math/big (no float64): floor(num/den).
-		paisa := new(big.Int).Quo(paisaRat.Num(), paisaRat.Denom())
-		return paisa.Int64(), "BDT", nil
+		return price.LocalMinor, "BDT", nil
 	}
-	// Non-BD: 1 USD-equivalent block = 100 cents. math/big for parity.
-	cents := new(big.Int).SetInt64(100)
-	return cents.Int64(), "USD", nil
+	price, err := PriceForCredits(CreditsPerUSD, "")
+	if err != nil {
+		return 0, "", err
+	}
+	return price.USDCents, "USD", nil
 }
 
 // maxCreditsForRail returns the maximum purchasable credits for a given rail.
@@ -755,16 +775,36 @@ func localCurrencyFor(r Rail) string {
 //
 //	= amountUSDcents * rate
 //
+// The amount is a *big.Rat rather than an int64 because the purchase price it
+// converts is fractional before it is rounded: the markup lands on an exact
+// cent figure and the conversion has to happen on THAT, not on a figure already
+// truncated to whole cents, or the local price would carry two roundings
+// (purchase_price.go, step 4). A whole-cent caller passes an integral rational
+// and gets the same answer it always did.
+//
 // The result is truncated to an integer via big.Int division on the
 // numerator/denominator (truncates toward zero — correct for the
 // non-negative amounts handled here). No float64 ever appears: routing
 // the value through Float64() would reintroduce the binary-fraction error
 // that the math/big FX invariant (CLAUDE.md) exists to prevent.
-func usdCentsToLocalPaisa(amountUSDCents int64, effectiveRate string) (int64, error) {
+func usdCentsToLocalPaisa(amountUSDCents *big.Rat, effectiveRate string) (int64, error) {
 	rateRat, ok := new(big.Rat).SetString(effectiveRate)
 	if !ok {
 		return 0, fmt.Errorf("invalid effective rate %q", effectiveRate)
 	}
-	localRat := new(big.Rat).Mul(new(big.Rat).SetInt64(amountUSDCents), rateRat)
-	return new(big.Int).Quo(localRat.Num(), localRat.Denom()).Int64(), nil
+	// A zero or negative rate is refused rather than used. It cannot arise from
+	// the XE response today, but it can arise from the operator override that
+	// stands in for it, and the two failures it would produce are the two this
+	// money path must never have: a purchase priced at nothing, and a purchase
+	// priced at a negative amount. Neither would look like a failure downstream,
+	// which is why it is caught here rather than left to be noticed.
+	if rateRat.Sign() <= 0 {
+		return 0, fmt.Errorf("effective rate %q is zero or negative; that is not a rate", effectiveRate)
+	}
+	localRat := new(big.Rat).Mul(amountUSDCents, rateRat)
+	paisa, err := truncateToMinorUnit(localRat)
+	if err != nil {
+		return 0, fmt.Errorf("local price: %w", err)
+	}
+	return paisa, nil
 }
