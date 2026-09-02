@@ -413,6 +413,27 @@ func TestServe_MissingRequiredEnvVar(t *testing.T) {
 	})
 }
 
+// A launcher whose packs directory is wrong can serve no task at all since
+// issue #1360 made a launch fail closed on it, so it refuses to boot rather
+// than reporting healthy and failing every task with a warn line nobody reads.
+func TestServe_RefusesToStartWhenThePacksDirIsNotReadable(t *testing.T) {
+	dir := t.TempDir()
+	for _, v := range requiredServeEnvVars {
+		t.Setenv(v, "dummy-value")
+	}
+	t.Setenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT", filepath.Join(dir, "workspace"))
+	t.Setenv("HIVE_AGENT_ENGINE_RUN_DIR", filepath.Join(dir, "run"))
+	t.Setenv("HIVE_AGENT_ENGINE_PACKS_DIR", filepath.Join(dir, "packs-that-are-not-there"))
+
+	err := serve(filepath.Join(dir, "s.sock"), "http://127.0.0.1:1", "tok")
+	if err == nil {
+		t.Fatal("expected serve() to refuse to start with an unreadable packs directory")
+	}
+	if !strings.Contains(err.Error(), "HIVE_AGENT_ENGINE_PACKS_DIR") {
+		t.Fatalf("expected the error to name the variable, got: %v", err)
+	}
+}
+
 // --- full end-to-end test over a real Unix socket --------------------------
 
 // unixHTTPClient dials socketPath for every request, mirroring
@@ -497,6 +518,11 @@ func TestServeSocket_WireContract(t *testing.T) {
 
 	dir := t.TempDir()
 	t.Setenv("HIVE_AGENT_ENGINE_SIF_PATH", "/nonexistent.sif")
+	// Created, not merely named: serve() refuses to start without a readable
+	// packs directory, since a launch fails closed on a missing pack.
+	if err := os.MkdirAll(filepath.Join(dir, "packs"), 0o700); err != nil {
+		t.Fatalf("mkdir packs: %v", err)
+	}
 	t.Setenv("HIVE_AGENT_ENGINE_PACKS_DIR", filepath.Join(dir, "packs"))
 	t.Setenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT", filepath.Join(dir, "workspace"))
 	t.Setenv("HIVE_AGENT_ENGINE_RUN_DIR", filepath.Join(dir, "run"))
@@ -653,6 +679,11 @@ func TestServeSocket_NoConfiguredToken_RefusesEverythingFailClosed(t *testing.T)
 
 	dir := t.TempDir()
 	t.Setenv("HIVE_AGENT_ENGINE_SIF_PATH", "/nonexistent.sif")
+	// Created, not merely named: serve() refuses to start without a readable
+	// packs directory, since a launch fails closed on a missing pack.
+	if err := os.MkdirAll(filepath.Join(dir, "packs"), 0o700); err != nil {
+		t.Fatalf("mkdir packs: %v", err)
+	}
 	t.Setenv("HIVE_AGENT_ENGINE_PACKS_DIR", filepath.Join(dir, "packs"))
 	t.Setenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT", filepath.Join(dir, "workspace"))
 	t.Setenv("HIVE_AGENT_ENGINE_RUN_DIR", filepath.Join(dir, "run"))

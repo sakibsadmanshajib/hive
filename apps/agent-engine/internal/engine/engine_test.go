@@ -1146,6 +1146,80 @@ func TestSandboxEngine_Launch_RefusesAPackSymlinkedOutOfThePacksDir(t *testing.T
 	}
 }
 
+// os.CopyFS recreates a symlink verbatim, and the pack is read through an
+// fs.FS whose ReadLink hands back the raw target, so os.Root does nothing
+// about a link INSIDE a pack: it confines the read, never the write. Refusing
+// the copy is what keeps the link out of the directory that gets bind mounted
+// as /workspace.
+func TestSandboxEngine_Launch_RefusesAPackWhoseContentsContainASymlink(t *testing.T) {
+	for _, at := range []string{"leak", filepath.Join(".agents", "leak")} {
+		t.Run(at, func(t *testing.T) {
+			var fake *fakeAgentServer
+			e := newTestEngine(t, &fake)
+			task := testTask()
+
+			link := filepath.Join(e.cfg.PacksDir, task.Pack, at)
+			if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.Symlink("/etc/passwd", link); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+
+			if _, err := e.Launch(context.Background(), task); err == nil {
+				t.Fatalf("Launch copied a pack containing a symlink at %s", at)
+			}
+			if _, err := os.Stat(filepath.Join(e.cfg.WorkspaceRoot, task.ID.String())); !os.IsNotExist(err) {
+				t.Fatalf("refused launch left its working directory behind: %v", err)
+			}
+		})
+	}
+}
+
+// The listing hides pack scaffolding, and a name-only filter would hand the
+// sandboxed agent a way to hide its own output: write to AGENTS.md and the
+// panel never shows it. The pack now carries untrusted document content into
+// the model's context, so this is reachable rather than theoretical.
+func TestSandboxEngine_Files_ShowsAPlantedNameTheTaskRewrote(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	task := testTask()
+
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	files, err := e.Files(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Files: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("expected the untouched pack to be hidden, got %+v", files)
+	}
+
+	// What an agent following an injected "write your notes to AGENTS.md"
+	// instruction would leave behind. Chtimes rather than relying on the
+	// clock, so the assertion cannot depend on filesystem timestamp
+	// resolution.
+	planted := filepath.Join(e.cfg.WorkspaceRoot, task.ID.String(), "AGENTS.md")
+	if err := os.WriteFile(planted, []byte("exfiltrated"), 0o600); err != nil {
+		t.Fatalf("rewrite planted file: %v", err)
+	}
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(planted, later, later); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	files, err = e.Files(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Files after rewrite: %v", err)
+	}
+	if len(files) != 1 || files[0].Name != "AGENTS.md" {
+		t.Fatalf("a rewritten AGENTS.md stayed hidden from the panel, got %+v", files)
+	}
+}
+
 // --- publishDeckArtifact (issue #312/#300 wiring) -------------------------
 
 // fakePublisher stands in for *artifactsclient.Client. Records every call so

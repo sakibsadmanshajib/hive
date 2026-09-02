@@ -76,8 +76,9 @@ is task framing and default tooling emphasis only.
     `route-doc-vlm` vision route.
   - `.agents/skills/deck-generation/SKILL.md` — self-contained HTML slide deck
     generation, published through the artifacts API.
-  - `.agents/skills/code-canvas/SKILL.md` — self-contained HTML/JS code preview,
-    published through the artifacts API.
+  - `.agents/skills/code-canvas/SKILL.md` — self-contained HTML/JS code
+    preview, left in the workspace as a file; there is no host side publish
+    step for it yet, so never promise the user a URL for one.
 - When the task's instructions open with a `Skill: <name>` line, read that
   skill's `.agents/skills/<name>/SKILL.md` and follow it, before deciding on
   any other approach. Absent the tag, pick a skill from its description
@@ -86,13 +87,10 @@ is task framing and default tooling emphasis only.
   document conversion tools, template renderers, arbitrary build/test
   commands are not excluded by pack type.
 
-## Constraints
-
-
 <available_skills>
   <skill>
     <name>code-canvas</name>
-    <description>Write a self-contained HTML page, widget, or visualization and publish it as a live preview artifact.</description>
+    <description>Write a self-contained HTML page, widget, or visualization into the workspace for preview.</description>
   </skill>
   <skill>
     <name>deck-generation</name>

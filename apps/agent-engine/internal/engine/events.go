@@ -12,7 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
+	"time"
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
 )
@@ -65,8 +65,14 @@ func (e *SandboxEngine) finalFilesOf(sess *session) ([]controlclient.WorkspaceFi
 // folder shows what the task produced, and the pack is what it started with.
 // Shared by the live-session Files() path and reap's final-snapshot capture.
 //
+// Only an entry that still carries its planted timestamp is hidden. Filtering
+// on the name alone would let the sandboxed agent conceal a file simply by
+// calling it AGENTS.md, and the pack now carries untrusted document content
+// into the model's context, so "an instruction told it to write there" is a
+// reachable state rather than a hypothetical one.
+//
 // ponytail: no recursion; add a walk when a panel needs nested paths.
-func listWorkspaceFiles(dir string, packFiles []string) ([]controlclient.WorkspaceFile, error) {
+func listWorkspaceFiles(dir string, packFiles map[string]time.Time) ([]controlclient.WorkspaceFile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -78,12 +84,12 @@ func listWorkspaceFiles(dir string, packFiles []string) ([]controlclient.Workspa
 	}
 	out := make([]controlclient.WorkspaceFile, 0, len(entries))
 	for _, entry := range entries {
-		if slices.Contains(packFiles, entry.Name()) {
-			continue
-		}
 		info, infoErr := entry.Info()
 		if infoErr != nil {
 			continue // raced a deletion mid-listing; skip, never fail the batch
+		}
+		if planted, ok := packFiles[entry.Name()]; ok && info.ModTime().Equal(planted) {
+			continue
 		}
 		out = append(out, controlclient.WorkspaceFile{
 			Name:    entry.Name(),

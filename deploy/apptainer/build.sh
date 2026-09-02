@@ -10,8 +10,10 @@
 #   make agent-sif                            # same, from the repo root
 #
 # The script cd's into its own directory before building so the def file's
-# ../../ %files sources (vendor/openhands, apps/agent-engine/packs) resolve to
-# the repo root regardless of where you invoke it from.
+# ../../ %files source (vendor/openhands) resolves to the repo root regardless
+# of where you invoke it from. The packs used to be a second source and are
+# not baked in any more: the launcher copies the pack into the session working
+# directory, which is the only place the SDK reads it from (issue #1360).
 #
 # Privilege: building a docker-bootstrap image needs either real root or a
 # rootless setup with fakeroot. If a plain `apptainer build` fails on your host,

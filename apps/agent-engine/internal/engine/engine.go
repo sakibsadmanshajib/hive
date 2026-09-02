@@ -346,9 +346,10 @@ type session struct {
 	bearerJWT string
 
 	// packFiles are the top-level entries materializePack planted in
-	// workingDir at launch. The workspace listing hides them: they are pack
-	// scaffolding, not output of this task.
-	packFiles []string
+	// workingDir at launch, with the timestamp each was planted with. The
+	// workspace listing hides an entry that still matches: pack scaffolding
+	// is not output of this task, but an entry the task rewrote is.
+	packFiles map[string]time.Time
 
 	// finishMu serializes finishTerminal for this one session: two Status
 	// calls can each independently observe the same terminal execution
@@ -415,17 +416,29 @@ func New(cfg Config) *SandboxEngine {
 }
 
 // materializePack copies the named pack out of packsDir into workingDir and
-// returns the top-level names it planted there. Those names are what the
-// workspace listing (events.go) filters back out: the panel's working folder
-// is the files the task produced, and the pack is scaffolding the task
-// arrived with.
+// returns the top-level entries it planted there, each with the modification
+// time it was planted with. The workspace listing (events.go) filters those
+// back out so the panel's working folder shows what the task produced rather
+// than the scaffolding it started with, and it compares the timestamp too, so
+// an entry the task rewrote reappears instead of staying hidden under a name
+// the pack happened to use.
 //
-// pack reaches this process from control-plane, so the read is confined to
-// packsDir by os.Root rather than by string handling. That holds against a
-// name that tries to climb out (Launch rejects those too) and equally against
-// a symlink inside packsDir pointing somewhere else, which no amount of name
-// validation would catch.
-func materializePack(packsDir, pack, workingDir string) ([]string, error) {
+// Two different confinements, because they cover two different things and
+// conflating them is how the next reader builds something unsafe on top:
+//
+//   - os.Root confines the READ to packsDir. pack arrives from control-plane,
+//     so that holds against a name climbing out (Launch rejects those too) and
+//     against the pack directory itself being a symlink elsewhere.
+//   - the walk below is what keeps a symlink out of the WRITE. os.CopyFS
+//     recreates a symlink verbatim (os/dir.go, ModeSymlink case), and
+//     Root.FS()'s ReadLink returns the raw target unresolved, so a link inside
+//     a pack would land in the workspace with an absolute target intact.
+//     os.Root does nothing about that: it never sees the destination.
+//
+// Refusing is right rather than merely safe here. No shipped pack contains a
+// symlink, packs are repo authored, and a pack that grows one is either a
+// mistake or something that wants reviewing, not copying.
+func materializePack(packsDir, pack, workingDir string) (map[string]time.Time, error) {
 	root, err := os.OpenRoot(packsDir)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open packs directory %s: %w", packsDir, err)
@@ -440,14 +453,34 @@ func materializePack(packsDir, pack, workingDir string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: read pack %s under %s: %w", pack, packsDir, err)
 	}
+	if err := fs.WalkDir(packFS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("engine: pack %s contains a symlink at %s, refusing to copy it into the workspace", pack, p)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	if err := os.CopyFS(workingDir, packFS); err != nil {
 		return nil, fmt.Errorf("engine: copy pack %s into the agent working directory: %w", pack, err)
 	}
-	names := make([]string, 0, len(entries))
+
+	// Stamped from the destination, not the source: os.CopyFS writes fresh
+	// files rather than preserving the pack's timestamps, so the source mtime
+	// would never match what the listing later reads and every planted entry
+	// would show up again immediately.
+	planted := make(map[string]time.Time, len(entries))
 	for _, entry := range entries {
-		names = append(names, entry.Name())
+		info, err := os.Lstat(filepath.Join(workingDir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("engine: stat planted pack entry %s: %w", entry.Name(), err)
+		}
+		planted[entry.Name()] = info.ModTime()
 	}
-	return names, nil
+	return planted, nil
 }
 
 // freePort asks the OS for an ephemeral TCP port and immediately releases
