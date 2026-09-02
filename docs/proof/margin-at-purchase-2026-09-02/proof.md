@@ -158,7 +158,25 @@ TestBatchSettlementCarriesNoMultiplier and
 TestOneDollarOfBatchCostSettlesAtOneBillionCredits (batch executor).
 
 
-## 5. Test runs
+## 5. Review findings fixed before the first review round closed
+
+Two defects found by the database and security passes over this branch's own
+diff, both fixed in the second commit and re-verified on a fresh throwaway:
+
+1. The migration's UPDATE guards used `<>` on two nullable cache columns.
+   `NULL <> 2130000` evaluates to NULL, an OR chain that evaluates to NULL is
+   not true, and the row would have been skipped in silence while keeping its
+   old price. Now `IS DISTINCT FROM` throughout.
+2. `usdCentsToLocalPaisa` accepted any parseable rate, including zero and
+   negative ones. It now refuses a non-positive rate rather than pricing a
+   purchase at nothing or at a negative amount, neither of which looks like a
+   failure once it is a row.
+
+Re-verified: the whole chain re-applied from an empty database (133 of 133
+migrations executed) and the catalog read back at the same figures.
+
+
+## 6. Test runs
 
     go test ./apps/edge-api/... -count=1 -short          all packages ok
     go test ./apps/control-plane/... -count=1 -short     all packages ok

@@ -159,6 +159,19 @@
 --   a no-op rather than a second reprice, and applying it to a database that
 --   somehow already holds the new figures records the migration without
 --   touching a row.
+--
+--   The guards use IS DISTINCT FROM rather than <>, which matters on the two
+--   cache columns: they are nullable, `NULL <> 2130000` evaluates to NULL, and
+--   an OR chain that evaluates to NULL is not true, so a row holding a NULL
+--   cache price would be skipped in silence and keep whatever it had. The
+--   guarded columns are non-null on every row this file touches today, which is
+--   exactly the sort of fact that stops being true without anyone noticing.
+--
+--   The guards compare against the values being WRITTEN, not against the values
+--   expected to be there. That is deliberate and it is the convergence property
+--   D-072 was learned for: this file reaches the same end state whatever it
+--   finds, rather than recognising one particular starting state and silently
+--   doing nothing on any other.
 -- =============================================================================
 
 begin;
@@ -170,21 +183,21 @@ update public.model_aliases
        output_price_credits = 300000000,
        updated_at           = now()
  where alias_id = 'hive-small'
-   and (input_price_credits <> 75000000 or output_price_credits <> 300000000);
+   and (input_price_credits is distinct from 75000000 or output_price_credits is distinct from 300000000);
 
 update public.model_aliases
    set input_price_credits  = 150000000,
        output_price_credits = 600000000,
        updated_at           = now()
  where alias_id = 'hive-medium'
-   and (input_price_credits <> 150000000 or output_price_credits <> 600000000);
+   and (input_price_credits is distinct from 150000000 or output_price_credits is distinct from 600000000);
 
 update public.model_aliases
    set input_price_credits  = 75000000,
        output_price_credits = 300000000,
        updated_at           = now()
  where alias_id = 'hive-fast'
-   and (input_price_credits <> 75000000 or output_price_credits <> 300000000);
+   and (input_price_credits is distinct from 75000000 or output_price_credits is distinct from 300000000);
 
 -- ─── 2. DeepSeek aliases, and hive-default which serves the flash model ─────
 
@@ -194,9 +207,9 @@ update public.model_aliases
        cache_read_price_credits = 2130000,
        updated_at               = now()
  where alias_id = 'hive-default'
-   and (input_price_credits <> 63900000
-        or output_price_credits <> 127800000
-        or cache_read_price_credits <> 2130000);
+   and (input_price_credits is distinct from 63900000
+        or output_price_credits is distinct from 127800000
+        or cache_read_price_credits is distinct from 2130000);
 
 update public.model_aliases
    set input_price_credits       = 63900000,
@@ -205,10 +218,10 @@ update public.model_aliases
        cache_write_price_credits = 63900000,
        updated_at                = now()
  where alias_id = 'deepseek-v4-flash'
-   and (input_price_credits <> 63900000
-        or output_price_credits <> 127800000
-        or cache_read_price_credits <> 2130000
-        or cache_write_price_credits <> 63900000);
+   and (input_price_credits is distinct from 63900000
+        or output_price_credits is distinct from 127800000
+        or cache_read_price_credits is distinct from 2130000
+        or cache_write_price_credits is distinct from 63900000);
 
 update public.model_aliases
    set input_price_credits       = 1122000000,
@@ -217,10 +230,10 @@ update public.model_aliases
        cache_write_price_credits = 1122000000,
        updated_at                = now()
  where alias_id = 'deepseek-v4-pro'
-   and (input_price_credits <> 1122000000
-        or output_price_credits <> 3366000000
-        or cache_read_price_credits <> 37400000
-        or cache_write_price_credits <> 1122000000);
+   and (input_price_credits is distinct from 1122000000
+        or output_price_credits is distinct from 3366000000
+        or cache_read_price_credits is distinct from 37400000
+        or cache_write_price_credits is distinct from 1122000000);
 
 -- ─── 3. The two non-token aliases (display prices, per D-033) ───────────────
 
@@ -228,13 +241,13 @@ update public.model_aliases
    set output_price_credits = 22000000000,
        updated_at           = now()
  where alias_id = 'hive-tts'
-   and output_price_credits <> 22000000000;
+   and output_price_credits is distinct from 22000000000;
 
 update public.model_aliases
    set output_price_credits = 30833333334,
        updated_at           = now()
  where alias_id = 'hive-stt'
-   and output_price_credits <> 30833333334;
+   and output_price_credits is distinct from 30833333334;
 
 -- ─── 4. The FX fee default drops to 2.5 percent (D-066) ─────────────────────
 --

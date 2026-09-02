@@ -148,6 +148,13 @@ func TestPurchasePriceRefusesAnUnusableRate(t *testing.T) {
 	if _, err := PriceForCredits(-1, ""); err == nil {
 		t.Fatal("priced a negative credit quantity, want an error")
 	}
+	// A zero or negative rate would price a purchase at nothing, or at a
+	// negative amount, and neither looks like a failure once it is a row.
+	for _, rate := range []string{"0", "0.000000", "-130.175000"} {
+		if _, err := PriceForCredits(CreditsPerUSD, rate); err == nil {
+			t.Fatalf("priced a purchase at an effective rate of %q, want an error", rate)
+		}
+	}
 }
 
 // TestMarkupConstantsAreTheOwnerRulings pins the two rates themselves. They are

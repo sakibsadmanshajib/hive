@@ -792,6 +792,15 @@ func usdCentsToLocalPaisa(amountUSDCents *big.Rat, effectiveRate string) (int64,
 	if !ok {
 		return 0, fmt.Errorf("invalid effective rate %q", effectiveRate)
 	}
+	// A zero or negative rate is refused rather than used. It cannot arise from
+	// the XE response today, but it can arise from the operator override that
+	// stands in for it, and the two failures it would produce are the two this
+	// money path must never have: a purchase priced at nothing, and a purchase
+	// priced at a negative amount. Neither would look like a failure downstream,
+	// which is why it is caught here rather than left to be noticed.
+	if rateRat.Sign() <= 0 {
+		return 0, fmt.Errorf("effective rate %q is zero or negative; that is not a rate", effectiveRate)
+	}
 	localRat := new(big.Rat).Mul(amountUSDCents, rateRat)
 	paisa, err := truncateToMinorUnit(localRat)
 	if err != nil {
