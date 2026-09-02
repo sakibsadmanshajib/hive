@@ -214,3 +214,37 @@ describe("Next.js control flow", () => {
     await expect(tolerate(controlFlow)).rejects.toThrow();
   });
 });
+
+describe("tolerateBoxed", () => {
+  // The collision this exists for: a read whose own null already means
+  // something. Without the box, "no threshold configured" and "we could not
+  // read the threshold" are the same value, and the surface renders the
+  // outage as "none set" -- which invites the customer to overwrite a
+  // threshold that is still in force.
+  it("tells a real null apart from an unreadable one", async () => {
+    const { tolerateBoxed } = await import("../lib/console/data");
+
+    await expect(tolerateBoxed(Promise.resolve(null))).resolves.toEqual({
+      value: null,
+    });
+    await expect(
+      tolerateBoxed(Promise.reject(new Error("boom"))),
+    ).resolves.toBeNull();
+  });
+
+  it("passes a present value through in the box", async () => {
+    const { tolerateBoxed } = await import("../lib/console/data");
+
+    await expect(tolerateBoxed(Promise.resolve({ id: "b1" }))).resolves.toEqual({
+      value: { id: "b1" },
+    });
+  });
+
+  it("re-raises Next.js control flow rather than boxing it", async () => {
+    const { notFound } =
+      await vi.importActual<typeof import("next/navigation")>("next/navigation");
+    const { tolerateBoxed } = await import("../lib/console/data");
+
+    await expect(tolerateBoxed((async () => notFound())())).rejects.toThrow();
+  });
+});

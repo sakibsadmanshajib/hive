@@ -173,9 +173,19 @@ export default async function ConsolePage() {
             <CardContent className="px-5 py-5">
               {balance ? (
                 <CreditBalance balance={balance} />
-              ) : (
+              ) : isUnverified ? (
                 <p className="text-sm text-[var(--color-ink-3)]">
                   Verify your email to view balances.
+                </p>
+              ) : (
+                /*
+                  A null balance has two causes and they are not the same
+                  sentence. Telling a verified customer to verify their email
+                  because the balance read failed is a claim about their
+                  account made from a failed request (issue #494).
+                */
+                <p className="text-sm text-[var(--color-ink-3)]">
+                  Unavailable. We could not read your balance just now.
                 </p>
               )}
             </CardContent>

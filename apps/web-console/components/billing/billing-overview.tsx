@@ -19,7 +19,9 @@ interface BillingOverviewProps {
   // a figure is how a customer ends up trusting a number the system never
   // had; the card says "Unavailable" instead (issue #494).
   balance: BalanceSummary | null;
-  recentEntries: LedgerEntry[];
+  // null when the ledger could not be read. [] is an account with no
+  // transactions; the card says which of the two it is (issue #494).
+  recentEntries: LedgerEntry[] | null;
   // Country code is intentionally accepted but not displayed — locale rendering
   // is done downstream by checkout-modal which uses Intl with the rail's
   // currency. Surfacing FX hints to BD accounts is a regulatory violation.
@@ -49,7 +51,7 @@ export function BillingOverview({
   balance,
   recentEntries,
 }: BillingOverviewProps) {
-  const recent = recentEntries.slice(0, 5);
+  const recent = (recentEntries ?? []).slice(0, 5);
 
   const ledgerColumns: Column<LedgerEntry>[] = [
     {
@@ -137,7 +139,12 @@ export function BillingOverview({
           ) : null}
         </CardHeader>
         <CardContent className="px-5 py-5">
-          {recent.length === 0 ? (
+          {recentEntries === null ? (
+            <EmptyState
+              title="Could not load recent transactions"
+              description="We could not reach the billing service, so this is not showing your latest ledger activity. Refresh to try again."
+            />
+          ) : recent.length === 0 ? (
             <EmptyState
               title="No transactions yet"
               description="Your credit ledger fills up after the first top-up."

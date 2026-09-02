@@ -11,6 +11,7 @@ import {
   requireViewer,
   requireAccountProfile,
   tolerate,
+  tolerateBoxed,
 } from "@/lib/console/data";
 import { BillingOverview } from "@/components/billing/billing-overview";
 import { CheckoutLauncher } from "@/components/billing/checkout-launcher";
@@ -67,7 +68,10 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
     // says plainly that the figure is unavailable (issue #494).
     tolerate(getBalance()),
     requireAccountProfile(),
-    tolerate(getBudgetThreshold()),
+    // Boxed: getBudgetThreshold's own null means "no threshold set", so a
+    // bare tolerate() would render an outage as "none set" and invite the
+    // customer to overwrite a threshold that is still in force.
+    tolerateBoxed(getBudgetThreshold()),
     // Issue #856: the Overview tab hardcoded recentEntries={[]} since PR #89
     // (the original Go rewrite), so "No transactions yet" rendered
     // unconditionally regardless of what the ledger held. getLedgerEntries
@@ -127,10 +131,17 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
         <div className="flex flex-col gap-6">
           <BillingOverview
             balance={balance}
-            recentEntries={recentLedger?.entries ?? []}
+            recentEntries={recentLedger?.entries ?? null}
             accountCountryCode={profile?.country_code ?? ""}
           />
-          <BudgetAlertForm currentThreshold={budgetThreshold} />
+          {budgetThreshold ? (
+            <BudgetAlertForm currentThreshold={budgetThreshold.value} />
+          ) : (
+            <EmptyState
+              title="Could not load your alert threshold"
+              description="We could not reach the budget service, so this form is not showing the threshold currently in force. Refresh to try again."
+            />
+          )}
           <BillingLinks />
         </div>
       ) : null}

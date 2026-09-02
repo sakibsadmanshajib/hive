@@ -109,6 +109,27 @@ export const requireAccountProfile = cache(
  * substitute a plausible value: a balance that failed to load is unknown, not
  * zero, and zero is below every threshold a customer can set.
  */
+/**
+ * tolerate for a read whose own answer can legitimately be null.
+ *
+ * `tolerate()` reports failure as null, so for a read like getBudgetThreshold
+ * or getBudget, whose null already means "nothing is configured", the two
+ * meanings collide and the surface renders "none set" for an outage. That
+ * invites a customer to overwrite a threshold that is still in force, and it
+ * is the same false-state defect as a failed balance rendering as zero, just
+ * hidden one level down in the types rather than visible as a `?? 0`.
+ *
+ * The box keeps them apart: null is unreadable, `{ value: null }` is a real
+ * absence. Reach for this whenever null already means something on the read
+ * you are wrapping.
+ */
+export async function tolerateBoxed<T>(
+  read: Promise<T>,
+): Promise<{ value: T } | null> {
+  const value = await tolerate(read.then((v) => ({ v })));
+  return value === null ? null : { value: value.v };
+}
+
 export async function tolerate<T>(read: Promise<T>): Promise<T | null> {
   try {
     return await read;

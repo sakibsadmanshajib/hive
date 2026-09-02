@@ -138,10 +138,8 @@ function isCaught(node: ts.Node, mustRethrow: boolean): boolean {
       if (!call || !ts.isCallExpression(call)) {
         return false;
       }
-      const handler = call.arguments[0]?.getText() ?? "";
-      return (
-        /\bunstable_rethrow\s*\(/.test(handler) || /\bthrow\b/.test(handler)
-      );
+      const handler = call.arguments[0];
+      return handler ? reRaises(handler) : false;
     }
     if (
       (ts.isPropertyAccessExpression(parent) || ts.isCallExpression(parent)) &&
@@ -183,18 +181,116 @@ function insideTry(node: ts.Node, mustRethrow: boolean): boolean {
     if (!clause) {
       continue;
     }
-    if (!mustRethrow) {
-      return true;
-    }
-    const body = clause.block.getText();
-    if (/\bunstable_rethrow\s*\(/.test(body) || /\bthrow\b/.test(body)) {
-      return true;
-    }
+    // The INNERMOST enclosing try is the one that handles this read. An outer
+    // try that re-raises is no help when an inner catch has already swallowed
+    // the throw, so this answers on the first one found and stops.
+    return mustRethrow ? reRaises(clause.block) : true;
   }
   return false;
 }
 
 const reads = controlPlaneReads();
+
+/**
+ * Which local identifiers in this file refer to a control-plane read.
+ *
+ * `import { getBalance as gb }` and `import * as cp` both hide the read from a
+ * name check against the import's original spelling, so the binding is
+ * resolved rather than assumed: aliases map back to what they alias, and a
+ * namespace import is remembered so `cp.getBalance()` is recognised too.
+ */
+interface ReadBindings {
+  locals: Set<string>;
+  namespaces: Set<string>;
+}
+
+function readBindings(source: ts.SourceFile): ReadBindings {
+  const locals = new Set<string>();
+  const namespaces = new Set<string>();
+
+  source.forEachChild((node) => {
+    if (!ts.isImportDeclaration(node) || !node.importClause) {
+      return;
+    }
+    const bindings = node.importClause.namedBindings;
+    if (bindings && ts.isNamespaceImport(bindings)) {
+      namespaces.add(bindings.name.text);
+      return;
+    }
+    if (!bindings || !ts.isNamedImports(bindings)) {
+      return;
+    }
+    for (const element of bindings.elements) {
+      const original = (element.propertyName ?? element.name).text;
+      if (reads.includes(original)) {
+        locals.add(element.name.text);
+      }
+    }
+  });
+
+  return { locals, namespaces };
+}
+
+/** The read this call invokes, whether written bare, aliased, or namespaced. */
+function calledRead(
+  node: ts.CallExpression,
+  bindings: ReadBindings,
+): string | null {
+  if (ts.isIdentifier(node.expression)) {
+    return bindings.locals.has(node.expression.text)
+      ? node.expression.text
+      : null;
+  }
+  if (
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    bindings.namespaces.has(node.expression.expression.text) &&
+    reads.includes(node.expression.name.text)
+  ) {
+    return `${node.expression.expression.text}.${node.expression.name.text}`;
+  }
+  return null;
+}
+
+/**
+ * Does this block re-raise? Answered by walking for a real ThrowStatement or a
+ * real call to unstable_rethrow, not by matching the source text.
+ *
+ * Text matching accepted a `throw` written inside a string literal or a
+ * comment, which is a rethrow that is not code at all. Nested functions are
+ * not descended into: a throw inside a callback declared in the catch does not
+ * re-raise the caught error.
+ */
+function reRaises(block: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) {
+      return;
+    }
+    if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isArrowFunction(node)
+    ) {
+      return;
+    }
+    if (ts.isThrowStatement(node)) {
+      found = true;
+      return;
+    }
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "unstable_rethrow"
+    ) {
+      found = true;
+      return;
+    }
+    node.forEachChild(visit);
+  };
+  visit(block);
+  return found;
+}
 
 /** Every control-plane read call, with whether something makes it survivable. */
 function untoleratedReads(file: string): string[] {
@@ -207,23 +303,19 @@ function untoleratedReads(file: string): string[] {
   );
 
   const isRouteHandler = file.endsWith(`${sep}route.ts`);
+  const bindings = readBindings(source);
   const offenders: string[] = [];
 
   const visit = (node: ts.Node): void => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      reads.includes(node.expression.text)
-    ) {
+    const read = ts.isCallExpression(node) ? calledRead(node, bindings) : null;
+    if (read) {
       const tolerated =
-        insideCallTo(node, ["tolerate"]) ||
+        insideCallTo(node, ["tolerate", "tolerateBoxed"]) ||
         isCaught(node, !isRouteHandler) ||
         insideTry(node, !isRouteHandler);
       if (!tolerated) {
         const { line } = source.getLineAndCharacterOfPosition(node.getStart());
-        offenders.push(
-          `${relative(WEB_CONSOLE, file)}:${line + 1}: ${node.expression.text}()`,
-        );
+        offenders.push(`${relative(WEB_CONSOLE, file)}:${line + 1}: ${read}()`);
       }
     }
     node.forEachChild(visit);
