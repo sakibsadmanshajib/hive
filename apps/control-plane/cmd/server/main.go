@@ -638,6 +638,22 @@ func main() {
 			if repaired > 0 {
 				log.Printf("invoice repair: converted %d pre-fix invoice(s) and regenerated their PDFs", repaired)
 			}
+
+			// Issue #1702 — the pass above shipped assuming today's credit peg
+			// for every row, which understated three July 2026 invoices by the
+			// rescale factor of 10,000 and then froze them outside its own
+			// predicate. This second pass selects on the period against the
+			// rescale's recorded application time and corrects them, reconciling
+			// every write against the ledger. Sequential, so a row the first
+			// pass just converted is examined with its written values.
+			rescaled, err := invoicesSvc.RepairPreRescaleInvoices(runCtx)
+			if err != nil {
+				log.Printf("invoice pre-rescale repair pass failed: %v", err)
+				return
+			}
+			if rescaled > 0 {
+				log.Printf("invoice repair: corrected %d pre-rescale invoice(s) and regenerated their PDFs", rescaled)
+			}
 		}()
 
 		// Phase 14 — owner-discretionary credit grants. Same-tx ledger

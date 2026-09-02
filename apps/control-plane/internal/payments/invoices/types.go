@@ -172,6 +172,33 @@ type Repository interface {
 	// twice, and it reports false rather than an error.
 	UpdateConverted(ctx context.Context, in Invoice) (bool, error)
 
+	// CreditRescaleAppliedAt reports when the credit unit rescale (D-046,
+	// migration 20260823_40) was applied to this database, and whether it ever
+	// was. Invoices whose period closed at or before that instant hold credit
+	// figures in the pre-rescale unit; everything after it is in today's.
+	//
+	// Read from the database rather than derived from the migration filename,
+	// because the two differ: on the demo box the file named 20260823 ran on
+	// 2026-08-24.
+	CreditRescaleAppliedAt(ctx context.Context) (time.Time, bool, error)
+
+	// ListPreRescale returns invoice rows whose period_end is at or before the
+	// supplied instant, which carry a credit quantity, and whose id sorts above
+	// afterID, ordered by id so the caller can page with the id it last saw.
+	// `limit` bounds one page; zero or less means no bound. uuid.Nil starts at
+	// the beginning.
+	//
+	// Paged rather than read whole because correcting a row does not remove it
+	// from this predicate, so neither re-reading from the start nor reading one
+	// page terminates over the whole set.
+	ListPreRescale(ctx context.Context, appliedAt time.Time, limit int, afterID uuid.UUID) ([]Invoice, error)
+
+	// UpdateRescaled writes a corrected credit quantity and the taka derived
+	// from it, guarded on the quantity the caller read, and reports whether a
+	// row was written. It never touches the rate: correcting a quantity is not
+	// a licence to re-denominate a closed period.
+	UpdateRescaled(ctx context.Context, in Invoice, previousCredits *big.Int) (bool, error)
+
 	// AggregateByModel sums usage_charge ledger entries within [Start, End)
 	// grouped by metadata->>'model'. Returns per-model CREDIT totals; the
 	// conversion into BDT subunits belongs to the service, which owns the

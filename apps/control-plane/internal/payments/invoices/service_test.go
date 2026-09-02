@@ -38,12 +38,24 @@ type fakeRepo struct {
 	unconvertedErr error
 	updateErr      error
 	updates        int
+
+	// Rescale-pass seams (issue #1702). `ledger` is what
+	// credit_ledger_entries holds per (workspace, period start), which both
+	// repair passes now reconcile against before writing anything;
+	// `rescaleAppliedAt` stands in for public.credit_unit_rescale.applied_at,
+	// zero meaning the database never rescaled.
+	ledger           map[string]*big.Int
+	rescaleAppliedAt time.Time
+	rescaleErr       error
+	rescaleUpdateErr error
+	rescaleUpdates   int
 }
 
 func newFakeRepo() *fakeRepo {
 	return &fakeRepo{
 		byID:             map[uuid.UUID]Invoice{},
 		byWorkspaceMonth: map[string]Invoice{},
+		ledger:           map[string]*big.Int{},
 	}
 }
 
@@ -112,7 +124,23 @@ func (f *fakeRepo) AggregateByModel(ctx context.Context, ws uuid.UUID, p Period)
 	if f.aggregateFn != nil {
 		return f.aggregateFn(ctx, ws, p)
 	}
-	return nil, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	credits, ok := f.ledger[wsMonthKey(ws, p.Start)]
+	if !ok {
+		return nil, nil
+	}
+	return []ModelCredits{{ModelID: "unknown", RequestCount: 1, Credits: new(big.Int).Set(credits)}}, nil
+}
+
+// seedLedger records what the account actually consumed in a period, which is
+// what both repair passes reconcile a stored credit figure against. A repair
+// test with no ledger is testing a repair against no evidence, which is the
+// shape issue #1702 came out of.
+func (f *fakeRepo) seedLedger(ws uuid.UUID, periodStart time.Time, credits int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ledger[wsMonthKey(ws, periodStart)] = big.NewInt(credits)
 }
 
 // ---------- access checker ----------
