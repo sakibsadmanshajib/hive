@@ -4,16 +4,16 @@
 // renders the SpendAlertForm for owner-only creation. The form posts to the
 // proxy /api/spend-alerts/{workspace_id}; backend rejects non-owners with 403.
 
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 
 import {
   listSpendAlerts,
   type SpendAlert,
+  ControlPlaneError,
 } from "@/lib/control-plane/client";
 import {
   requireViewer,
   requireAccountProfile,
-  tolerate,
 } from "@/lib/console/data";
 import { SpendAlertForm } from "@/components/billing/spend-alert-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
@@ -36,6 +36,27 @@ function formatTimestamp(value: string | null): string {
   }
 }
 
+/**
+ * Three states, not two (issue #494). This endpoint refuses a non-owner with
+ * 403, which is an answer about the viewer and must not render as an outage.
+ * Same shape as loadMembers() in app/console/members/page.tsx.
+ */
+async function loadAlerts(workspaceId: string): Promise<{
+  alerts: SpendAlert[] | null;
+  forbidden: boolean;
+}> {
+  try {
+    return { alerts: await listSpendAlerts(workspaceId), forbidden: false };
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof ControlPlaneError && error.status === 403) {
+      return { alerts: null, forbidden: true };
+    }
+    console.error("SpendAlertsPage: could not load spend alerts", error);
+    return { alerts: null, forbidden: false };
+  }
+}
+
 export default async function SpendAlertsPage() {
   const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
@@ -46,15 +67,7 @@ export default async function SpendAlertsPage() {
   const workspaceId = viewer.current_account.id;
   const isOwner = viewer.current_account.role === "owner";
 
-  // null when the list could not be read, which is not the same as an
-  // account with no alerts. Collapsing the two claimed "No spend alerts
-  // configured yet" about an account that may well have several, and it also
-  // emptied existingThresholds, which is the only thing stopping the form
-  // below from accepting a duplicate threshold. A validation that silently
-  // stops validating is worse than one that says it cannot run (issue #494).
-  const alerts: SpendAlert[] | null = await tolerate(
-    listSpendAlerts(workspaceId),
-  );
+  const { alerts, forbidden } = await loadAlerts(workspaceId);
 
   return (
     <ConsoleShell
@@ -84,7 +97,9 @@ export default async function SpendAlertsPage() {
           <CardHeader>
             <CardTitle>Active alerts</CardTitle>
             <CardDescription>
-              {alerts === null
+              {forbidden
+                ? "Only workspace owners can see the spend alerts on this workspace."
+                : alerts === null
                 ? "We could not read your spend alerts just now. Refresh to try again."
                 : alerts.length === 0
                   ? "No spend alerts configured yet."

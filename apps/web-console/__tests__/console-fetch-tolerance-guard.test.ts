@@ -262,19 +262,43 @@ function calledRead(
  *
  * Answered by walking the AST, because matching the source text accepted a
  * `throw` written inside a string literal or a comment, which is a rethrow
- * that is not code at all. Nested functions are not descended into: a call
- * inside a callback declared in the handler does not run on the caught error.
+ * that is not code at all.
+ *
+ * What this checks is PRESENCE, not reachability or provenance. It does not
+ * prove the call runs, and it does not prove it is the real one. Known and
+ * accepted: a rethrow behind a condition that may never hold; a rethrow after
+ * an early `return`; a local no-op that happens to be named
+ * unstable_rethrow; and one imported from somewhere other than
+ * next/navigation. None of these appear in the tree today, and all four are
+ * deliberate miswrites rather than mistakes anyone makes by accident, so the
+ * guard stays cheap rather than growing a resolver. Do not read a pass here
+ * as stronger than "a call to unstable_rethrow is present in this handler".
  */
-function reRaisesControlFlow(block: ts.Node): boolean {
+function reRaisesControlFlow(handler: ts.Node): boolean {
   let found = false;
+
+  // A .catch handler IS a function, so the walk starts at its body. Skipping
+  // every function outright made isCaught's mustRethrow branch unable to
+  // return true at all: `.catch(e => { unstable_rethrow(e); ... })`, the most
+  // natural way to write a correct rethrow, was rejected. It failed safe, so
+  // nothing was unsafe, but a check that cannot pass invites the next person
+  // to "fix" it by loosening the guard.
+  const root =
+    ts.isArrowFunction(handler) || ts.isFunctionExpression(handler)
+      ? handler.body
+      : handler;
+
   const visit = (node: ts.Node): void => {
     if (found) {
       return;
     }
+    // Functions declared *inside* the handler are still skipped: a call in a
+    // callback does not run on the caught error.
     if (
-      ts.isFunctionDeclaration(node) ||
-      ts.isFunctionExpression(node) ||
-      ts.isArrowFunction(node)
+      node !== root &&
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isArrowFunction(node))
     ) {
       return;
     }
@@ -288,7 +312,7 @@ function reRaisesControlFlow(block: ts.Node): boolean {
     }
     node.forEachChild(visit);
   };
-  visit(block);
+  visit(root);
   return found;
 }
 

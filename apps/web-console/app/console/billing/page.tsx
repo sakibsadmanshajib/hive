@@ -1,17 +1,18 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 
 import {
   getBalance,
   getBudgetThreshold,
   getInvoices,
   getLedgerEntries,
+  ControlPlaneError,
+  type BudgetThreshold,
 } from "@/lib/control-plane/client";
 import {
   requireViewer,
   requireAccountProfile,
   tolerate,
-  tolerateBoxed,
 } from "@/lib/console/data";
 import { BillingOverview } from "@/components/billing/billing-overview";
 import { CheckoutLauncher } from "@/components/billing/checkout-launcher";
@@ -23,6 +24,40 @@ import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/cn";
+
+/**
+ * Three states, not two (issue #494).
+ *
+ * getBudgetThreshold answers null for "no threshold set" and throws for
+ * everything else, and GET /api/v1/accounts/current/budget is gated on
+ * billing.view, which authz.Policy grants to owners only. Collapsing the
+ * refusal into the unreadable bucket told every member "We could not reach
+ * the budget service" -- a claim about a healthy service, inferred from an
+ * authorization answer.
+ *
+ * The refusal is read from the status rather than from the viewer's role on
+ * purpose. The console would have to restate the policy to infer it, and that
+ * copy drifts the moment the policy splits read from write, which
+ * apps/control-plane/internal/budgets/http.go already says it expects to do.
+ *
+ * Shape follows loadMembers() in app/console/members/page.tsx.
+ */
+async function loadBudgetThreshold(): Promise<
+  | { kind: "ok"; threshold: BudgetThreshold | null }
+  | { kind: "forbidden" }
+  | { kind: "unreadable" }
+> {
+  try {
+    return { kind: "ok", threshold: await getBudgetThreshold() };
+  } catch (error) {
+    unstable_rethrow(error);
+    if (error instanceof ControlPlaneError && error.status === 403) {
+      return { kind: "forbidden" };
+    }
+    console.error("BillingPage: could not load the alert threshold", error);
+    return { kind: "unreadable" };
+  }
+}
 
 interface BillingPageProps {
   searchParams: Promise<{
@@ -68,10 +103,11 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
     // says plainly that the figure is unavailable (issue #494).
     tolerate(getBalance()),
     requireAccountProfile(),
-    // Boxed: getBudgetThreshold's own null means "no threshold set", so a
-    // bare tolerate() would render an outage as "none set" and invite the
-    // customer to overwrite a threshold that is still in force.
-    tolerateBoxed(getBudgetThreshold()),
+    // Three-stated rather than tolerated: getBudgetThreshold's own null means
+    // "no threshold set", so a bare tolerate() would render an outage as
+    // "none set" and invite the customer to overwrite a threshold that is
+    // still in force -- and a member's 403 is neither of those.
+    loadBudgetThreshold(),
     // Issue #856: the Overview tab hardcoded recentEntries={[]} since PR #89
     // (the original Go rewrite), so "No transactions yet" rendered
     // unconditionally regardless of what the ledger held. getLedgerEntries
@@ -134,8 +170,13 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
             recentEntries={recentLedger?.entries ?? null}
             accountCountryCode={profile?.country_code ?? ""}
           />
-          {budgetThreshold ? (
-            <BudgetAlertForm currentThreshold={budgetThreshold.value} />
+          {budgetThreshold.kind === "ok" ? (
+            <BudgetAlertForm currentThreshold={budgetThreshold.threshold} />
+          ) : budgetThreshold.kind === "forbidden" ? (
+            <EmptyState
+              title="You cannot view the alert threshold"
+              description="Only workspace owners can see and change the spend alert threshold on this workspace. Ask an owner if you need it."
+            />
           ) : (
             <EmptyState
               title="Could not load your alert threshold"

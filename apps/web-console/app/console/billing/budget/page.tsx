@@ -6,20 +6,52 @@
 //
 // Regulatory rule: BDT-only on the customer surface. Zero USD/FX strings.
 
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 
 import {
   getBudget,
+  ControlPlaneError,
+  type BudgetSettings,
 } from "@/lib/control-plane/client";
 import {
   requireViewer,
   requireAccountProfile,
-  tolerate,
 } from "@/lib/console/data";
 import { BudgetForm } from "@/components/billing/budget-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
+
+/**
+ * Three states, not two (issue #494).
+ *
+ * getBudget answers null for "no budget configured" and throws for everything
+ * else, including the 403 a non-owner gets. Collapsing those into one null
+ * told a member "We could not reach the budget service" -- a claim about a
+ * healthy service, inferred from an authorization answer -- and withheld the
+ * read-only form they are supposed to see.
+ *
+ * Shape follows loadMembers() in app/console/members/page.tsx: a refusal is a
+ * real, known answer and never renders as an outage.
+ */
+async function loadBudget(workspaceId: string): Promise<{
+  budget: BudgetSettings | null;
+  unreadable: boolean;
+}> {
+  try {
+    return { budget: await getBudget(workspaceId), unreadable: false };
+  } catch (error) {
+    unstable_rethrow(error);
+    // Forbidden is an answer about this viewer, not about the service. The
+    // form still renders, disabled by readOnly={!isOwner}, which is what a
+    // member saw before and what tests/e2e/console-budgets.spec.ts pins.
+    if (error instanceof ControlPlaneError && error.status === 403) {
+      return { budget: null, unreadable: false };
+    }
+    console.error("BudgetSettingsPage: could not load the budget", error);
+    return { budget: null, unreadable: true };
+  }
+}
 
 export default async function BudgetSettingsPage() {
   // The redirect-to-sign-in fallback this page used to spell out itself now
@@ -40,15 +72,7 @@ export default async function BudgetSettingsPage() {
   const workspaceId = viewer.current_account.id;
   const isOwner = viewer.current_account.role === "owner";
 
-  // getBudget answers null for "no budget configured", so tolerate() alone
-  // could not tell that apart from "we could not read it" -- and BudgetForm
-  // renders empty caps for both, which invites an owner to save blanks over a
-  // soft cap that is still in force. Wrapping the answer keeps the two
-  // distinct: null here means unreadable, and the form is withheld
-  // (issue #494).
-  const budgetRead = await tolerate(
-    getBudget(workspaceId).then((budget) => ({ budget })),
-  );
+  const { budget, unreadable } = await loadBudget(workspaceId);
 
   return (
     <ConsoleShell
@@ -70,10 +94,10 @@ export default async function BudgetSettingsPage() {
         title="Budget settings"
         description="Set soft and hard caps for monthly spend in Bangladeshi taka."
       />
-      {budgetRead ? (
+      {!unreadable ? (
         <BudgetForm
           workspaceId={workspaceId}
-          budget={budgetRead.budget}
+          budget={budget}
           readOnly={!isOwner}
         />
       ) : (

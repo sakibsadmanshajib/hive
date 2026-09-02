@@ -63,6 +63,12 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
   const profile = await requireAccountProfile();
 
   let limits: KeyLimits | null = null;
+  // A refusal is an answer about this viewer, not about the key service, so it
+  // gets its own state rather than sharing the unreadable one (issue #494).
+  // GET /limits is gated on api_keys.read, which authz.Policy grants to owners
+  // only, so this is the ordinary answer for the members this page was
+  // deliberately written to serve read-only.
+  let forbidden = false;
   try {
     limits = await getApiKeyLimits(keyID);
   } catch (err) {
@@ -99,10 +105,15 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
         />
       );
     }
-    // Not a 404, so not an answer about this key: the limits could not be
-    // read. Rendering the form from a fabricated default would show caps that
-    // are not in force and invite the operator to save them (issue #494).
-    console.error("ApiKeyLimitsPage: could not load the key limits", err);
+    if (err instanceof ControlPlaneError && err.status === 403) {
+      forbidden = true;
+    } else {
+      // Not a 404 and not a refusal, so not an answer about this key or this
+      // viewer: the limits could not be read. Rendering the form from a
+      // fabricated default would show caps that are not in force and invite
+      // the operator to save them (issue #494).
+      console.error("ApiKeyLimitsPage: could not load the key limits", err);
+    }
   }
 
   // The write runs as a server action, so the browser form never needs the
@@ -170,6 +181,11 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
       />
       {limits ? (
         <RateLimitForm initial={limits} canEdit={canEdit} onSave={saveLimits} />
+      ) : forbidden ? (
+        <EmptyState
+          title="You cannot view these rate limits"
+          description="Only workspace owners can see the rate limits on an API key. Ask an owner of this workspace if you need them."
+        />
       ) : (
         <EmptyState
           title="Could not load these rate limits"

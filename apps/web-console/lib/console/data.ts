@@ -122,6 +122,33 @@ export const requireAccountProfile = cache(
  * The box keeps them apart: null is unreadable, `{ value: null }` is a real
  * absence. Reach for this whenever null already means something on the read
  * you are wrapping.
+ *
+ * Five reads in lib/control-plane/client.ts answer null in their own right,
+ * found by asking the types rather than by grepping the names:
+ * getBudgetThreshold, getBudget, getUsageWindows, getWorkspaceInvoice and
+ * getInvoicePdfUrl. They do not all want the same treatment, so each is
+ * accounted for here.
+ *
+ * getUsageWindows is exempt. It never throws: every non-2xx answer already
+ * becomes its own null, which the surface renders as "unavailable". There are
+ * no two meanings to keep apart, so bare tolerate() is correct at its call
+ * site in app/console/api-keys/page.tsx and the box would be noise.
+ *
+ * getWorkspaceInvoice and getInvoicePdfUrl are unwrapped today, and safe only
+ * because nothing tolerates them yet. Wrapping either in bare tolerate() is
+ * what this box exists to stop; reach for it there.
+ *
+ * getBudgetThreshold and getBudget need more than the box, so neither uses it.
+ * Both are read through an owner-only permission, so a member gets a 403, and
+ * a refusal is a real answer about the viewer rather than an outage. Two
+ * states cannot carry three. Their call sites spell out ok, forbidden and
+ * unreadable instead: app/console/billing/page.tsx,
+ * app/console/billing/budget/page.tsx, and app/console/members/page.tsx,
+ * which is where the shape comes from.
+ *
+ * That leaves the box with no call site in the tree right now. It stays
+ * because it is the right answer for a nullable read that cannot be refused,
+ * which is exactly the two invoice reads above.
  */
 export async function tolerateBoxed<T>(
   read: Promise<T>,
