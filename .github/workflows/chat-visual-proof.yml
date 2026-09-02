@@ -670,13 +670,17 @@ jobs:
           # It declares `depends_on: open-webui: service_healthy`, and Open WebUI
           # cold boots slowly: measured on a fresh database, 112 seconds from
           # container start to its first passing health check, most of it its own
-          # alembic chain. Its healthcheck allows a 30 second start period and
-          # five retries, so on a throwaway database it is marked unhealthy
-          # before it is up, compose treats that as a hard dependency failure,
-          # and the whole `up` aborts with "dependency failed to start" naming no
-          # cause. Docker itself recovers, flipping the container back to healthy
-          # on the first successful check, so the only thing that actually needed
-          # to happen was waiting.
+          # alembic chain. Nothing in this repository defines that healthcheck,
+          # so it is inherited whole from the upstream base image with a test and
+          # nothing else, and Docker's defaults apply: start period 0s, interval
+          # 30s, three retries. The container is therefore declared unhealthy at
+          # about 90 seconds, roughly 22 seconds before it is actually up,
+          # compose treats that as a hard dependency failure, and the whole `up`
+          # aborts with "dependency failed to start" naming no cause. Docker
+          # itself recovers, flipping the container back to healthy on the first
+          # successful check, so the only thing that actually needed to happen
+          # was waiting. Filed as issue #1757: it is every fresh install, not
+          # only this job.
           #
           # This job waits with a deadline it chooses and an error message that
           # says what did not happen, instead of inheriting a compose file's
