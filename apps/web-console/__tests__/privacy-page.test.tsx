@@ -38,11 +38,18 @@ vi.mock("next/headers", () => ({
   })),
 }));
 
-vi.mock("next/navigation", () => ({
-  redirect: vi.fn((path: string) => {
-    throw new Error(`NEXT_REDIRECT:${path}`);
-  }),
-}));
+// Only redirect() is replaced. unstable_rethrow() stays real: the page's
+// reads go through tolerate(), which calls it before deciding anything, and a
+// stubbed version would pass whether or not that holds.
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return {
+    ...actual,
+    redirect: vi.fn((path: string) => {
+      throw new Error(`NEXT_REDIRECT:${path}`);
+    }),
+  };
+});
 
 vi.mock("../lib/supabase/server", () => ({
   createClient: vi.fn(() => ({

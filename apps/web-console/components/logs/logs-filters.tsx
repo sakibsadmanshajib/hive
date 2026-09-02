@@ -16,7 +16,9 @@ interface LogsFiltersProps {
   // Model aliases offered in the select, sourced from the catalog the
   // workspace can already see.
   models: string[];
-  keys: ApiKey[];
+  // null when the key list could not be read. An empty array is an account
+  // with no keys; the select says which of the two it is (issue #494).
+  keys: ApiKey[] | null;
 }
 
 // Status options mirror the usage event statuses the gateway writes. "All"
@@ -148,8 +150,10 @@ export function LogsFilters({ state, models, keys }: LogsFiltersProps) {
           defaultValue={state.key ?? ""}
           className="h-8 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs text-[var(--color-ink)]"
         >
-          <option value="">All keys</option>
-          {keys.map((key) => (
+          <option value="">
+            {keys === null ? "Keys unavailable" : "All keys"}
+          </option>
+          {(keys ?? []).map((key) => (
             <option key={key.id} value={key.id}>
               {key.nickname || `…${key.redacted_suffix}`}
             </option>

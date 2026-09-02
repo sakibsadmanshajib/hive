@@ -7,6 +7,7 @@ import {
 import {
   requireViewer,
   requireAccountProfile,
+  tolerate,
 } from "@/lib/console/data";
 import { CheckoutReturnStatus } from "@/components/billing/checkout-return-status";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
@@ -44,7 +45,7 @@ export default async function CheckoutReturnPage({ searchParams }: CheckoutRetur
 
   const profile = await requireAccountProfile();
   const intent = intentId
-    ? await getCheckoutIntent(intentId).catch((): null => null)
+    ? await tolerate(getCheckoutIntent(intentId))
     : null;
 
   return (

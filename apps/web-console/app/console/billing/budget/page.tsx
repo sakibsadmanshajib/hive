@@ -14,10 +14,12 @@ import {
 import {
   requireViewer,
   requireAccountProfile,
+  tolerate,
 } from "@/lib/console/data";
 import { BudgetForm } from "@/components/billing/budget-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 
 export default async function BudgetSettingsPage() {
   // The redirect-to-sign-in fallback this page used to spell out itself now
@@ -38,7 +40,15 @@ export default async function BudgetSettingsPage() {
   const workspaceId = viewer.current_account.id;
   const isOwner = viewer.current_account.role === "owner";
 
-  const budget = await getBudget(workspaceId).catch((): null => null);
+  // getBudget answers null for "no budget configured", so tolerate() alone
+  // could not tell that apart from "we could not read it" -- and BudgetForm
+  // renders empty caps for both, which invites an owner to save blanks over a
+  // soft cap that is still in force. Wrapping the answer keeps the two
+  // distinct: null here means unreadable, and the form is withheld
+  // (issue #494).
+  const budgetRead = await tolerate(
+    getBudget(workspaceId).then((budget) => ({ budget })),
+  );
 
   return (
     <ConsoleShell
@@ -60,11 +70,18 @@ export default async function BudgetSettingsPage() {
         title="Budget settings"
         description="Set soft and hard caps for monthly spend in Bangladeshi taka."
       />
-      <BudgetForm
-        workspaceId={workspaceId}
-        budget={budget}
-        readOnly={!isOwner}
-      />
+      {budgetRead ? (
+        <BudgetForm
+          workspaceId={workspaceId}
+          budget={budgetRead.budget}
+          readOnly={!isOwner}
+        />
+      ) : (
+        <EmptyState
+          title="Could not load your budget"
+          description="We could not reach the budget service, so this form is not showing the caps currently in force. Refresh to try again."
+        />
+      )}
     </ConsoleShell>
   );
 }

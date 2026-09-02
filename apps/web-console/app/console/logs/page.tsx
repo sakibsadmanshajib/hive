@@ -9,6 +9,7 @@ import {
 import {
   requireViewer,
   requireAccountProfile,
+  tolerate,
 } from "@/lib/console/data";
 import type { UsageEventRow } from "@/lib/control-plane/client";
 import { UsageLogsCsv } from "@/components/logs/usage-logs-csv";
@@ -60,10 +61,10 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
   let page: Awaited<ReturnType<typeof getUsageEvents>> | null = null;
   let fetchError = false;
   const [keys, models] = await Promise.all([
-    getApiKeys().catch((): [] => []),
-    getCatalogModels()
-      .then((rows): string[] => rows.map((row) => row.id))
-      .catch((): string[] => []),
+    tolerate(getApiKeys()),
+    tolerate(getCatalogModels()).then((rows): string[] =>
+      (rows ?? []).map((row) => row.id),
+    ),
   ]);
 
   try {
@@ -87,8 +88,11 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
   const events = page?.events ?? [];
   const nextCursor = page?.next_cursor ?? null;
 
+  // An unreadable key list leaves this map empty, and UsageLogsTable then
+  // shows the id's last six characters instead of a nickname. That is an id
+  // rendered as an id, not a claim that the account has no keys.
   const keyNames: Record<string, string> = {};
-  for (const key of keys) {
+  for (const key of keys ?? []) {
     keyNames[key.id] = key.nickname || `…${key.redacted_suffix}`;
   }
 

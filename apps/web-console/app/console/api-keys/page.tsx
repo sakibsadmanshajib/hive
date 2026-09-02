@@ -44,10 +44,9 @@ async function catalogModelsOrNone(): Promise<CatalogModel[]> {
       resolve([]);
     }, CATALOG_READ_BUDGET_MS);
   });
-  const read = getCatalogModels().catch((error: unknown): CatalogModel[] => {
-    console.error("ApiKeysPage: could not load the model catalog", error);
-    return [];
-  });
+  const read = tolerate(getCatalogModels()).then(
+    (models): CatalogModel[] => models ?? [],
+  );
   return Promise.race([read, timeout]);
 }
 
@@ -81,10 +80,7 @@ export default async function ApiKeysPage() {
     // Null on any failure, rendered as "unavailable" rather than as zero
     // usage: a bar that reads empty because the counter store is unreachable
     // tells the customer the opposite of the truth (issue #1725).
-    getUsageWindows().catch((error: unknown): UsageWindows | null => {
-      console.error("ApiKeysPage: could not load usage windows", error);
-      return null;
-    }),
+    tolerate(getUsageWindows()),
   ]);
 
   return (

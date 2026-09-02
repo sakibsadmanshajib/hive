@@ -8,6 +8,7 @@ import {
 import {
   requireViewer,
   requireAccountProfile,
+  tolerate,
 } from "@/lib/console/data";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
@@ -82,7 +83,7 @@ export default async function PrivacyPage() {
 
   const [profile, models] = await Promise.all([
     requireAccountProfile(),
-    getCatalogModels().catch((): CatalogList => null),
+    tolerate(getCatalogModels()),
   ]);
 
   return (

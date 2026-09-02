@@ -7,6 +7,7 @@ import {
 import {
   requireViewer,
   requireAccountProfile,
+  tolerate,
 } from "@/lib/console/data";
 import {
   apiBaseUrl,
@@ -66,7 +67,7 @@ export default async function DocsPage() {
     // The quickstart names a model that actually exists on this deployment.
     // If the catalog cannot be read the snippets still have to be runnable, so
     // they fall back to the alias seeded by supabase/migrations.
-    getCatalogModels().catch((): CatalogModel[] => []),
+    tolerate(getCatalogModels()).then((rows): CatalogModel[] => rows ?? []),
   ]);
 
   // Name an alias that actually answers on a fresh account. See

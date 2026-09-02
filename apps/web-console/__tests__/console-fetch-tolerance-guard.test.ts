@@ -111,8 +111,18 @@ function insideCallTo(node: ts.Node, names: string[]): boolean {
   return false;
 }
 
-/** Is the read's promise handed to a .catch() in the same expression chain? */
-function isCaught(node: ts.Node): boolean {
+/**
+ * Is the read's promise handed to a .catch() in the same expression chain?
+ *
+ * In the render tree that handler must re-raise Next.js control flow, for the
+ * same reason a try/catch must: every read on this list awaits cookies()
+ * through getRequestContext, so every one of them can be handed a
+ * DynamicServerError by the prerender pass, and `.catch((): [] => [])` would
+ * answer it with a fabricated empty collection. Accepting a bare `.catch` was
+ * how the first version of this guard blessed exactly what the seam it guards
+ * forbids.
+ */
+function isCaught(node: ts.Node, mustRethrow: boolean): boolean {
   let cur: ts.Node = node;
   while (cur.parent) {
     const parent = cur.parent;
@@ -121,7 +131,17 @@ function isCaught(node: ts.Node): boolean {
       parent.expression === cur &&
       parent.name.text === "catch"
     ) {
-      return true;
+      if (!mustRethrow) {
+        return true;
+      }
+      const call = parent.parent;
+      if (!call || !ts.isCallExpression(call)) {
+        return false;
+      }
+      const handler = call.arguments[0]?.getText() ?? "";
+      return (
+        /\bunstable_rethrow\s*\(/.test(handler) || /\bthrow\b/.test(handler)
+      );
     }
     if (
       (ts.isPropertyAccessExpression(parent) || ts.isCallExpression(parent)) &&
@@ -197,7 +217,7 @@ function untoleratedReads(file: string): string[] {
     ) {
       const tolerated =
         insideCallTo(node, ["tolerate"]) ||
-        isCaught(node) ||
+        isCaught(node, !isRouteHandler) ||
         insideTry(node, !isRouteHandler);
       if (!tolerated) {
         const { line } = source.getLineAndCharacterOfPosition(node.getStart());

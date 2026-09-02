@@ -18,6 +18,7 @@ import {
 import {
   requireViewer,
   requireAccountProfile,
+  tolerate,
 } from "@/lib/console/data";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { buttonVariants } from "@/components/ui/button";
@@ -87,13 +88,9 @@ export default async function ConsolePage() {
   // would never have claimed. Mirrors the usageUnavailable pattern in
   // app/console/catalog/[id]/page.tsx.
   const [balance, usageRows, errorRows] = await Promise.all([
-    isUnverified ? Promise.resolve(null) : getBalance().catch((): null => null),
-    getAnalyticsUsage({ group_by: "model", window: "24h" }).catch(
-      (): null => null,
-    ),
-    getAnalyticsErrors({ group_by: "api_key", window: "24h" }).catch(
-      (): null => null,
-    ),
+    isUnverified ? Promise.resolve(null) : tolerate(getBalance()),
+    tolerate(getAnalyticsUsage({ group_by: "model", window: "24h" })),
+    tolerate(getAnalyticsErrors({ group_by: "api_key", window: "24h" })),
   ]);
 
   const usageUnavailable = usageRows === null;
