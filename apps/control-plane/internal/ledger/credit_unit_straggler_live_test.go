@@ -177,13 +177,25 @@ func candidates(t *testing.T, pool *pgxpool.Pool, accountID uuid.UUID) []straggl
 	return out
 }
 
-func requireOnlyCandidate(t *testing.T, got []stragglerCandidate, wantTable string, wantID uuid.UUID) {
+// requireCandidates asserts the detector selected exactly the given rows, all
+// from wantTable. Exactly, not at least: a row this suite seeded on purpose to
+// be excluded is only excluded if the count says so.
+func requireCandidates(t *testing.T, got []stragglerCandidate, wantTable string, want ...uuid.UUID) {
 	t.Helper()
-	if len(got) != 1 {
-		t.Fatalf("detector selected %d rows, want exactly the one genuine candidate: %+v", len(got), got)
+	if len(got) != len(want) {
+		t.Fatalf("detector selected %d rows, want exactly %d: %+v", len(got), len(want), got)
 	}
-	if got[0].SourceTable != wantTable || got[0].RowID != wantID {
-		t.Fatalf("detector selected %s/%s, want %s/%s", got[0].SourceTable, got[0].RowID, wantTable, wantID)
+	selected := make(map[uuid.UUID]bool, len(got))
+	for _, c := range got {
+		if c.SourceTable != wantTable {
+			t.Fatalf("detector selected a row from %q, want only %q: %+v", c.SourceTable, wantTable, got)
+		}
+		selected[c.RowID] = true
+	}
+	for _, id := range want {
+		if !selected[id] {
+			t.Fatalf("detector did not select %s: %+v", id, got)
+		}
 	}
 }
 
@@ -210,7 +222,14 @@ func TestStragglerDetectorTellsAnUnstampedRowFromAnUnscaledOne_Live(t *testing.T
 	insertLedgerEntry(t, pool, accountID, 5_000_000, boundary.Add(48*time.Hour), map[string]any{"credit_unit": CreditUnitV2})
 	insertLedgerEntry(t, pool, accountID, 0, boundary.Add(-48*time.Hour), nil)
 
-	requireOnlyCandidate(t, candidates(t, pool, accountID), "credit_ledger_entries", unscaled)
+	// The recreate window itself, pinned to the hour the file documents rather
+	// than left to any window that happens to contain the rows above. Inside it
+	// an unstamped row is ambiguous and stays a candidate; a minute outside it
+	// is the same population as the seven, and the backfill stamps that one.
+	inWindow := insertLedgerEntry(t, pool, accountID, 5_000, boundary.Add(59*time.Minute), nil)
+	insertLedgerEntry(t, pool, accountID, 6_000, boundary.Add(61*time.Minute), nil)
+
+	requireCandidates(t, candidates(t, pool, accountID), "credit_ledger_entries", unscaled, inWindow)
 }
 
 // TestStragglerDetectorInvertsTheBoundaryForPaymentIntents_Live pins the half
@@ -246,19 +265,14 @@ func TestStragglerDetectorInvertsTheBoundaryForPaymentIntents_Live(t *testing.T)
 	// false positive and the detector would stop meaning zero.
 	insertPaymentIntent(t, pool, accountID, 250_000_000, boundary.Add(72*time.Hour), nil)
 
-	got := candidates(t, pool, accountID)
-	if len(got) != 2 {
-		t.Fatalf("detector selected %d rows, want the raced insert and the recreate-window straggler: %+v", len(got), got)
-	}
-	selected := map[uuid.UUID]bool{got[0].RowID: true, got[1].RowID: true}
-	if !selected[raced] || !selected[straggler] {
-		t.Fatalf("detector selected %+v, want %s (raced insert) and %s (recreate window)", got, raced, straggler)
-	}
-	for _, c := range got {
-		if c.SourceTable != "payment_intents" {
-			t.Fatalf("unexpected source table %q in %+v", c.SourceTable, got)
-		}
-	}
+	// A minute outside each edge of the band, so the exact-count assertion pins
+	// the width at the hour the file documents. A detector built on a wider
+	// window would select these and fail here rather than quietly flagging
+	// ordinary rows near every future boundary.
+	insertPaymentIntent(t, pool, accountID, 84_276, boundary.Add(-61*time.Minute), nil)
+	insertPaymentIntent(t, pool, accountID, 84_276, boundary.Add(61*time.Minute), nil)
+
+	requireCandidates(t, candidates(t, pool, accountID), "payment_intents", raced, straggler)
 }
 
 // TestStragglerDetectorWithoutABoundaryOpensUp_Live holds the failure mode
@@ -327,5 +341,5 @@ func TestStragglerDetectorCoversReservationEventsOnTheLedgerRule_Live(t *testing
 	missed := insertReservationEvent(t, pool, accountID, -5_000, boundary.Add(-72*time.Hour), nil)
 	insertReservationEvent(t, pool, accountID, -50_000_000, boundary.Add(96*time.Hour), nil)
 
-	requireOnlyCandidate(t, candidates(t, pool, accountID), "credit_reservation_events", missed)
+	requireCandidates(t, candidates(t, pool, accountID), "credit_reservation_events", missed)
 }
