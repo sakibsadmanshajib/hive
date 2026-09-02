@@ -1,0 +1,107 @@
+Issue #1683 proof: key spend against its limit now renders as a real bar
+
+SUBSTRATE
+
+Everything below ran against a stack booted from this branch, on this
+machine, with no shared or hosted service involved:
+
+  - a throwaway Postgres (pgvector/pgvector:pg17) carrying the full
+    supabase/migrations chain, plus GoTrue and PostgREST behind one nginx
+    origin, all stood up by scripts/ci-supabase-stack.sh, the same script the
+    CI web-e2e job uses. It was destroyed after the capture.
+  - control-plane from deploy/docker/docker-compose.yml (image
+    hive-control-plane:ci) against that database, healthy on /health, on a
+    non-default host port so it could not touch another checkout's stack.
+  - a production `next build` plus `next start` of apps/web-console FROM THIS
+    BRANCH, pointed at that control-plane, driven by a real Chromium through
+    Playwright.
+
+The three fixture users came from
+apps/web-console/tests/e2e/support/e2e-auth-fixtures.mjs with a run-scoped
+E2E_RUN_KEY, so no shared fixture account was touched and no password
+anywhere was reset or rotated. The browser signed in through the console's own
+/auth/sign-in form against that throwaway GoTrue.
+
+The four API keys were created through the real product API, not by writing
+rows: POST /api/v1/accounts/current/api-keys for each key and POST
+/api/v1/accounts/current/api-keys/{id}/policy for each cap, both carrying the
+signed-in user's bearer. The only row written directly is the lifetime spend,
+one INSERT per key into public.api_key_usage_rollups, which is the exact table
+RecordUsageFinalization writes and Repository.GetLifetimeSpend reads; a real
+spend figure would otherwise have required paying a provider for tokens. Every
+number on screen therefore travelled the real path: rollup table, control-plane
+handler, HTTP, console server component, rendered bar.
+
+WHAT THE CONTROL-PLANE SERVED
+
+GET /api/v1/accounts/current/api-keys, read back before the browser ran
+(nickname, spend_credits, budget_limit_credits, budget kind):
+
+  playground     720000000   null          none
+  nightly-sync   360000000   10000000000   monthly
+  batch-jobs     2970000000  2000000000    lifetime
+  prod-gateway   1140000000  5000000000    lifetime
+
+One US dollar is one billion credits, so that is $0.72 uncapped, $0.36 against
+a $10.00 monthly cap, $2.97 against a $2.00 lifetime cap (over), and $1.14
+against a $5.00 lifetime cap (partial).
+
+SCREENSHOTS
+
+URL for all three: http://localhost:3010/console/api-keys
+No credential appears in that URL, in any capture, or in this log. There is no
+address bar in the captures.
+
+01-api-keys-usage-bars.png
+  The whole page after signing in. Four rows, four states of the same column.
+
+02-usage-bars-closeup.png
+  The table alone, which is where the change is legible:
+    - prod-gateway: "$1.14 of $5.00 total", "22.8%", and a bar filled roughly
+      a fifth of its track in the accent colour.
+    - batch-jobs:   "$2.97 of $2.00 total", a danger-toned "Limit reached"
+      badge, "148.5%", and a red bar that stops exactly at the end of its
+      track rather than overflowing the column.
+    - nightly-sync: "$0.36 of $10.00/mo" and no bar, deliberately. The spend
+      figure is lifetime and the cap is monthly, so a ratio between them would
+      be a number the enforcement path never computes.
+    - playground:   "$0.72 of Unlimited" and no bar, because there is no
+      denominator.
+
+03-usage-bars-dark.png
+  The same table with the dark colour scheme emulated, confirming the track,
+  the accent fill and the danger fill all still read against the dark surface.
+
+WHAT THE PROGRESS ELEMENTS ACTUALLY CARRY
+
+Read out of the live DOM in the same browser session, in row order:
+
+  batch-jobs    value="100"  max="100"
+                aria-label="Budget used: $2.97 of $2.00 total"
+                aria-valuetext="148.5%, limit reached"
+  prod-gateway  value="22.8" max="100"
+                aria-label="Budget used: $1.14 of $5.00 total"
+                aria-valuetext="22.8%"
+
+Two of them, one per lifetime-capped key, and none for the monthly or the
+uncapped row. They are native <progress> elements, so the progressbar role,
+the value and the maximum are the element's own; the accessible name carries
+both dollar figures, and aria-valuetext exists so a screen reader hears
+"148.5%" for the over-limit key rather than the "100%" its clamped fill would
+otherwise announce.
+
+Full row text as rendered, tabs and newlines flattened:
+
+  playground   | hk_xxxx(redacted)  Active | $0.72 of Unlimited
+  nightly-sync | hk_xxxx(redacted)  Active | $0.36 of $10.00/mo
+  batch-jobs   | hk_xxxx(redacted)  Active | $2.97 of $2.00 total
+                 Limit reached 148.5%
+  prod-gateway | hk_xxxx(redacted)  Active | $1.14 of $5.00 total 22.8%
+
+The key suffixes the product itself redacts down to four characters are shown
+as (redacted) here as well. They belonged to keys in a database that no longer
+exists.
+
+BROWSER CONSOLE
+
+No console errors or warnings were emitted during the capture.

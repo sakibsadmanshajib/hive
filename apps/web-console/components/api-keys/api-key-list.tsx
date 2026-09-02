@@ -91,9 +91,12 @@ function BudgetUsageCell({ row }: { row: ApiKey }) {
   const ratio =
     limit > 0 ? row.spend_credits / limit : row.spend_credits > 0 ? 1 : 0;
   const reached = ratio >= 1;
-  // The fill is clamped to the track and only the percentage carries the
-  // overshoot, so a key at 150% cannot render a bar wider than its column.
-  const fill = Number((Math.min(ratio, 1) * 100).toFixed(1));
+  // The fill is clamped to the track at both ends and only the percentage
+  // carries the overshoot, so a key at 150% cannot render a bar wider than its
+  // column. The lower bound is for a spend the wire says is negative: nothing
+  // in the ledger produces one, and a bar that renders a negative width if
+  // something ever does is not worth the risk of finding out.
+  const fill = Number((Math.min(Math.max(ratio, 0), 1) * 100).toFixed(1));
   const percentText = formatPercent(ratio);
 
   return (
