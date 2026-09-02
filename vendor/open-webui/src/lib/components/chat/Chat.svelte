@@ -33,6 +33,7 @@
 		showCallOverlay,
 		composerMode,
 		composerPack,
+		coworkLastPack,
 		currentChatPage,
 		temporaryChatEnabled,
 		mobile,
@@ -119,6 +120,7 @@
 	import {
 		dropSummaryEcho,
 		foldRunSteps,
+		inferredPackStep,
 		latestStepSeq,
 		renderRun,
 		runTurnIsDone,
@@ -2498,6 +2500,11 @@
 			// The pack the composer's own control is showing (#1500). Read at
 			// submit rather than captured earlier, so the row and the wire cannot
 			// disagree about which pack this run is.
+			// $composerPack is null for an ordinary submission: nobody picks a
+			// pack in the composer any more (#1623), and control-plane reads
+			// the kind of task off these same instructions. It is non-null only
+			// when the person corrected the last guess, and that correction is
+			// spent below.
 			task = await createTask(localStorage.token, $composerPack, userPrompt);
 		} catch (error) {
 			const refusal = describeRefusal(error);
@@ -2507,6 +2514,19 @@
 			});
 			return;
 		}
+
+		// What the server decided, reported back on the turn and in the composer
+		// row (#1623). Both halves matter: the step line is the durable record,
+		// persisted with the conversation, and the store is what the row reads
+		// to offer the other pack for the next submission. The pack comes off
+		// the created task rather than being predicted here, so the sentence a
+		// person reads can never disagree with the pack that actually ran.
+		history.messages[runMessageId].statusHistory = [inferredPackStep(task.pack)];
+		coworkLastPack.set(task.pack);
+		// The correction is one shot. Leaving it set would pin every later task
+		// in the session to a choice made about a different request, which is
+		// the two-toggle composer this issue removed, restored by accident.
+		composerPack.set(null);
 
 		// Stored on the turn, so reopening the conversation can find the run it
 		// belongs to. There is nowhere else to keep it: the transcript is the

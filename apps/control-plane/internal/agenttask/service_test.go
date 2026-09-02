@@ -284,6 +284,70 @@ func TestService_CreateTask_InvalidPack(t *testing.T) {
 	}
 }
 
+// An absent pack is the composer's normal submission since issue #1623: the
+// customer no longer picks one, so the service resolves it here, at the one
+// point every caller routes through, and persists the resolved value. It is
+// still an error to send a pack that is neither empty nor real, because that
+// is a broken client rather than a caller declining to choose.
+func TestService_CreateTask_EmptyPackIsInferredFromTheInstructions(t *testing.T) {
+	cases := map[string]struct {
+		instructions string
+		want         agenttask.Pack
+	}{
+		"coding request":    {"Refactor the billing module and run the test suite.", agenttask.PackCoding},
+		"knowledge request": {"Summarise the vendor contract into a one page memo.", agenttask.PackKnowledgeWork},
+		// Nothing to read is still an answer: the column has a CHECK
+		// constraint and the launch fails closed, so there is no third state
+		// to persist.
+		"no instructions": {"", agenttask.PackKnowledgeWork},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			repo := newFakeRepository()
+			svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+			tenantID, userID := uuid.New(), uuid.New()
+
+			created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.Pack(""), tc.instructions, uuid.Nil, "")
+			if err != nil {
+				t.Fatalf("CreateTask with no pack: %v", err)
+			}
+			svc.WaitIdle()
+
+			if created.Pack != tc.want {
+				t.Errorf("returned pack = %q, want %q", created.Pack, tc.want)
+			}
+			// Read back rather than trusting the returned struct: the pack the
+			// launcher and every later reader see is the stored one.
+			stored, err := svc.Get(context.Background(), tenantID, userID, created.ID)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if stored.Pack != tc.want {
+				t.Errorf("stored pack = %q, want %q", stored.Pack, tc.want)
+			}
+		})
+	}
+}
+
+// An explicit pack is still honoured exactly as it was. This is the override
+// the composer's correction control uses and the field every existing API
+// client already sends, so inference must never overwrite one.
+func TestService_CreateTask_ExplicitPackWins(t *testing.T) {
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+	// Instructions that the inference would read as coding, sent with an
+	// explicit knowledge-work pack: the caller's word is the answer.
+	created, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(),
+		agenttask.PackKnowledgeWork, "Refactor the billing module.", uuid.Nil, "")
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	svc.WaitIdle()
+	if created.Pack != agenttask.PackKnowledgeWork {
+		t.Errorf("explicit pack was overwritten: got %q, want %q", created.Pack, agenttask.PackKnowledgeWork)
+	}
+}
+
 // TestService_CreateTask_EngineNotConfigured_FailsVisibly guards the bug
 // this fix closes: a task submitted while the agent engine is unconfigured
 // must never come back looking like a healthy queued task that will

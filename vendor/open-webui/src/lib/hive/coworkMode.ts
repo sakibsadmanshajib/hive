@@ -31,15 +31,19 @@ export const isComposerMode = (value: unknown): value is ComposerMode =>
 	value === 'chat' || value === 'cowork';
 
 /*
- * The pack the composer will send (#1500).
+ * The two packs, in words (#1500, #1623).
  *
- * This used to be `packForMode()`, a function that took a mode and returned the
- * knowledge-work pack whatever it was given. The comment above it argued that
- * deriving the pack was safer than offering it, because the coding pack
- * "belongs to a Code panel this shell does not have". That reasoning did not
- * survive contact with the shipped product: the derivation made `coding-pack`
- * unreachable from the chat surface entirely, and the only place left that
- * could reach it was the `/agents` destination D-045 retires.
+ * #1500 turned the pack into a segmented control in this row. #1623 takes the
+ * control away again, for a different reason than the one #1500 rejected: not
+ * "derive it because the coding pack belongs to a panel we do not have", but
+ * "nobody should have to classify their own request before typing it". The
+ * pack is resolved server side now, from the instructions, in
+ * apps/control-plane/internal/agenttask/infer.go, which is the one point every
+ * caller of task-create routes through.
+ *
+ * What survives here is the vocabulary. These labels are no longer options to
+ * pick from before sending: they are how the run TELLS the person what it was
+ * read as, and how the correction offers the other one.
  *
  * HOW DIFFERENT THE TWO PACKS ACTUALLY ARE, so nobody re-derives it
  * ----------------------------------------------------------------
@@ -55,12 +59,13 @@ export const isComposerMode = (value: unknown): value is ComposerMode =>
  * (doc-layout, deck-generation, code-canvas) that publish artifacts, and the
  * coding pack ships none and frames the task around reading, editing and
  * testing a codebase in /workspace. So a coding-flavoured prompt succeeding
- * under the knowledge-work pack is expected rather than surprising, and is not
- * evidence that the choice is cosmetic.
+ * under the knowledge-work pack is expected rather than surprising, and it is
+ * why the server's default when it sees no coding evidence is the knowledge
+ * pack: being wrong that way costs framing, and being wrong the other way
+ * costs the deck skill and the publish path outright.
  *
- * The labels are the words the /agents route already used. A customer never
- * reads `knowledge-work-pack`: the identifier stays on the wire, where the API
- * and the `public.agent_tasks` CHECK constraint want it.
+ * A customer never reads `knowledge-work-pack`: the identifier stays on the
+ * wire, where the API and the `public.agent_tasks` CHECK constraint want it.
  */
 export interface ComposerPackOption {
 	value: TaskPack;
@@ -72,13 +77,45 @@ export const COMPOSER_PACKS: readonly ComposerPackOption[] = [
 	{ value: 'coding-pack', label: 'Coding' }
 ];
 
-/*
- * Knowledge work, because that is what this composer sent before the control
- * existed. A different default would silently change what an existing user's
- * next submission does, which is a behaviour change dressed up as a new
- * control.
+/** The words for a wire pack. Total over TaskPack, so there is no fallback. */
+export const packLabel = (pack: TaskPack): string =>
+	COMPOSER_PACKS.find((option) => option.value === pack)?.label ?? pack;
+
+/**
+ * The pack that is not this one.
+ *
+ * This is the entire correction control: with two packs, "the other one" is
+ * the only thing an override can mean, so the row needs no picker to offer it.
  */
-export const DEFAULT_COMPOSER_PACK: TaskPack = 'knowledge-work-pack';
+export const otherPack = (pack: TaskPack): TaskPack =>
+	pack === 'coding-pack' ? 'knowledge-work-pack' : 'coding-pack';
+
+/**
+ * The progress line that discloses what the server decided (#1623).
+ *
+ * This is the half of the change that makes a wrong guess cheap. An inference
+ * nobody can see is worse than the toggle it replaced, because the person has
+ * no way to tell a misread request from a bad answer. It is deliberately a
+ * `RunStep` and not a new component: the run transcript already renders these
+ * as muted lines, they are persisted with the conversation, and they survive a
+ * reload, so the disclosure costs one string.
+ *
+ * seq 0 because real events are numbered from 1, so this line sits first and
+ * contributes nothing to the cursor latestStepSeq() reads. done: true because
+ * the decision is already made; an open step here would shimmer forever under
+ * a run that had finished.
+ *
+ * The pack comes off the created task, which is the server's own answer, so
+ * this reports a decision rather than predicting one. Nothing here re-runs the
+ * inference in the browser: two implementations of one rule is how the line a
+ * person reads comes to disagree with the pack that actually ran.
+ */
+export const inferredPackStep = (pack: TaskPack): RunStep => ({
+	action: 'hive_agent_step',
+	description: `Hive ran this as a ${packLabel(pack).toLowerCase()} task.`,
+	done: true,
+	seq: 0
+});
 
 /**
  * Arrow-key movement inside a radiogroup.
@@ -89,9 +126,10 @@ export const DEFAULT_COMPOSER_PACK: TaskPack = 'knowledge-work-pack';
  * for the role, so it is implemented rather than assumed, and it wraps at both
  * ends the way a native radio group does.
  *
- * Generic over the option list because the composer now has two of these
- * groups, the mode and the pack, with the same contract. One copy, so a fix to
- * the wrapping behaviour cannot land on one group and miss the other.
+ * Still generic, though only the mode toggle uses it since #1623 retired the
+ * pack radiogroup. Kept that way because the shape is the contract, not a
+ * convenience: the next segmented control in this composer inherits the
+ * wrapping behaviour rather than reimplementing it slightly differently.
  */
 const nextInGroup = <T>(options: readonly T[], current: T, key: string): T | null => {
 	const index = options.indexOf(current);
@@ -109,11 +147,6 @@ const nextInGroup = <T>(options: readonly T[], current: T, key: string): T | nul
 
 export const nextMode = (current: ComposerMode, key: string): ComposerMode | null =>
 	nextInGroup(COMPOSER_MODES, current, key);
-
-const PACK_VALUES: readonly TaskPack[] = COMPOSER_PACKS.map((option) => option.value);
-
-export const nextPack = (current: TaskPack, key: string): TaskPack | null =>
-	nextInGroup(PACK_VALUES, current, key);
 
 /*
  * The projection of a run onto a transcript turn.

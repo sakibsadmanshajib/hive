@@ -1,6 +1,6 @@
 <script lang="ts">
 	/*
-	 * The second row Cowork grows inside the composer (#944, #1500, D-045).
+	 * The second row Cowork grows inside the composer (#944, #1500, #1623, D-045).
 	 *
 	 * The reference's row carries a project-or-folder picker, an autonomy
 	 * control reading `Auto`, and a note. The first two are still absent, and
@@ -11,82 +11,66 @@
 	 *     approval rows, so a control shipped before that line is fixed is a
 	 *     control with no observable effect.
 	 *   * The project or folder picker ships only if a run can be bound to a
-	 *     workspace or a collection. `POST /v1/agent/tasks` accepts `pack` and
-	 *     `instructions` and nothing else, so there is no binding to set, and a
-	 *     picker that sets nothing is worse than no picker.
+	 *     workspace or a collection.
 	 *
-	 * The pack was the third thing in that list until #1500. It was rendered
-	 * here as a static `<span>` reading "Knowledge work", on the argument that
-	 * the pack should be derived rather than chosen. That argument made
-	 * `coding-pack` unreachable from the chat surface, leaving the `/agents`
-	 * destination D-045 retires as the only way to reach it, so the row now
-	 * offers the pack instead of announcing it. `pack` is the one field on
-	 * `POST /v1/agent/tasks` a person can actually set, which is exactly the
-	 * test the two absent controls above fail.
+	 * The pack was a third control here, added by #1500 and removed by #1623.
+	 * The two changes are not a reversal of each other. #1500 argued, correctly,
+	 * that deriving the pack from a constant made `coding-pack` unreachable from
+	 * the chat surface at all. #1623 keeps both packs reachable and moves the
+	 * decision to the one party that can make it from evidence: the server, from
+	 * the instructions the person just wrote
+	 * (apps/control-plane/internal/agenttask/infer.go). Choosing between the
+	 * words "Knowledge work" and "Coding" before typing anything asked a customer
+	 * to classify their own request against two labels that name a system prompt.
 	 *
-	 * WHY THIS ROW AND NOT THE PILL ROW ABOVE
-	 * ---------------------------------------
-	 * Two reasons, neither of them taste. This row is where the reference puts
-	 * Cowork's secondary controls, which is what the bullets above are about:
-	 * when either of those becomes real it lands here too. And the pill row has
-	 * already lost this argument once, in #1349, where the Chat/Cowork toggle
-	 * overlapped the model chip by fifty-four pixels at 375px and had to be
-	 * taught to wrap; a second always-mounted segmented control up there adds
-	 * width pressure to a row with a measured history of running out of it, to
-	 * show a control that means nothing in Chat mode.
+	 * WHAT THIS ROW SHOWS NOW, AND WHEN
+	 * ---------------------------------
+	 * On a fresh conversation, the note and nothing else. That is the acceptance
+	 * criterion of #1623: one toggle in the composer, `Chat | Cowork`, and no
+	 * second choice to make.
 	 *
-	 * The segments reuse `.hv-mode-segment`, the Chat/Cowork toggle's own
-	 * class, rather than introducing a second segmented-control idiom two rows
-	 * apart in the same composer.
+	 * Once a run has been classified, one sentence naming what it was read as
+	 * plus one button offering the other pack for the next submission. The
+	 * correction appears only after there is something to correct, which is what
+	 * keeps it from being the old toggle in different words, and it exists at all
+	 * because an inference nobody can see or override is worse than the control
+	 * it replaced: a person with a misread request would have no way to tell it
+	 * from a bad answer.
+	 *
+	 * The durable record of the decision is not here. It is a line in the run's
+	 * own progress chain (coworkMode.inferredPackStep), which persists with the
+	 * conversation; this row is session scoped and only ever describes the last
+	 * submission.
 	 */
 	import { getContext } from 'svelte';
 
-	import { composerPack } from '$lib/stores';
-	import { COMPOSER_PACKS, nextPack } from './coworkMode';
+	import { composerPack, coworkLastPack } from '$lib/stores';
+	import { otherPack, packLabel } from './coworkMode';
 
 	const i18n: any = getContext('i18n');
-
-	const select = (pack: (typeof COMPOSER_PACKS)[number]['value']) => {
-		composerPack.set(pack);
-	};
-
-	const onKeydown = (event: KeyboardEvent) => {
-		const moved = nextPack($composerPack, event.key);
-		if (!moved) {
-			return;
-		}
-		event.preventDefault();
-		select(moved);
-		// Focus follows selection, as it does in a native radio group.
-		(event.currentTarget as HTMLElement)
-			?.querySelector<HTMLElement>(`[data-hive-pack="${moved}"]`)
-			?.focus();
-	};
 </script>
 
 <div class="hv-cowork-row" data-hive-cowork-row>
-	<div
-		class="hv-mode hv-cowork-packs"
-		role="radiogroup"
-		aria-label={$i18n.t('Kind of task')}
-		data-hive-composer-pack={$composerPack}
-		on:keydown={onKeydown}
-	>
-		{#each COMPOSER_PACKS as option (option.value)}
-			<button
-				type="button"
-				role="radio"
-				data-hive-pack={option.value}
-				class="hv-mode-segment"
-				class:hv-mode-segment-on={$composerPack === option.value}
-				aria-checked={$composerPack === option.value}
-				tabindex={$composerPack === option.value ? 0 : -1}
-				on:click={() => select(option.value)}
-			>
-				{$i18n.t(option.label)}
-			</button>
-		{/each}
-	</div>
+	{#if $composerPack}
+		<span class="hv-cowork-inference" data-hive-pack-pending={$composerPack}>
+			{$i18n.t('Next task: {{kind}}.', { kind: packLabel($composerPack) })}
+		</span>
+		<button type="button" class="hv-cowork-override" on:click={() => composerPack.set(null)}>
+			{$i18n.t('Let Hive choose')}
+		</button>
+	{:else if $coworkLastPack}
+		<span class="hv-cowork-inference" data-hive-pack-inferred={$coworkLastPack}>
+			{$i18n.t('Hive read that as {{kind}}.', { kind: packLabel($coworkLastPack) })}
+		</span>
+		<button
+			type="button"
+			class="hv-cowork-override"
+			data-hive-pack-override={otherPack($coworkLastPack)}
+			on:click={() => composerPack.set(otherPack($coworkLastPack))}
+		>
+			{$i18n.t('Run the next one as {{kind}}', { kind: packLabel(otherPack($coworkLastPack)) })}
+		</button>
+	{/if}
 	<span class="hv-cowork-note">
 		{$i18n.t('Runs in a sandbox. Progress appears in this conversation.')}
 	</span>
