@@ -74,10 +74,15 @@ docker network create proof1622
 docker run -d --name proof1622-stub --network proof1622 \
   -v "$PWD/docs/proof/cowork-step-streaming-1622:/work" \
   -w /work python:3.12-alpine python stub.py 8000
+# Both of these are generated rather than written down. Neither authenticates
+# anything (the upstream is the stub beside this file, which ignores the key),
+# but a literal in a documented command reads like a credential and this
+# directory is the one the proof-token linter scans, so nothing key-shaped is
+# committed here at all.
 docker run -d --name proof1622-owui --network proof1622 -p 127.0.0.1:3422:8080 \
-  -e WEBUI_SECRET_KEY=proof1622-local-secret -e ENABLE_SIGNUP=true \
+  -e "WEBUI_SECRET_KEY=$(openssl rand -hex 16)" -e ENABLE_SIGNUP=true \
   -e OPENAI_API_BASE_URL=http://proof1622-stub:8000/v1 \
-  -e OPENAI_API_KEY=proof1622-stub-key -e DEFAULT_MODELS=hive-default \
+  -e "OPENAI_API_KEY=$(openssl rand -hex 16)" -e DEFAULT_MODELS=hive-default \
   hive-owui:proof-1622
 
 # The fork's sign-in page offers no sign-up form, so the account is created
