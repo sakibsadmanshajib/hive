@@ -356,21 +356,37 @@ func hasShimAuthorization(header, shimKey string) bool {
 // carry a per-user token, i.e. whether a missing `__metadata.upstream_auth`
 // is a failure rather than the expected shape.
 //
-// Two families qualify, for the same reason. Chat completions are the path
+// Three families qualify, for the same reason. Chat completions are the path
 // the `hive_jwt_forward` Function decorates. The agent-task lifecycle is the
 // path the chat container's own agent proxy decorates
-// (deploy/docker/owui-patches/hive_agent_proxy.py). On both, running under
-// the shim principal silently mis-attributes billing and audit, and on the
-// agent path it would additionally list and cancel the shim account's tasks
-// rather than the signed-in user's. Open WebUI's other upstream calls
-// (document-RAG embeddings via RAG_OPENAI_API_KEY, and text-to-speech) are
-// never decorated and authenticate as the shim account by design, so they
-// must keep passing through.
+// (deploy/docker/owui-patches/hive_agent_proxy.py). Embeddings are the path
+// deploy/docker/owui-patches/hive_embed_attribution.py decorates. On all
+// three, running under the shim principal silently mis-attributes billing and
+// audit, and on the agent path it would additionally list and cancel the shim
+// account's tasks rather than the signed-in user's.
+//
+// Embeddings joined the list for issue #1696. Open WebUI's Python retrieval
+// path is configured with RAG_OPENAI_API_BASE_URL and RAG_OPENAI_API_KEY, so
+// every web-search index, every document ingest and every retrieval query used
+// to reach this gateway as the shim account: real, metered spend from every
+// tenant at once, landing on a platform account, invisible in the customer's
+// own usage and out of reach of the per-tenant budget the cap applies to. A
+// shim-key embeddings call that carries no user token is now refused rather
+// than billed to the shim, which is the fail-closed half of that fix (D-034).
+//
+// Text-to-speech and speech-to-text are NOT on this list and still
+// authenticate as the shim account (AUDIO_TTS_OPENAI_API_KEY and
+// AUDIO_STT_OPENAI_API_KEY in deploy/docker/docker-compose.yml are both
+// OWUI_SHIM_KEY). Named here rather than left to be discovered: they are the
+// spend that still lands on a platform account after #1696, and they need the
+// same treatment. GET /v1/models carries no spend at all, so the shim key
+// remains legitimate there.
 //
 // The agent arm is a prefix rather than an exact list because the subtree
 // carries a task id: /v1/agent/tasks/{id} and /v1/agent/tasks/{id}/cancel.
 func requiresPerUserAuth(path string) bool {
 	return path == "/v1/chat/completions" ||
+		path == "/v1/embeddings" ||
 		path == "/v1/agent/tasks" ||
 		strings.HasPrefix(path, "/v1/agent/tasks/")
 }

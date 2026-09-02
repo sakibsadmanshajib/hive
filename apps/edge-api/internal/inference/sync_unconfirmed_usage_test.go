@@ -186,10 +186,10 @@ func TestResponseText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeResponsesSync: %v", err)
 	}
-	embeddingsNormalized, _, err := normalizeEmbeddings([]byte(
+	embeddingsNormalized, _, err := NormalizeEmbeddings([]byte(
 		`{"object":"list","data":[{"index":0,"embedding":[0.1,0.2]}]}`), "alias")
 	if err != nil {
-		t.Fatalf("normalizeEmbeddings: %v", err)
+		t.Fatalf("NormalizeEmbeddings: %v", err)
 	}
 
 	tests := []struct {
