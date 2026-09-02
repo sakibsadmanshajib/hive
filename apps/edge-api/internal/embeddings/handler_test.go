@@ -405,3 +405,36 @@ func TestResponseCarriesTheHiveAlias(t *testing.T) {
 		t.Fatalf("the provider name must never reach the customer: %s", rr.Body.String())
 	}
 }
+
+// TestTheResponseIsOnTheWireBeforeTheChargeIsSettled pins the ordering rather
+// than leaving it to a comment. Finalize is a synchronous control-plane call
+// bounded at the settlement timeout and retried once, so settling first puts up
+// to two of those in front of a customer who has received nothing. Open WebUI
+// embeds a batch at a time and issues several of these per search turn, so the
+// latency is multiplied rather than paid once.
+//
+// billingtest.OnFinalize fires as the charge request is handled, which is the
+// only point that can observe the two relative to each other; recording the
+// call afterwards cannot tell which happened first.
+func TestTheResponseIsOnTheWireBeforeTheChargeIsSettled(t *testing.T) {
+	rr := httptest.NewRecorder()
+	bodyLenAtCharge := -1
+	acct := &billingtest.Accounting{OnFinalize: func() { bodyLenAtCharge = rr.Body.Len() }}
+	h := embeddings.NewHandler(embeddings.Deps{
+		SelectRoute: func(context.Context, string) (inference.SelectRouteResult, error) {
+			return pricedEmbeddingRoute(), nil
+		},
+		Dispatch:   upstreamEmbeddings(1000),
+		Accounting: acct.Client(t),
+		Billing:    billableTenant(uuid.New()),
+	})
+
+	h.ServeHTTP(rr, searchRequest(t, uuid.New()))
+
+	if len(acct.Finalized()) != 1 {
+		t.Fatalf("expected the charge to settle, got %d", len(acct.Finalized()))
+	}
+	if bodyLenAtCharge <= 0 {
+		t.Fatalf("the charge settled before the response was written (body length %d at charge time)", bodyLenAtCharge)
+	}
+}

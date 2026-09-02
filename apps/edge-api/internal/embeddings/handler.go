@@ -219,34 +219,48 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Settlement. An embeddings response has no completion side, so the whole
-	// charge is the prompt tokens the upstream reported at the alias's own
-	// catalog rate. No usage block means nothing measured: the hold is handed
-	// back rather than charged at its own size, which is the same verdict the
-	// API-key path reaches through settlementCredits for this endpoint. LiteLLM
-	// reports usage on every embeddings response, so this is the honest-failure
-	// branch rather than a routine one, and it is logged for that reason.
+	writeJSON(w, normalized)
+
+	// Everything below runs AFTER the response is on the wire, and that
+	// ordering is load bearing rather than incidental: Finalize is a
+	// synchronous control-plane call bounded at the settlement timeout and
+	// retried once, so settling first would put up to two of those in front of
+	// a customer who has received nothing. internal/rag states the same reason
+	// at the identical point, and a search embeds a batch at a time, so this is
+	// on the hot path several times per turn.
+	//
+	// A failed write does not cancel the charge: the embedding was produced and
+	// Hive has already paid for it, so handing the hold back on a broken write
+	// would be a caller-controlled free serve (D-055).
+	if settle == nil {
+		// The Enterprise posture (D-027): no prepaid relationship, nothing to
+		// settle. A recorded verdict rather than silence.
+		settled = true
+		return
+	}
+
+	// An embeddings response has no completion side, so the whole charge is the
+	// prompt tokens the upstream reported at the alias's own catalog rate. No
+	// usage block means nothing measured: the hold is handed back rather than
+	// charged at its own size, which is the same verdict the API-key path
+	// reaches through settlementCredits for this endpoint. LiteLLM reports usage
+	// on every embeddings response, so this is the honest-failure branch rather
+	// than a routine one, and it is logged for that reason.
 	if usage == nil || usage.PromptTokens <= 0 {
 		releaseReason = "unmeasured_usage"
 		slog.Warn(surface+" upstream reported no usable usage block, releasing the hold rather than charging an estimate",
 			"request_id", requestID, "alias", req.Model)
-		writeJSON(w, normalized)
 		return
 	}
-	credits := inference.CreditsForTokens(route, usage.PromptTokens, 0, 0, 0)
-	if settle == nil {
-		// The Enterprise posture (D-027): no prepaid relationship, nothing to
-		// settle. Recorded as a verdict rather than silence.
+	if settle.Finalize(inference.CreditsForTokens(route, usage.PromptTokens, 0, 0, 0),
+		true, usage.PromptTokens, 0, 0, 0) {
 		settled = true
-		writeJSON(w, normalized)
 		return
 	}
-	if settle.Finalize(credits, true, usage.PromptTokens, 0, 0, 0) {
-		settled = true
-	} else {
-		releaseReason = "finalize_failed"
-	}
-	writeJSON(w, normalized)
+	// The charge did not land. Leaving settled false hands the reservation to
+	// the deferred release, so it still reaches a terminal state exactly once
+	// rather than stranding the hold behind a lost charge (#616).
+	releaseReason = "finalize_failed"
 }
 
 func writeJSON(w http.ResponseWriter, body []byte) {

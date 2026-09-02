@@ -1,0 +1,24 @@
+Issue #1696 chat-container half, captured 2026-09-02T16:17:12Z
+
+The patch is applied to /app/backend/open_webui/retrieval/utils.py INSIDE the
+pinned image (ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6...), not to
+the vendored copy, because the chat image takes its backend from that image.
+The function under test is then imported and called for real; only Open WebUI's
+own OAuth session resolver and the upstream endpoint are stood in for.
+
+marker count in the patched module:
+1
+
+--- call 1: a signed-in user ---
+
+Authorization         : Bearer hk_REDACTED_PROOF_FIXTURE
+X-Hive-Upstream-Auth  : Bearer SEARCHING-USER-ACCESS-TOKEN
+--- call 2: a user with no resolvable session ---
+refused: hive (#1696): no signed-in user credential for this embedding call
+request reached the upstream: False
+ERROR [open_webui.utils.hive_embed_attribution] hive (#1696): no upstream credential for user user-no-session, refusing to embed under the shared shim key; this spend would otherwise land on a platform account instead of on the customer
+
+Reading: the shim key stays on Authorization, which is what gates the carrier
+at edge-api, and the searching user's own token rides on X-Hive-Upstream-Auth.
+A user with no resolvable session is refused before the request is made, so
+nothing goes out under the shared key.
