@@ -32,7 +32,15 @@ not need this skill.
    `docvlm_test.go` for a worked example); replicate it byte-for-byte when
    constructing the request by hand (curl/python) inside the sandbox.
 3. POST that request to Hive's OpenAI-compatible chat completions endpoint
-   with `response_format: {"type": "json_object"}`.
+   with `response_format: {"type": "json_object"}`. That call needs a gateway
+   base URL and a credential, and this sandbox is given neither in its shell
+   environment today: the model credential reaches the agent runtime over the
+   control channel, not the shell, and all egress is bound to the tenant's
+   allowlist. So check the environment first, and if there is no usable
+   endpoint and key, say the vision route is unavailable and fall back to the
+   ordinary text tools (`pdftotext`, `pdftoppm` plus whatever the document
+   already exposes as text) rather than retrying a call that cannot
+   authenticate.
 4. The model returns a single JSON object:
    `{"pages":[{"page":0,"elements":[{"type":"heading|paragraph|table|figure|signature_block|page_number","text":"..."}]}]}`.
    Parse it and relay the structured result (or a summary built from it) to
