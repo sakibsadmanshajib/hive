@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,19 +23,52 @@ var ErrThrottled = errors.New("mailer: send cap reached")
 // workspaces onboarding at once or a caller with no cap of its own, and
 // stopping is right in both cases.
 //
-// The day window is not redundant with the hour: per-caller caps aggregate, so
-// four inviters each comfortably inside 30 an hour reach 120, and an hourly
-// ceiling alone would permit that rate all day. A relay account's allowance is
-// quoted per day, so the day is the window that has to hold.
+// The day window is the one that decides whether the relay survives. Per-caller
+// caps aggregate, so an hourly ceiling alone permits its own rate every hour:
+// 100 an hour is 2400 a day. Relay accounts meter by the day, not the hour
+// (Brevo's free tier is 300 a day and its entry paid tier is near 660), and
+// these credentials are shared with GoTrue, which adds its own auth mail from
+// the same sender. So the daily default is 250: it sits under the smallest
+// allowance this deployment could be on, which makes it safe on every plan
+// without knowing which one, and leaves the rest of that allowance for the
+// account verification, one-time codes, invoices and balance alerts that fail
+// with the relay if it is exhausted.
 //
-// Constants rather than environment variables: an abuse ceiling with a runtime
-// knob is an abuse ceiling with a runtime off switch.
+// Both are environment variables rather than constants precisely because the
+// safe default is the pessimistic one: raise them once the plan's real daily
+// allowance is confirmed.
 const (
-	RelayCapPerWindow = 100
+	DefaultRelayCapPerHour = 100
+	DefaultRelayCapPerDay  = 250
+
 	RelayCapWindow    = time.Hour
-	RelayCapPerDay    = 300
 	RelayCapDayWindow = 24 * time.Hour
 )
+
+// RelayCaps is how much mail this process may emit in total.
+type RelayCaps struct {
+	PerHour int
+	PerDay  int
+}
+
+// RelayCapsFromEnv reads HIVE_MAIL_RELAY_CAP_PER_HOUR and
+// HIVE_MAIL_RELAY_CAP_PER_DAY. An unset, unparseable or non-positive value
+// keeps the default rather than disabling the ceiling: this is the backstop
+// that protects a shared relay account, so a typo must not switch it off.
+func RelayCapsFromEnv() RelayCaps {
+	return RelayCaps{
+		PerHour: capFromEnv("HIVE_MAIL_RELAY_CAP_PER_HOUR", DefaultRelayCapPerHour),
+		PerDay:  capFromEnv("HIVE_MAIL_RELAY_CAP_PER_DAY", DefaultRelayCapPerDay),
+	}
+}
+
+func capFromEnv(name string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
 
 // AllowFunc records one attempt against subject and reports whether it is
 // within quota. signupguard.RateLimiter.Allow satisfies it; a nil AllowFunc
@@ -53,30 +90,42 @@ type AllowFunc func(ctx context.Context, subject string) error
 // backstop, not the primary control: a deployment that hits it has either grown
 // past its configuration or is being abused through a path with no cap of its
 // own, and both are worth stopping.
+// RelayCeiling is one window of the ceiling. Window labels it in the log line
+// an operator reads when a send is refused.
+type RelayCeiling struct {
+	Window string
+	Allow  AllowFunc
+}
+
 type ThrottledSender struct {
-	inner Sender
-	allow []AllowFunc
+	inner    Sender
+	ceilings []RelayCeiling
 }
 
 // NewThrottledSender returns inner wrapped in the transport-wide ceiling. Each
-// allow is one window over the same subject, and every one of them has to admit
-// the send. No allow (or only nil ones) yields a transparent pass-through,
-// which is what an unlimited transport was before this existed.
-func NewThrottledSender(inner Sender, allow ...AllowFunc) *ThrottledSender {
-	return &ThrottledSender{inner: inner, allow: allow}
+// ceiling is one window over the same subject, and every one of them has to
+// admit the send. No ceilings (or only empty ones) yields a transparent
+// pass-through, which is what an unlimited transport was before this existed.
+func NewThrottledSender(inner Sender, ceilings ...RelayCeiling) *ThrottledSender {
+	return &ThrottledSender{inner: inner, ceilings: ceilings}
 }
 
 // Send refuses before dialling anything when the ceiling is reached.
 func (t *ThrottledSender) Send(ctx context.Context, msg Message) error {
-	for _, allow := range t.allow {
-		if allow == nil {
+	for _, ceiling := range t.ceilings {
+		if ceiling.Allow == nil {
 			continue
 		}
 		// One subject, because the ceiling counts this process's whole output.
 		// A per-recipient or per-caller key belongs to whoever knows those
 		// values, and the invitation path already carries both.
-		if err := allow(ctx, "relay"); err != nil {
-			return fmt.Errorf("%w: %v", ErrThrottled, err)
+		if err := ceiling.Allow(ctx, "relay"); err != nil {
+			// Loud, because this is exhaustion of a resource every other
+			// product email shares. Whatever is emitting this volume is also
+			// about to break account verification and one-time codes.
+			log.Printf("WARN mailer: relay send cap reached (%s window), message not sent: %v",
+				ceiling.Window, err)
+			return fmt.Errorf("%w (%s window): %v", ErrThrottled, ceiling.Window, err)
 		}
 	}
 	return t.inner.Send(ctx, msg)

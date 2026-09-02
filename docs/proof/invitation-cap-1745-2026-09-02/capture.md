@@ -61,13 +61,17 @@ change having broken the form.
 ## 02 after, this branch, the cap refuses
 
 The console answers **HTTP 429** and renders `invitation limit reached, try
-again in 5 minutes` in the failure alert. The wait is the control-plane's own
-text, passed through rather than replaced with a generic message, and the
-success notice from 01 is gone (asserted: zero `role="status"` elements).
+again later` in the failure alert, which is the control-plane's own text passed
+through rather than replaced with a generic message. The success notice from 01
+is gone (asserted: zero `role="status"` elements).
 
-The message names no dimension and no address. Which cap tripped is not
-disclosed, because a per-address refusal would otherwise tell the caller that
-somebody recently invited that address.
+The message names no dimension and no address, and neither does the wait. The
+first version of this branch reported the real time to the window rollover,
+which review found to be a fingerprint of which cap tripped: anything at or
+under five minutes could only be the per-address cooldown, so one invitation
+from a fresh account would have reported that somebody in another workspace
+invited that address moments ago. Every refusal now carries the same constant
+`Retry-After` and the same words.
 
 ## 03 after, this branch, the counter is unreachable
 

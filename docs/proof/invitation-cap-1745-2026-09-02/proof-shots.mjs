@@ -188,16 +188,16 @@ if (MODE === "after") {
   await shot("01-invitation-sent");
   note("");
 
-  note("2. The cap refuses, and the page says how long it lasts");
+  note("2. The cap refuses, in the same words whichever dimension tripped");
   await invite("second@example.com");
   claim("POST /api/console/members status", lastInviteStatus, 429);
   claim(
     "alert text",
     await alertText(),
-    "invitation limit reached, try again in 5 minutes",
+    "invitation limit reached, try again later",
   );
   claim("success notice cleared", await page.locator('[role="status"]').count(), 0);
-  await shot("02-cap-refusal-with-wait");
+  await shot("02-cap-refusal");
   note("");
 
   note("3. The counter is unreachable, which is not the caller's quota");

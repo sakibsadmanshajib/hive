@@ -68,7 +68,16 @@ export async function POST(request: Request): Promise<Response> {
   } catch (err) {
     const message = inviteErrorMessage(err);
     if (wantsJson) {
-      return NextResponse.json({ error: message }, { status: inviteErrorStatus(err) });
+      // Retry-After travels with the status. Without it a programmatic caller
+      // has only the English message to guess a wait from.
+      const headers =
+        err instanceof ControlPlaneError && err.retryAfter !== null
+          ? { "Retry-After": err.retryAfter }
+          : undefined;
+      return NextResponse.json(
+        { error: message },
+        { status: inviteErrorStatus(err), headers },
+      );
     }
     return redirectToMembers(request, { error: message });
   }
@@ -161,10 +170,9 @@ function inviteErrorMessage(err: unknown): string {
       return "That person is already a member or has a pending invite.";
     case 429:
       // The invitation send cap (issue #1745). The control-plane's own message
-      // names how long the refusal lasts, and it is server-authored text with
-      // nothing upstream in it, so it is passed through: replacing a specific
-      // answer with "please try again" would tell the user to do the one thing
-      // that is guaranteed to fail.
+      // is server-authored text with nothing upstream in it, so it is passed
+      // through: collapsing it into "please try again" would tell the user to
+      // do the one thing that is guaranteed to fail right now.
       return err.message || "Invitation limit reached. Please try again later.";
     case 503:
       return "Invitations are temporarily unavailable. Please try again shortly.";

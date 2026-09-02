@@ -442,23 +442,27 @@ func main() {
 				// counted across every future caller of this sender. Two
 				// windows, because per-caller caps aggregate: an hourly ceiling
 				// alone permits that same rate every hour of the day.
-				relayCeiling := func(limit int, window time.Duration, subject string) mailer.AllowFunc {
-					return signupguard.NewRateLimiter(
-						signupguard.NewRedisIncrementer(redisClient),
-						signupguard.RateLimitConfig{
-							Limit:     limit,
-							Window:    window,
-							Namespace: "mail",
-							Subject:   subject,
-						},
-					).Allow
+				relayCaps := mailer.RelayCapsFromEnv()
+				relayCeiling := func(label string, limit int, window time.Duration, subject string) mailer.RelayCeiling {
+					return mailer.RelayCeiling{
+						Window: label,
+						Allow: signupguard.NewRateLimiter(
+							signupguard.NewRedisIncrementer(redisClient),
+							signupguard.RateLimitConfig{
+								Limit:     limit,
+								Window:    window,
+								Namespace: "mail",
+								Subject:   subject,
+							},
+						).Allow,
+					}
 				}
 				accountsSvc = accountsSvc.
 					WithInvitationMailer(accounts.NewInvitationMailer(
 						mailer.NewThrottledSender(
 							mailer.NewSMTPSender(mailCfg),
-							relayCeiling(mailer.RelayCapPerWindow, mailer.RelayCapWindow, "relay"),
-							relayCeiling(mailer.RelayCapPerDay, mailer.RelayCapDayWindow, "relay-day"),
+							relayCeiling("hour", relayCaps.PerHour, mailer.RelayCapWindow, "relay"),
+							relayCeiling("day", relayCaps.PerDay, mailer.RelayCapDayWindow, "relay-day"),
 						),
 						consoleURL,
 					)).
@@ -479,7 +483,7 @@ func main() {
 				log.Printf("invitation mailer ready (relay %s, sender %s, cap %d/inviter/hour, %d/workspace/day, %d/relay/hour, %d/relay/day)",
 					mailCfg.Host, mailCfg.FromAddress,
 					accounts.InviteCapPerInviter, accounts.InviteCapPerTenant,
-					mailer.RelayCapPerWindow, mailer.RelayCapPerDay)
+					relayCaps.PerHour, relayCaps.PerDay)
 			} else {
 				log.Println("WARN invitation mailer disabled: no public console origin configured " +
 					"(set WEB_CONSOLE_PUBLIC_URL or CONSOLE_APP_URL); invitations are issued with a copyable link instead")

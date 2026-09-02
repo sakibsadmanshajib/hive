@@ -113,7 +113,7 @@ function invitationResponse() {
     return [
       429,
       {
-        error: "invitation limit reached, try again in 5 minutes",
+        error: "invitation limit reached, try again later",
         code: "invitation_rate_limited",
       },
       { "retry-after": "300" },
@@ -126,7 +126,7 @@ function invitationResponse() {
         error: "invitations are temporarily unavailable, please try again shortly",
         code: "invitation_unavailable",
       },
-      { "retry-after": "3600" },
+      { "retry-after": "30" },
     ];
   }
   return [

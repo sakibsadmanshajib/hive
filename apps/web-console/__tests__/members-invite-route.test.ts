@@ -19,10 +19,19 @@ vi.mock("../lib/control-plane/client", () => ({
   // ControlPlaneError is referenced by the route for status mapping.
   ControlPlaneError: class ControlPlaneError extends Error {
     status: number;
-    constructor(status: number, message: string) {
+    code: string | null;
+    retryAfter: string | null;
+    constructor(
+      status: number,
+      message: string,
+      code: string | null = null,
+      retryAfter: string | null = null,
+    ) {
       super(message);
       this.name = "ControlPlaneError";
       this.status = status;
+      this.code = code;
+      this.retryAfter = retryAfter;
     }
   },
 }));

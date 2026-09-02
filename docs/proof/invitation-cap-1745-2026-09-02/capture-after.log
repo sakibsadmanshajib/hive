@@ -16,11 +16,11 @@ two refusal bodies the control-plane handler produces.
   outcome claims a delivered email: true
   screenshot: 01-invitation-sent.png
 
-2. The cap refuses, and the page says how long it lasts
+2. The cap refuses, in the same words whichever dimension tripped
   POST /api/console/members status: 429
-  alert text: "invitation limit reached, try again in 5 minutes"
+  alert text: "invitation limit reached, try again later"
   success notice cleared: 0
-  screenshot: 02-cap-refusal-with-wait.png
+  screenshot: 02-cap-refusal.png
 
 3. The counter is unreachable, which is not the caller's quota
   POST /api/console/members status: 503

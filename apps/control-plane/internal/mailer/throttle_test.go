@@ -24,13 +24,16 @@ func (s *countingSender) Send(context.Context, mailer.Message) error {
 func TestThrottledSenderRefusesWithoutReachingTheTransport(t *testing.T) {
 	inner := &countingSender{}
 	budget := 2
-	sender := mailer.NewThrottledSender(inner, func(context.Context, string) error {
-		if budget <= 0 {
-			return errors.New("over quota")
-		}
-		budget--
-		return nil
-	}, nil)
+	sender := mailer.NewThrottledSender(inner, mailer.RelayCeiling{
+		Window: "hour",
+		Allow: func(context.Context, string) error {
+			if budget <= 0 {
+				return errors.New("over quota")
+			}
+			budget--
+			return nil
+		},
+	})
 
 	msg := mailer.Message{To: "someone@example.com", Subject: "hi", Text: "hi"}
 	for i := 0; i < 2; i++ {
@@ -53,8 +56,11 @@ func TestThrottledSenderRefusesWithoutReachingTheTransport(t *testing.T) {
 // answers first and its verdict would stand for both.
 func TestThrottledSenderConsultsEveryWindow(t *testing.T) {
 	inner := &countingSender{}
-	hourly := func(context.Context, string) error { return nil }
-	daily := func(context.Context, string) error { return errors.New("day quota exhausted") }
+	hourly := mailer.RelayCeiling{Window: "hour", Allow: func(context.Context, string) error { return nil }}
+	daily := mailer.RelayCeiling{
+		Window: "day",
+		Allow:  func(context.Context, string) error { return errors.New("day quota exhausted") },
+	}
 	sender := mailer.NewThrottledSender(inner, hourly, daily)
 
 	err := sender.Send(context.Background(), mailer.Message{To: "a@example.com", Text: "x"})
@@ -66,8 +72,24 @@ func TestThrottledSenderConsultsEveryWindow(t *testing.T) {
 	}
 }
 
-// A nil allow func is a transport with no ceiling, which is what every existing
-// construction of a plain sender is.
+// The day window is the one that decides whether a shared relay account
+// survives, so it must have a default even when nothing sets it.
+func TestRelayCapsFromEnvDefaultsToTheDailySafeNumber(t *testing.T) {
+	t.Setenv("HIVE_MAIL_RELAY_CAP_PER_HOUR", "")
+	t.Setenv("HIVE_MAIL_RELAY_CAP_PER_DAY", "not a number")
+	caps := mailer.RelayCapsFromEnv()
+	if caps.PerHour != mailer.DefaultRelayCapPerHour || caps.PerDay != mailer.DefaultRelayCapPerDay {
+		t.Fatalf("caps = %+v, want the defaults (%d/hour, %d/day)",
+			caps, mailer.DefaultRelayCapPerHour, mailer.DefaultRelayCapPerDay)
+	}
+	t.Setenv("HIVE_MAIL_RELAY_CAP_PER_DAY", "600")
+	if caps := mailer.RelayCapsFromEnv(); caps.PerDay != 600 {
+		t.Fatalf("PerDay = %d, want the configured 600", caps.PerDay)
+	}
+}
+
+// A ceiling with no limiter is a transport with no ceiling, which is what every
+// existing construction of a plain sender is.
 func TestThrottledSenderWithoutLimiterIsATransparentPassThrough(t *testing.T) {
 	inner := &countingSender{}
 	sender := mailer.NewThrottledSender(inner)

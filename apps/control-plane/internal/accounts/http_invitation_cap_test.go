@@ -64,6 +64,46 @@ func TestInvitationHandler_CapAnswers429WithRetryAfterAndNoDimension(t *testing.
 			t.Errorf("the refusal leaks %q: %s", leak, rr.Body.String())
 		}
 	}
+	// The words were never the leak. A wait time derived from the window that
+	// refused identifies the dimension on its own: anything at or under five
+	// minutes could only be the per-address cooldown, which would report that
+	// somebody in another workspace invited that address moments ago.
+	inviterRefusal := refuseWith(t, accounts.InvitationLimits{
+		Inviter: limit(newMemIncrementer(), 1, time.Hour, "user"),
+	})
+	if got, want := inviterRefusal.Header().Get("Retry-After"), rr.Header().Get("Retry-After"); got != want {
+		t.Errorf("Retry-After is %q for the inviter cap and %q for the recipient cap, so the value names the dimension", got, want)
+	}
+	var inviterBody map[string]string
+	_ = json.Unmarshal(inviterRefusal.Body.Bytes(), &inviterBody)
+	if inviterBody["error"] != body["error"] {
+		t.Errorf("the message differs by dimension: %q vs %q", inviterBody["error"], body["error"])
+	}
+}
+
+// refuseWith invites twice against limits that admit one, and returns the
+// refused second response.
+func refuseWith(t *testing.T, limits accounts.InvitationLimits) *httptest.ResponseRecorder {
+	t.Helper()
+	repo, accountID, viewer := inviteFixture(t)
+	h := accounts.NewHandler(accounts.NewService(repo).WithInvitationLimits(limits))
+	send := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/invitations",
+			strings.NewReader(`{"email":"invitee@example.com"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Hive-Account-ID", accountID.String())
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req.WithContext(auth.WithViewer(context.Background(), viewer)))
+		return rr
+	}
+	if first := send(); first.Code != http.StatusCreated {
+		t.Fatalf("first invitation: got %d, want 201 (%s)", first.Code, first.Body.String())
+	}
+	rr := send()
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("got %d, want 429 (%s)", rr.Code, rr.Body.String())
+	}
+	return rr
 }
 
 func TestInvitationHandler_CounterOutageAnswers503(t *testing.T) {

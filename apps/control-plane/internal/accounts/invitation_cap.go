@@ -38,13 +38,25 @@ import (
 // them is a ceiling far above real product usage, none of them is deployment
 // specific, and an abuse control with a runtime knob is an abuse control with a
 // runtime off switch.
+//
+// Read each number as a rate, not as a hard maximum over any interval you
+// choose. signupguard.RateLimiter buckets by now/window, a fixed window rather
+// than a sliding one, so a caller who spends a full budget at the end of one
+// bucket and another at the start of the next gets up to twice the stated
+// number across that boundary. Inherited behaviour, tolerable on ceilings with
+// this much headroom, and worth knowing before sizing these against a relay
+// allowance.
 const (
 	// A department onboarding burst is the legitimate shape this has to
 	// survive: an administrator adding a team in one sitting. Thirty in an
 	// hour clears that, and a genuinely larger rollout continues into the next
-	// hour rather than failing. It also matches the ceiling this deployment
-	// already lives with on auth mail (GOTRUE_RATE_LIMIT_EMAIL_SENT=30), so no
-	// single inviter can out-send the whole authentication system.
+	// hour rather than failing.
+	//
+	// It is not related to GOTRUE_RATE_LIMIT_EMAIL_SENT. Invitation mail goes
+	// straight from this service to the relay and never touches GoTrue, so the
+	// two counters are independent and only happen to share a number. What the
+	// two paths do share is the relay account itself, which is what the
+	// transport ceiling in mailer/throttle.go bounds.
 	InviteCapPerInviter       = 30
 	InviteCapPerInviterWindow = time.Hour
 
@@ -168,7 +180,6 @@ func (l InvitationLimits) audit(ctx context.Context, accountID uuid.UUID, viewer
 		reason = "counter_unavailable"
 	}
 	l.Audit(ctx, AuditInvitationRateLimited, map[string]string{
-		"limit":      strings.TrimSuffix(capErr.Dimension, "_burst"),
 		"dimension":  capErr.Dimension,
 		"reason":     reason,
 		"account_id": accountID.String(),
@@ -179,9 +190,49 @@ func (l InvitationLimits) audit(ctx context.Context, accountID uuid.UUID, viewer
 // hashRecipient is the subject for the per-address dimensions. Hashed because
 // the counter is a shared cache: an address written into a Redis key is a list
 // of who this deployment has been asked to mail, sitting in a store nothing
-// else about invitations uses. Lowercased first so casing cannot mint a fresh
-// counter for the same mailbox.
+// else about invitations uses. Not a password hash, whatever a scanner makes of
+// SHA-256 over an address: it is a key for a counter, and the input is a value
+// the caller supplied and already knows.
+//
+// This normalises the counter key only. What is stored and what is delivered
+// stay exactly as the inviter typed them, so the address on the invitation row
+// is still the address the recipient sees.
 func hashRecipient(email string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	sum := sha256.Sum256([]byte(normalizeMailbox(email)))
 	return hex.EncodeToString(sum[:16])
+}
+
+// dotFoldingDomains ignore dots in the local part, so every dotting of a name
+// is one mailbox. Provider specific and deliberately a short list: dots are
+// significant almost everywhere else, and folding them there would let one
+// person's cooldown block a different, real mailbox.
+var dotFoldingDomains = map[string]bool{
+	"gmail.com":      true,
+	"googlemail.com": true,
+}
+
+// normalizeMailbox reduces an address to the mailbox it actually reaches, so
+// the per-address ceiling counts people rather than spellings.
+//
+// Without this the ceiling is decorative: victim+1@ through victim+200@ are two
+// hundred distinct counters and one human inbox, which is exactly the volume
+// this cap exists to keep off one person.
+func normalizeMailbox(email string) string {
+	address := strings.ToLower(strings.TrimSpace(email))
+	at := strings.LastIndexByte(address, '@')
+	if at < 0 {
+		return address
+	}
+	local, domain := address[:at], address[at+1:]
+	// A trailing dot is the same domain, and most relays deliver it.
+	domain = strings.TrimSuffix(domain, ".")
+	// Sub-addressing: everything from the first plus to the at sign is a label
+	// the recipient's provider strips before delivery.
+	if plus := strings.IndexByte(local, '+'); plus >= 0 {
+		local = local[:plus]
+	}
+	if dotFoldingDomains[domain] {
+		local = strings.ReplaceAll(local, ".", "")
+	}
+	return local + "@" + domain
 }

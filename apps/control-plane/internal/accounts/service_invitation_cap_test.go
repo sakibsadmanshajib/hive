@@ -227,8 +227,46 @@ func TestCreateInvitation_CapRefusalIsAudited(t *testing.T) {
 			t.Errorf("audit detail %q carries the invited address", key)
 		}
 	}
-	if details[0]["limit"] != "inviter" {
-		t.Errorf("audit detail limit = %q, want %q", details[0]["limit"], "inviter")
+	if details[0]["dimension"] != "inviter" {
+		t.Errorf("audit detail dimension = %q, want %q", details[0]["dimension"], "inviter")
+	}
+}
+
+// The per-address ceiling counts mailboxes, not spellings. Sub-addressing is
+// the evasion that makes it decorative otherwise: one attacker turns three a
+// day into whatever the inviter cap allows, all of it landing in one inbox.
+func TestCreateInvitation_RecipientCapCountsTheMailboxNotTheSpelling(t *testing.T) {
+	for _, tc := range []struct{ name, first, second string }{
+		{"plus tagging", "victim@example.com", "victim+42@example.com"},
+		{"gmail dots", "victim@gmail.com", "v.i.c.t.i.m@gmail.com"},
+		{"trailing dot on the domain", "victim@example.com", "victim@example.com."},
+		{"casing", "victim@example.com", "VICTIM@example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, accountID, viewer := inviteFixture(t)
+			sender := &recordingMailer{}
+			backend := newMemIncrementer()
+			svc := accounts.NewService(repo).
+				WithInvitationMailer(sender).
+				WithInvitationLimits(accounts.InvitationLimits{
+					RecipientBurst: limit(backend, 1, 5*time.Minute, "recipient"),
+				})
+
+			if _, err := svc.CreateInvitation(context.Background(), accountID, viewer, tc.first, accounts.RoleMember); err != nil {
+				t.Fatalf("first invitation: %v", err)
+			}
+			if _, err := svc.CreateInvitation(context.Background(), accountID, viewer, tc.second, accounts.RoleMember); err == nil {
+				t.Fatalf("%q evaded the cooldown on %q: same inbox, fresh counter", tc.second, tc.first)
+			}
+			if len(sender.sent) != 1 {
+				t.Fatalf("transport ran %d times, want 1", len(sender.sent))
+			}
+			// Dots are significant on most providers, so folding them
+			// everywhere would let one person's cooldown block a stranger.
+			if _, err := svc.CreateInvitation(context.Background(), accountID, viewer, "v.i.c.t.i.m@example.com", accounts.RoleMember); err != nil {
+				t.Fatalf("a dotted local part on a non-folding domain was treated as the same mailbox: %v", err)
+			}
+		})
 	}
 }
 
