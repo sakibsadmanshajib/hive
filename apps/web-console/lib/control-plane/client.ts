@@ -2879,6 +2879,10 @@ export interface InvoiceLineItem {
   // BDT subunit decimal string. Wire shape is JSON string (Go `,string` tag)
   // so callers parse with BigInt and never round at 2^53.
   bdt_subunits: string;
+  // Hive credit quantity as a decimal string, or null when the row never
+  // recorded one. Different unit from bdt_subunits, never derived from it
+  // (issue #1681).
+  credits: string | null;
 }
 
 export interface InvoiceRecord {
@@ -2888,6 +2892,8 @@ export interface InvoiceRecord {
   period_end: string;
   // BDT subunit decimal string — see InvoiceLineItem.bdt_subunits comment.
   total_bdt_subunits: string;
+  // Hive credit quantity consumed in the period — see InvoiceLineItem.credits.
+  total_credits: string | null;
   line_items: InvoiceLineItem[];
   generated_at: string;
 }
@@ -2990,7 +2996,24 @@ function decodeInvoiceLineItem(value: JsonValue): InvoiceLineItem | null {
     model_id: modelId,
     request_count: requestCount,
     bdt_subunits: bdtSubunits,
+    credits: readCreditQuantity(value, "credits"),
   };
+}
+
+/**
+ * Read a credit quantity that the server may legitimately send as null.
+ *
+ * Kept as a decimal string rather than a number: the console formats it with
+ * BigInt, and narrowing here would round a money figure before any formatter
+ * could protect it. A numeric field is tolerated for the same reason the
+ * subunit reader tolerates one, but null and absence both stay null, so an
+ * unrecorded quantity is never presented as a measured zero.
+ */
+function readCreditQuantity(source: JsonObject, key: string): string | null {
+  const raw = readStringField(source, key);
+  if (raw !== null) return raw;
+  const numeric = readNumberField(source, key);
+  return numeric !== null ? String(numeric) : null;
 }
 
 function decodeInvoiceRecord(value: JsonValue): InvoiceRecord | null {
@@ -3030,6 +3053,7 @@ function decodeInvoiceRecord(value: JsonValue): InvoiceRecord | null {
     period_start: periodStart,
     period_end: periodEnd,
     total_bdt_subunits: total,
+    total_credits: readCreditQuantity(value, "total_credits"),
     line_items: items,
     generated_at: generatedAt,
   };

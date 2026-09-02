@@ -49,6 +49,23 @@ func NewGofpdfRenderer() PDFRenderer {
 // stream, which contains opaque PDF object syntax that is invisible to
 // readers).
 func (r *gofpdfRenderer) Render(inv Invoice, workspaceName string) ([]byte, error) {
+	out, _, err := renderInvoice(inv, workspaceName)
+	return out, err
+}
+
+// renderInvoiceText returns only the customer-visible text renderInvoice draws.
+//
+// A test seam, and a narrow one: it calls the same function Render does, so a
+// figure asserted here is the figure on the page rather than a second
+// formatting path that could drift from it.
+func renderInvoiceText(inv Invoice, workspaceName string) (string, error) {
+	_, text, err := renderInvoice(inv, workspaceName)
+	return text, err
+}
+
+// renderInvoice draws the document and returns both the PDF bytes and the
+// concatenation of every customer-visible string it drew.
+func renderInvoice(inv Invoice, workspaceName string) ([]byte, string, error) {
 	pdf := gofpdf.New("P", "mm", "Letter", "")
 	pdf.SetMargins(15, 18, 15)
 	pdf.AddPage()
@@ -103,23 +120,28 @@ func (r *gofpdfRenderer) Render(inv Invoice, workspaceName string) ([]byte, erro
 	// ---------- Line items ----------
 	pdf.SetFont("Helvetica", "B", 11)
 	pdf.SetFillColor(230, 230, 230)
-	pdf.CellFormat(95, 8, "Model", "1", 0, "L", true, 0, "")
+	pdf.CellFormat(62, 8, "Model", "1", 0, "L", true, 0, "")
 	emit("Model")
-	pdf.CellFormat(35, 8, "Requests", "1", 0, "R", true, 0, "")
+	pdf.CellFormat(26, 8, "Requests", "1", 0, "R", true, 0, "")
 	emit("Requests")
-	pdf.CellFormat(50, 8, "Amount (BDT)", "1", 1, "R", true, 0, "")
-	emit("Amount (BDT)")
+	pdf.CellFormat(52, 8, "Hive credits", "1", 0, "R", true, 0, "")
+	emit("Hive credits")
+	pdf.CellFormat(40, 8, "Charged (BDT)", "1", 1, "R", true, 0, "")
+	emit("Charged (BDT)")
 
 	pdf.SetFont("Helvetica", "", 10)
 	for _, item := range inv.LineItems {
 		modelLabel := sanitize(item.ModelID)
 		amt := FormatBDT(item.BDTSubunits)
+		credits := FormatCredits(item.Credits)
 		reqCount := fmt.Sprintf("%d", item.RequestCount)
-		pdf.CellFormat(95, 7, modelLabel, "1", 0, "L", false, 0, "")
-		pdf.CellFormat(35, 7, reqCount, "1", 0, "R", false, 0, "")
-		pdf.CellFormat(50, 7, amt, "1", 1, "R", false, 0, "")
+		pdf.CellFormat(62, 7, modelLabel, "1", 0, "L", false, 0, "")
+		pdf.CellFormat(26, 7, reqCount, "1", 0, "R", false, 0, "")
+		pdf.CellFormat(52, 7, credits, "1", 0, "R", false, 0, "")
+		pdf.CellFormat(40, 7, amt, "1", 1, "R", false, 0, "")
 		emit(modelLabel)
 		emit(reqCount)
+		emit(credits)
 		emit(amt)
 	}
 	if len(inv.LineItems) == 0 {
@@ -130,23 +152,39 @@ func (r *gofpdfRenderer) Render(inv Invoice, workspaceName string) ([]byte, erro
 
 	// ---------- Total ----------
 	pdf.SetFont("Helvetica", "B", 11)
-	pdf.CellFormat(130, 9, "Total", "1", 0, "R", false, 0, "")
+	pdf.CellFormat(88, 9, "Total", "1", 0, "R", false, 0, "")
 	emit("Total")
+	totalCredits := FormatCredits(inv.TotalCredits)
+	pdf.CellFormat(52, 9, totalCredits, "1", 0, "R", false, 0, "")
+	emit(totalCredits)
 	totalLabel := FormatBDT(inv.TotalBDTSubunits)
-	pdf.CellFormat(50, 9, totalLabel, "1", 1, "R", false, 0, "")
+	pdf.CellFormat(40, 9, totalLabel, "1", 1, "R", false, 0, "")
 	emit(totalLabel)
 
+	// ---------- Unit note ----------
+	//
+	// Issue #1681: the two columns are different units and a customer holding
+	// this page has to be told which is which. Consumption is metered in Hive
+	// credits, the unit the ledger records and the console shows on every other
+	// billing page; the taka column is what is charged for it.
+	pdf.Ln(3)
+	pdf.SetFont("Helvetica", "I", 9)
+	note := "Consumption is metered in Hive credits. The BDT column is the amount charged for it."
+	pdf.MultiCell(180, 5, note, "", "L", false)
+	emit(note)
+
 	// ---------- Tripwire: assert no USD/FX strings reached the page ----------
-	if err := assertNoFXLeak([]byte(textBuf.String())); err != nil {
-		return nil, err
+	text := textBuf.String()
+	if err := assertNoFXLeak([]byte(text)); err != nil {
+		return nil, "", err
 	}
 
 	// ---------- Buffer ----------
 	var buf bytes.Buffer
 	if err := pdf.Output(&buf); err != nil {
-		return nil, fmt.Errorf("invoices: pdf output: %w", err)
+		return nil, "", fmt.Errorf("invoices: pdf output: %w", err)
 	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), text, nil
 }
 
 // =============================================================================
@@ -160,6 +198,33 @@ func (r *gofpdfRenderer) Render(inv Invoice, workspaceName string) ([]byte, erro
 // currency token that appears in the rendered PDF. Negative amounts are not
 // expected; we render zero subunits as "BDT 0.00" for safety.
 // =============================================================================
+
+// FormatCredits renders a Hive credit quantity with thousand separators, the
+// same way every other credit figure in the console reads (issue #1681).
+//
+// nil is "--", not "0". An invoice generated between the issue #1648 fix and
+// issue #1682's repair never recorded its credit quantity, and printing that
+// absence as a zero would tell the customer they consumed nothing in a month
+// they were charged for.
+func FormatCredits(credits *big.Int) string {
+	if credits == nil {
+		return "--"
+	}
+	digits := credits.String()
+	sign := ""
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+	var out strings.Builder
+	out.WriteString(sign)
+	for i, r := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			out.WriteByte(',')
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
 
 // FormatBDT renders a *big.Int subunit count as "BDT <whole>.<paisa>".
 func FormatBDT(subunits *big.Int) string {

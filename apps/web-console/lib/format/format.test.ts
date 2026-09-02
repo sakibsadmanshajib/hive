@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CREDITS_PER_USD,
+  formatCreditCount,
   formatCredits,
   formatLatencyMs,
   formatShortDate,
@@ -48,6 +49,29 @@ describe("formatCredits", () => {
 
   it("clamps non-finite input", () => {
     expect(formatCredits(Number.NaN)).toBe("0");
+  });
+});
+
+describe("formatCreditCount", () => {
+  it("groups a wire string without going through Number", () => {
+    expect(formatCreditCount("524653338")).toBe("524,653,338");
+  });
+
+  it("keeps full precision past Number.MAX_SAFE_INTEGER", () => {
+    // 2^53 + 1: a Number round trip renders this as ...992, which on a money
+    // surface is a figure the ledger never held.
+    expect(formatCreditCount("9007199254740993")).toBe("9,007,199,254,740,993");
+  });
+
+  it("renders an unrecorded quantity as absent, not as zero", () => {
+    expect(formatCreditCount(null)).toBe("\u2014");
+    expect(formatCreditCount("")).toBe("\u2014");
+    expect(formatCreditCount("not-a-number")).toBe("\u2014");
+    expect(formatCreditCount("0")).toBe("0");
+  });
+
+  it("uses lakh/crore grouping for Bengali", () => {
+    expect(formatCreditCount("1234567", "bn")).toBe("12,34,567");
   });
 });
 

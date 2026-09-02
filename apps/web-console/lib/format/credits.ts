@@ -24,6 +24,36 @@ export function formatCredits(
 }
 
 /**
+ * Format a credit quantity that arrives as a decimal string on the wire.
+ *
+ * BigInt, not Number, for the same reason formatTakaSubunits is: a credit is a
+ * billionth of a dollar, so a large monthly quantity crosses
+ * Number.MAX_SAFE_INTEGER long before the money does, and a silently rounded
+ * money figure is exactly the class of defect issue #1681 exists to close.
+ *
+ * `null` is the unrecorded quantity, not zero. An invoice generated between the
+ * issue #1648 fix and issue #1682's repair has a correct taka amount and no
+ * credit count at all, and printing that as "0" would tell a customer they
+ * consumed nothing in a month they were charged for. It renders as the same em
+ * dash formatPercent and formatLatencyMs use for a genuine absence.
+ */
+export function formatCreditCount(
+  value: string | null | undefined,
+  locale: AppLocale = DEFAULT_LOCALE,
+): string {
+  if (value === null || value === undefined || value === "") {
+    return "—";
+  }
+  let n: bigint;
+  try {
+    n = BigInt(value);
+  } catch {
+    return "—";
+  }
+  return new Intl.NumberFormat(intlTag(locale, "grouping")).format(n);
+}
+
+/**
  * Format a token count (request totals, completion tokens, etc.). Same
  * thousand-separator behaviour, distinct semantic name so callers can
  * see at a glance which scalar they are formatting.

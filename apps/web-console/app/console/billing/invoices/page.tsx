@@ -65,7 +65,7 @@ export default async function WorkspaceInvoicesPage() {
       <PageHeader
         eyebrow="Workspace"
         title="Invoices"
-        description="Monthly invoices for this workspace. All amounts are in Bangladeshi taka."
+        description="Monthly invoices for this workspace. Consumption is metered in Hive credits; the amount charged is in Bangladeshi taka."
       />
 
       <Card>
@@ -85,7 +85,8 @@ export default async function WorkspaceInvoicesPage() {
               <thead>
                 <tr className="border-b border-[var(--color-border)] text-left text-xs uppercase text-[var(--color-ink-3)]">
                   <th className="px-3 py-2">Period</th>
-                  <th className="px-3 py-2">Total</th>
+                  <th className="px-3 py-2">Hive credits</th>
+                  <th className="px-3 py-2">Charged</th>
                   <th className="px-3 py-2">Models</th>
                   <th className="px-3 py-2">Download</th>
                 </tr>

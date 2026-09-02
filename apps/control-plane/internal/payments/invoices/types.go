@@ -43,6 +43,18 @@ type Invoice struct {
 	PDFStorageKey    string
 	GeneratedAt      time.Time
 
+	// TotalCredits is the Hive credit quantity this invoice covers, the unit
+	// the ledger actually stores (issue #1681). TotalBDTSubunits is what the
+	// customer is charged for that quantity, converted once at USDBDTRate.
+	//
+	// nil means the quantity is unknown for this row rather than zero, which is
+	// the honest state of an invoice generated between the issue #1648 fix and
+	// issue #1682's repair: its taka is correct and its credit count was never
+	// written down. Surfaces render an absent quantity as absent. Recovering it
+	// by inverting the rate would round, and would present a manufactured
+	// number as a ledger reading.
+	TotalCredits *big.Int
+
 	// USDBDTRate is the USD to BDT rate the subunit amounts on this row were
 	// converted at, as a plain decimal string ("123.13"), or empty for a row
 	// generated before issue #1648 was fixed. Recorded so the arithmetic on a
@@ -51,6 +63,15 @@ type Invoice struct {
 	// server-side audit data and is deliberately absent from the customer
 	// wire format and the PDF (D-035 left those FX tripwires in place).
 	USDBDTRate string
+
+	// USDBDTRateSource says which arm produced USDBDTRate: the account's own
+	// FX snapshot, the operator environment override, or the platform default
+	// (payments.RateSourceSnapshot, RateSourceEnv, RateSourceDefault). Recorded
+	// alongside the rate so an operator reading a repaired row can tell an
+	// account-specific denomination from a platform fallback without re-running
+	// the resolution. Empty for a row that predates the conversion, and, like
+	// the rate, absent from the customer wire format and the PDF.
+	USDBDTRateSource string
 }
 
 // ModelCredits is one model's raw ledger aggregate for a period, in CREDITS.
@@ -74,6 +95,10 @@ type InvoiceLineItem struct {
 	ModelID      string   `json:"model_id"`
 	RequestCount int64    `json:"request_count"`
 	BDTSubunits  *big.Int `json:"bdt_subunits"`
+
+	// Credits is the credit quantity this line covers, and BDTSubunits is what
+	// it is charged at. Same nil-means-unknown rule as Invoice.TotalCredits.
+	Credits *big.Int `json:"credits"`
 }
 
 // =============================================================================
@@ -130,6 +155,23 @@ type Repository interface {
 	// An account with no qualifying snapshot falls back to the platform rate.
 	LatestUSDBDTRate(ctx context.Context, workspaceID uuid.UUID, before time.Time) (string, error)
 
+	// ListUnconverted returns invoice rows written before the issue #1648 fix,
+	// that is, rows whose usd_bdt_rate IS NULL. Their taka columns hold a raw
+	// credit count rather than paisa. `limit` bounds one pass; zero or less
+	// means no bound.
+	//
+	// The predicate, not a marker column, is what makes the repair idempotent:
+	// a row stops matching the moment its rate is written, so a second pass
+	// finds nothing to do.
+	ListUnconverted(ctx context.Context, limit int) ([]Invoice, error)
+
+	// UpdateConverted writes the repaired amounts, credit quantity, rate and
+	// rate source onto an existing row, and reports whether a row was actually
+	// written. The UPDATE carries the same `usd_bdt_rate IS NULL` guard, so a
+	// row another process repaired first is left alone rather than converted
+	// twice, and it reports false rather than an error.
+	UpdateConverted(ctx context.Context, in Invoice) (bool, error)
+
 	// AggregateByModel sums usage_charge ledger entries within [Start, End)
 	// grouped by metadata->>'model'. Returns per-model CREDIT totals; the
 	// conversion into BDT subunits belongs to the service, which owns the
@@ -141,7 +183,9 @@ type Repository interface {
 // PDFs and serve signed download URLs. Matches packages/storage.Storage but
 // keeps this package's import surface minimal.
 type Storage interface {
-	Upload(ctx context.Context, bucket, key string, body interface{ Read(p []byte) (n int, err error) }, size int64, contentType string) error
+	Upload(ctx context.Context, bucket, key string, body interface {
+		Read(p []byte) (n int, err error)
+	}, size int64, contentType string) error
 	PresignedURL(ctx context.Context, bucket, key string, ttl time.Duration) (string, error)
 }
 

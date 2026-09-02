@@ -17,11 +17,11 @@ import (
 // =============================================================================
 
 type fakeRepo struct {
-	mu              sync.Mutex
-	byID            map[uuid.UUID]Invoice
+	mu               sync.Mutex
+	byID             map[uuid.UUID]Invoice
 	byWorkspaceMonth map[string]Invoice // key = ws|YYYY-MM-01
-	aggregateFn     func(ctx context.Context, ws uuid.UUID, p Period) ([]ModelCredits, error)
-	activeFn        func(ctx context.Context, p Period) ([]uuid.UUID, error)
+	aggregateFn      func(ctx context.Context, ws uuid.UUID, p Period) ([]ModelCredits, error)
+	activeFn         func(ctx context.Context, p Period) ([]uuid.UUID, error)
 
 	// fxRate is the account's most recent fx_snapshots effective_rate, empty
 	// when it has none; fxErr makes the lookup itself fail. fxBefore records
@@ -30,6 +30,14 @@ type fakeRepo struct {
 	fxRate   string
 	fxErr    error
 	fxBefore time.Time
+
+	// Repair-path seams (issue #1682). `updates` counts UpdateConverted calls
+	// that actually wrote, which is how the idempotence test distinguishes a
+	// second no-op pass from a second rewrite that happened to land on the same
+	// numbers.
+	unconvertedErr error
+	updateErr      error
+	updates        int
 }
 
 func newFakeRepo() *fakeRepo {
