@@ -43,8 +43,33 @@ const (
 	// CreditsPerUSD: 1 USD = 1,000,000,000 Hive Credits.
 	CreditsPerUSD int64 = 1_000_000_000
 
-	// FXFeeRate is the markup applied to the mid-rate for BDT conversions.
-	FXFeeRate = "0.05"
+	// FXFeeRate is the markup folded into the mid-rate for BDT conversions,
+	// 2.5 percent (D-066, owner ruling 2026-09-02, down from 5 percent).
+	//
+	// It is folded INTO the rate and is never a line item. A BD customer sees
+	// one rate and one local price: if the mid rate is 127.00 the rate used and
+	// shown is 127.00 x 1.025 = 130.175. Do not add a fee row to any
+	// customer-facing surface, and do not present this figure as a separate
+	// charge.
+	//
+	// fx.go derives its multiplier from this string rather than restating it,
+	// so the fee_rate stored on an fx_snapshots row is always the fee that was
+	// actually applied to the effective_rate on the same row. Before that it
+	// was a hardcoded 105/100 beside a stored "0.05", which is the shape issue
+	// #1682 was filed about: a stored money figure that cannot be reproduced
+	// from its own row.
+	FXFeeRate = "0.025"
+
+	// PurchaseMarkupRate is the markup on the PRICE of credits, 6 percent
+	// (D-065, owner ruling 2026-09-02). One billion credits (one USD of credit
+	// value at the D-046 peg) costs 1.06 USD.
+	//
+	// The peg itself is untouched: a purchase still GRANTS credits at
+	// CreditsPerUSD, and this rate only decides what the buyer pays for them.
+	// It is where the product takes its margin now that D-064 retired the 1.4
+	// multiplier from the inference path, so it must never be applied twice,
+	// and never on the burn side.
+	PurchaseMarkupRate = "0.06"
 
 	// CreditIncrement is the GRANULARITY of a purchase, one USD cent, not its
 	// smallest permitted size: ValidatePurchaseAmount rejects a quantity that

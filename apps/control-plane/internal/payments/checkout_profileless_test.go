@@ -52,13 +52,13 @@ func TestGetCheckoutOptions_AccountWithNoProfileRowStillLists(t *testing.T) {
 		t.Errorf("expected stripe for an unresolved country, got %s", opts.Rails[0].Rail)
 	}
 
-	// Pricing bound: exactly 100 minor units per CreditsPerUSD credits, in USD,
+	// Pricing bound: exactly 106 minor units per CreditsPerUSD credits, in USD,
 	// with no FX snapshot taken (the FX branch is BD-only).
 	if opts.Currency != "USD" {
 		t.Errorf("expected USD for an unresolved country, got %q", opts.Currency)
 	}
-	if opts.PricePerBlockMinor != 100 {
-		t.Errorf("expected 100 minor units per block, got %d", opts.PricePerBlockMinor)
+	if opts.PricePerBlockMinor != 106 {
+		t.Errorf("expected 106 minor units per block, got %d", opts.PricePerBlockMinor)
 	}
 	if opts.CreditBlockSize != CreditsPerUSD {
 		t.Errorf("expected block size %d, got %d", CreditsPerUSD, opts.CreditBlockSize)
