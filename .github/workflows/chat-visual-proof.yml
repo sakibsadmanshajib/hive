@@ -715,6 +715,70 @@ jobs:
           fi
           echo "edge-api wired Supabase JWT auth"
 
+      - name: Sync the LiteLLM model list from the DB catalog
+        # The seam a stack booted from compose alone is missing. A deploy
+        # derives LiteLLM's serving config from the database via
+        # POST /internal/litellm/sync (deploy-demo-box.yml), and without that
+        # call LiteLLM keeps serving the static seed deploy/litellm/config.yaml.
+        # That seed predates the free pool and has no route-free-pool group, so
+        # every alias resolving into the pool fails with "Invalid model name
+        # passed in model=route-free-pool" while /v1/models, which reads the DB
+        # catalog, lists hive-free happily. Measured on run 33680014334: the
+        # capture reached a signed-in chat on Hive Free and the turn came back
+        # "Invalid request for hive-free."
+        #
+        # ci.yml's live-integration job calls the same endpoint for the same
+        # reason. Calling what production calls makes the migration chain the
+        # single source of truth for what this gateway serves.
+        env:
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+        run: |
+          set -euo pipefail
+          status=""
+          response_file=$(mktemp)
+          trap 'rm -f "$response_file"' EXIT
+          for i in 1 2 3; do
+            status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+              --connect-timeout 2 --max-time 35 \
+              -X POST -H "X-Internal-Token: $CONTROL_PLANE_INTERNAL_TOKEN" \
+              http://localhost:8081/internal/litellm/sync) || status="000"
+            [ "$status" = "200" ] && break
+            echo "attempt $i: sync returned $status, retry in 5s"
+            sleep 5
+          done
+          if [ "$status" != "200" ]; then
+            echo "::error::litellm config sync failed after 3 attempts, last status $status"
+            cat "$response_file" 2>/dev/null || true
+            exit 1
+          fi
+
+          # The sync restarts the litellm container as its last act, so the
+          # gateway is briefly down here. Wait rather than let the capture race
+          # the boot.
+          master_key="${LITELLM_MASTER_KEY:-litellm-dev-key}"
+          deadline=$(( $(date +%s) + 120 ))
+          : > /tmp/litellm-models.json
+          while :; do
+            if body=$(curl -sS --max-time 5 -H "Authorization: Bearer $master_key" \
+                 http://localhost:4000/v1/models 2>/dev/null); then
+              printf '%s' "$body" > /tmp/litellm-models.json
+              break
+            fi
+            if [ "$(date +%s)" -gt "$deadline" ]; then
+              echo "::error::litellm did not come back up within 120s of the config sync"
+              exit 1
+            fi
+            sleep 3
+          done
+
+          # The regression assertion, and the one that would have caught this
+          # before a capture spent fifteen minutes to discover it.
+          if ! jq -e '.data | map(.id) | index("route-free-pool") != null' /tmp/litellm-models.json >/dev/null; then
+            echo "::error::litellm does not serve route-free-pool after syncing from the DB catalog, so the captured turn on hive-free cannot resolve. Gateway models: $(jq -r '[.data[].id] | join(\", \")' /tmp/litellm-models.json)"
+            exit 1
+          fi
+          echo "gateway serves route-free-pool"
+
       - name: Diagnose the model catalog layers
         # Attributes an empty model list to one of two layers in a single
         # glance, and then ASSERTS the second. A shim key edge-api refuses means
