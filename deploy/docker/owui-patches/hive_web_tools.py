@@ -256,14 +256,19 @@ async def _fetch_descriptors(environ=None) -> list:
         log.warning("hive: no OPENAI_API_BASE_URL, so the web tool specifications cannot be read")
         return []
 
-    headers = {}
-    key = shim_key(environ)
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
-
+    # No Authorization, deliberately. The route is unauthenticated by design
+    # (it serves a compiled-in constant), and presenting the shim key here is
+    # not merely redundant: an `hk_` bearer sends the request down edge-api's
+    # API-key arm, where the budget gate resolves the key against the control
+    # plane before the handler is reached. That couples "may this model be told
+    # the tools exist" to a key resolution and a budget verdict that have
+    # nothing to do with the question, and it is a second place the shim key
+    # would live. Measured against a real edge-api on 2026-09-02: with the
+    # header, an unreachable control plane turned this read of a constant into
+    # a ten second timeout and advertised nothing.
     try:
         status, payload = await asyncio.to_thread(
-            _request, "GET", f"{base}/tools", headers, None, DESCRIPTOR_TIMEOUT_SECONDS
+            _request, "GET", f"{base}/tools", {}, None, DESCRIPTOR_TIMEOUT_SECONDS
         )
     except Exception:
         log.exception("hive: could not read the web tool specifications, advertising no web tools")

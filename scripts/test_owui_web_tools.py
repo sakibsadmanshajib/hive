@@ -394,10 +394,12 @@ def test_a_tool_capable_model_receives_both_specifications() -> None:
         assert set(by_name["web_search"]["function"]["parameters"]["properties"]) == {"query", "max_results"}
         assert set(by_name["web_fetch"]["function"]["parameters"]["properties"]) == {"url", "focus"}
         # And they came from the gateway, not from this repository's Python.
-        assert ("GET", "/v1/tools", None, None) not in server.seen
-        assert any(method == "GET" and path == "/v1/tools" for method, path, _, _ in server.seen), (
-            "the specifications were not read from the gateway"
-        )
+        reads = [entry for entry in server.seen if entry[0] == "GET" and entry[1] == "/v1/tools"]
+        assert reads, "the specifications were not read from the gateway"
+        # With no Authorization on them. An `hk_` bearer would route this read
+        # of a constant down edge-api's API-key arm, through a key resolution
+        # and a budget verdict, and would put the shim key in one more place.
+        assert "Authorization" not in reads[0][2], reads[0][2]
 
     run_gateway(check)
 
