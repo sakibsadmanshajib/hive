@@ -1,0 +1,86 @@
+name: PR tracking gate
+
+# Refuses a pull request that is not attached to a triaged issue.
+#
+# Why this workflow exists, in the owner's words on 2026-09-02: pull requests,
+# milestones, the Kanban board and the labels were not being maintained.
+# Defects found mid task were folded into whatever diff was open, so the
+# backlog could not answer what to work on next and the record of the fix
+# existed only in a transcript. Nothing in this repository ever asked whether a
+# change was tracked, so every pull request was green on that question by
+# default.
+#
+# The rules are in .claude/rules/tracking-discipline.md. This checks the half a
+# machine can check: an issue is linked, the issue carries exactly one priority
+# label and at least one area label, an urgent issue names a milestone, and the
+# pull request wears the labels of the issue it closes.
+#
+# This is a REQUIRED context in .github/branch-protection-main.json, so it must
+# obey the four rules .github/ci/lint-workflow-check-names.mjs enforces on any
+# workflow that publishes one: a unique job name, `if: always()` at job level,
+# no trigger path filter, and `ready_for_review` in the activity types. Making
+# it advisory instead was considered and rejected: an advisory gate on a
+# discipline problem is the discipline problem restated, and this repository
+# merges autonomously through the merge API, so nothing sits between a red
+# advisory run and a merge except the merging agent remembering to look.
+#
+# `edited`, `labeled` and `unlabeled` are here on top of the four required
+# types because every way to fix a failure of this gate is one of those three
+# events. Without them the fix is invisible until the next push, and a gate
+# whose green state cannot be reached without an unrelated commit gets worked
+# around rather than satisfied.
+#
+# Cheap by construction: checkout plus two python invocations, no toolchain, no
+# network beyond the GitHub API, well under a minute. It is deliberately not a
+# step inside ci.yml's repo-policy-lints job, because it needs `issues: read`
+# and pull-request context that the rest of that job has no business holding.
+# The ci.yml docs-only allow-list is not involved either: that list decides
+# whether the heavy suite runs, and this gate must run on every pull request
+# including a documentation-only one, since a documentation change needs an
+# issue exactly as much as a code change does.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Pull request number to check'
+        required: true
+
+concurrency:
+  group: pr-tracking-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  tracked:
+    name: PR is attached to a triaged issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # A required job always reports its own conclusion. See the note above.
+    if: always()
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The comparator's own tests first. A tracking check that only ever runs
+      # against pull requests it agrees with is indistinguishable from one that
+      # exits 0 unconditionally, and this repository has shipped that shape
+      # before. These cases require exit 1 on an untracked pull request, an
+      # unlabelled issue, and a critical with no milestone.
+      - name: The check can still fail
+        run: python3 scripts/test_check_pr_tracking.py
+
+      - name: Pull request links a triaged issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+        run: |
+          set -euo pipefail
+          python3 scripts/check-pr-tracking.py --repo "${{ github.repository }}" --pr "$PR_NUMBER"

@@ -26,10 +26,15 @@ bypassed from the CLI or UI.
 - `Go tests (storage)`
 - `Repo policy lints (tenant + audit)`
 - `Web console (type + unit + build)`
+- `PR is attached to a triaged issue`
 
-These are the jobs in `.github/workflows/ci.yml`, which is the only workflow
-allowed to publish them. `strict` is `false`: checks must pass, but a PR is not
-forced to be rebased onto the latest `main` first.
+The first six are jobs in `.github/workflows/ci.yml`. The seventh is the single
+job in `.github/workflows/pr-tracking-gate.yml`, which enforces
+`.claude/rules/tracking-discipline.md`: a pull request links an issue, and that
+issue is triaged. No other workflow may publish any of these names, and
+`.github/ci/lint-workflow-check-names.mjs` fails the build if one does.
+`strict` is `false`: checks must pass, but a PR is not forced to be rebased onto
+the latest `main` first.
 
 ### How path filtering interacts with the gate
 
@@ -50,9 +55,11 @@ individual steps, so it always concludes on its own merits. Filtering inside the
 workflow keeps a docs-only pull request mergeable without a second workflow
 standing in for the real one.
 
-One consequence to expect: on a docs-only or hooks-only pull request all six
-required checks legitimately go green in a few seconds, because each required
-job runs to completion with every step skipped. That is the same *shape* as the
+One consequence to expect: on a docs-only or hooks-only pull request the six
+`ci.yml` required checks legitimately go green in a few seconds, because each
+required job runs to completion with every step skipped. The tracking gate is
+the exception and really does run there, since a documentation change needs an
+issue exactly as much as a code change does. That is the same *shape* as the
 issue #553 defect below, so do not read duration as evidence either way. The
 property that matters is one producer per required context, which the guard
 below enforces on every pull request.

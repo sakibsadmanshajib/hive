@@ -7,7 +7,8 @@
       "Go tests (edge-api)",
       "Go tests (storage)",
       "Repo policy lints (tenant + audit)",
-      "Web console (type + unit + build)"
+      "Web console (type + unit + build)",
+      "PR is attached to a triaged issue"
     ]
   },
   "enforce_admins": true,
