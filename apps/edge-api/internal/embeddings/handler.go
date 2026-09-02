@@ -220,6 +220,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, normalized)
+	// Flushed rather than left to the handler's return, so the ordering below
+	// holds by construction instead of by payload size. net/http buffers a small
+	// body until the handler returns, which on a short response would leave the
+	// customer waiting for the settlement call anyway. A real chunk batch is far
+	// past that buffer and would flush on its own; this makes the property true
+	// for the small ones too. http.Flusher is satisfied by net/http's own
+	// response writer and by httptest.ResponseRecorder, so the type assertion is
+	// a guard against an exotic wrapper, not a normal branch.
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 
 	// Everything below runs AFTER the response is on the wire, and that
 	// ordering is load bearing rather than incidental: Finalize is a

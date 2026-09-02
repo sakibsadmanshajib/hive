@@ -1,24 +1,152 @@
-Issue #1696 chat-container half, captured 2026-09-02T16:17:12Z
+Issue #1696 chat-container half, re-captured 2026-09-02T17:02:19Z after the
+independent security review of PR #1712.
 
-The patch is applied to /app/backend/open_webui/retrieval/utils.py INSIDE the
-pinned image (ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6...), not to
-the vendored copy, because the chat image takes its backend from that image.
-The function under test is then imported and called for real; only Open WebUI's
-own OAuth session resolver and the upstream endpoint are stood in for.
+The patch is applied to the three backend files INSIDE the pinned image
+(ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6...), which is where the
+chat image takes its backend from. The function under test is then imported and
+called for real; only Open WebUI's own OAuth session resolver and the two HTTP
+endpoints are stood in for. The gateway listens on 127.0.0.1:9911 and the host
+a hostile instance admin repointed at listens on 127.0.0.1:9912, which is a
+different origin, since origin is what the check compares.
 
-marker count in the patched module:
-1
+marker counts after the splice:
+  retrieval/utils.py: 1
+  routers/knowledge.py: 7
+  tools/builtin.py: 1
 
---- call 1: a signed-in user ---
+ERROR [open_webui.env] Error running migrations: (sqlite3.OperationalError) unable to open database file
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 144, in __init__
+    self._dbapi_connection = engine.raw_connection()
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 3319, in raw_connection
+    return self.pool.connect()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 448, in connect
+    return _ConnectionFairy._checkout(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 1272, in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 712, in checkout
+    rec = pool._do_get()
+          ^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/impl.py", line 307, in _do_get
+    return self._create_connection()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 389, in _create_connection
+    return _ConnectionRecord(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 674, in __init__
+    self.__connect()
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 900, in __connect
+    with util.safe_reraise():
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/util/langhelpers.py", line 122, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 896, in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/create.py", line 667, in connect
+    return dialect.connect(*cargs_tup, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py", line 630, in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlite3.OperationalError: unable to open database file
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/backend/open_webui/config.py", line 73, in run_migrations
+    command.upgrade(alembic_cfg, 'head')
+  File "/usr/local/lib/python3.11/site-packages/alembic/command.py", line 483, in upgrade
+    script.run_env()
+  File "/usr/local/lib/python3.11/site-packages/alembic/script/base.py", line 545, in run_env
+    util.load_python_file(self.dir, "env.py")
+  File "/usr/local/lib/python3.11/site-packages/alembic/util/pyfiles.py", line 116, in load_python_file
+    module = load_module_py(module_id, path)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/alembic/util/pyfiles.py", line 136, in load_module_py
+    spec.loader.exec_module(module)  # type: ignore
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "/app/backend/open_webui/migrations/env.py", line 85, in <module>
+    run_migrations_online()  # run in online mode
+    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/backend/open_webui/migrations/env.py", line 72, in run_migrations_online
+    with live_connectable.connect() as live_connection:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 3295, in connect
+    return self._connection_cls(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 146, in __init__
+    Connection._handle_dbapi_exception_noconnection(
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 2450, in _handle_dbapi_exception_noconnection
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 144, in __init__
+    self._dbapi_connection = engine.raw_connection()
+                             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 3319, in raw_connection
+    return self.pool.connect()
+           ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 448, in connect
+    return _ConnectionFairy._checkout(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 1272, in _checkout
+    fairy = _ConnectionRecord.checkout(pool)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 712, in checkout
+    rec = pool._do_get()
+          ^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/impl.py", line 307, in _do_get
+    return self._create_connection()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 389, in _create_connection
+    return _ConnectionRecord(self)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 674, in __init__
+    self.__connect()
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 900, in __connect
+    with util.safe_reraise():
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/util/langhelpers.py", line 122, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/pool/base.py", line 896, in __connect
+    self.dbapi_connection = connection = pool._invoke_creator(self)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/create.py", line 667, in connect
+    return dialect.connect(*cargs_tup, **cparams)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py", line 630, in connect
+    return self.loaded_dbapi.connect(*cargs, **cparams)  # type: ignore[no-any-return]  # NOQA: E501
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) unable to open database file
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+
+gateway from the environment: http://127.0.0.1:9911/v1
+
+--- 1. a signed-in user, to the gateway ---
 
 Authorization         : Bearer hk_REDACTED_PROOF_FIXTURE
 X-Hive-Upstream-Auth  : Bearer SEARCHING-USER-ACCESS-TOKEN
---- call 2: a user with no resolvable session ---
+--- 2. the same user, after an instance admin repointed the persistent
+       RAG endpoint at a host they control ---
+refused: hive (#1696): the embedding endpoint is not the Hive gateway
+request reached the attacker: False
+--- 3. a user with no resolvable session, to the gateway ---
+ERROR [open_webui.utils.hive_embed_attribution] hive (#1696): embedding endpoint 'http://127.0.0.1:9912' is not the Hive gateway, refusing to forward a signed-in user credential to it. This is either a misconfiguration or an attempt to harvest user sessions by rewriting the persistent RAG endpoint; the environment is the authority here, not Open WebUI config.
+ERROR [open_webui.utils.hive_embed_attribution] hive (#1696): no upstream credential for user user-no-session, refusing to embed under the shared shim key; this spend would otherwise land on a platform account instead of on the customer
 refused: hive (#1696): no signed-in user credential for this embedding call
 request reached the upstream: False
-ERROR [open_webui.utils.hive_embed_attribution] hive (#1696): no upstream credential for user user-no-session, refusing to embed under the shared shim key; this spend would otherwise land on a platform account instead of on the customer
 
-Reading: the shim key stays on Authorization, which is what gates the carrier
-at edge-api, and the searching user's own token rides on X-Hive-Upstream-Auth.
-A user with no resolvable session is refused before the request is made, so
-nothing goes out under the shared key.
+Reading. Leg 1: the shim key stays on Authorization, which is what gates the
+carrier at edge-api, and the searching user's own token rides on the carrier.
+Leg 2 is the HIGH finding from the review, closed: the destination is Open
+WebUI persistent config that any instance admin can rewrite, and on this shared
+instance every tenant OWNER is an instance admin, so a repointed endpoint would
+otherwise have collected one live session bearer per user who searched. The
+module compares the destination against the ENVIRONMENT and refuses before a
+credential is even resolved, so nothing reaches the attacker and nothing is
+minted. Leg 3: a user with no resolvable session is refused rather than sent
+under the shared key.

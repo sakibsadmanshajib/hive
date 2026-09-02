@@ -42,8 +42,11 @@ Dockerfile.open-webui) and a backend edit under vendor/ is inert.
 from __future__ import annotations
 
 import logging
+import os
 import time
+from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 log = logging.getLogger(__name__)
 
@@ -73,11 +76,63 @@ _token_cache: dict[str, tuple[str, float]] = {}
 
 
 class AttributionUnavailable(Exception):
-    """No signed-in user could be attached to an embedding call.
+    """No signed-in user could be attached to an embedding call, or the call was
+    not going to the Hive gateway.
 
     Raised rather than returning the headers unchanged: unchanged headers carry
     the shim key alone, which is the mis-attribution this module exists to end.
     """
+
+
+def _gateway_origins() -> set[str]:
+    """The origins a user credential may be forwarded to, read from the
+    ENVIRONMENT and never from Open WebUI's persistent config.
+
+    This distinction is the whole point of the function, so it is stated rather
+    than implied. `agenerate_openai_batch_embeddings` receives its `url` from
+    `app.state.config.RAG_OPENAI_API_BASE_URL`, and that value is persistent
+    config: `POST /api/v1/retrieval/embedding/update` sets it to any URL for
+    anyone who satisfies `get_admin_user`. On this shared chat instance every
+    tenant OWNER is an instance admin, which
+    deploy/docker/owui-patches/apply_router_authz_family_patch.py states in its
+    own header. So one tenant owner could point the embedding endpoint at a host
+    they control and collect a live Supabase session bearer from every other
+    user who runs a search.
+
+    Before the carrier existed that knob leaked one shared platform key, which
+    was already bad. Attaching a per-user credential to the same runtime
+    mutable destination would be a strict escalation, and closing it belongs in
+    the change that introduces the credential. The environment variables below
+    are set by compose and no admin endpoint can rewrite them, which is the same
+    property hive_agent_proxy.py relies on when it reads its own destination
+    from os.environ.
+
+    Both variables are read because they are the same gateway by two names:
+    RAG_OPENAI_API_BASE_URL is the retrieval path's copy and OPENAI_API_BASE_URL
+    the chat path's, and a deployment that sets only one is still describing one
+    gateway. An empty set refuses every call, which is the correct verdict for a
+    container with no gateway configured at all.
+    """
+    origins = set()
+    for var in ('RAG_OPENAI_API_BASE_URL', 'OPENAI_API_BASE_URL'):
+        origin = _origin_of(os.environ.get(var) or '')
+        if origin:
+            origins.add(origin)
+    return origins
+
+
+def _origin_of(url: str) -> str:
+    """scheme://host:port, or "" when the input is not an absolute URL.
+
+    Compared as an origin rather than as a whole URL because the path differs
+    legitimately: the environment carries the `/v1` root and a caller may hand
+    over the same root with or without a trailing slash. The host and port are
+    what decide who receives the credential.
+    """
+    parts = urlsplit((url or '').strip())
+    if not parts.scheme or not parts.netloc:
+        return ''
+    return f'{parts.scheme}://{parts.netloc}'
 
 
 class _RequestStandIn:
@@ -155,14 +210,51 @@ def forget(user_id: str) -> None:
     _token_cache.pop(user_id, None)
 
 
-async def attach(headers: dict[str, str], user: Any) -> dict[str, str]:
+async def _as_principal(user: Any) -> Any:
+    """A user object with an `.id`, resolving a `{'id': ...}` mapping into one.
+
+    Open WebUI's builtin tools carry `__user__` as a plain dict, and
+    `get_system_oauth_token` reads `user.id`, so a mapping has to become a real
+    UserModel before it reaches the resolver. Resolved through Open WebUI's own
+    model layer rather than wrapped in a stand-in with just an id: a stand-in
+    would work only for as long as the resolver reads nothing else, and that is
+    an assumption about upstream code this module does not control.
+    """
+    if not isinstance(user, Mapping):
+        return user
+    from open_webui.models.users import Users
+
+    return await Users.get_user_by_id(str(user.get('id') or ''))
+
+
+async def attach(headers: dict[str, str], user: Any, url: str) -> dict[str, str]:
     """`headers` plus the signed-in user's bearer on the carrier header.
 
     Returns a new dict rather than mutating the caller's, per this repository's
-    immutability convention. Raises AttributionUnavailable when there is no user
-    or no resolvable credential, so the call is refused rather than billed to
-    the shim account.
+    immutability convention. Raises AttributionUnavailable when the destination
+    is not the Hive gateway, when there is no user, or when no credential
+    resolves, so the call is refused rather than billed to the shim account or
+    sent to somewhere it does not belong.
     """
+    # The destination is checked FIRST, before a credential is even resolved.
+    # A hostile destination must not cause a token to be minted or a cache entry
+    # to be filled, and the refusal costs one string comparison.
+    origin = _origin_of(url)
+    allowed = _gateway_origins()
+    if not origin or origin not in allowed:
+        log.error(
+            'hive (#1696): embedding endpoint %r is not the Hive gateway, refusing to '
+            'forward a signed-in user credential to it. This is either a '
+            'misconfiguration or an attempt to harvest user sessions by rewriting '
+            'the persistent RAG endpoint; the environment is the authority here, '
+            'not Open WebUI config.',
+            origin or url,
+        )
+        raise AttributionUnavailable(
+            'hive (#1696): the embedding endpoint is not the Hive gateway'
+        )
+
+    user = await _as_principal(user)
     if user is None:
         raise AttributionUnavailable(
             'hive (#1696): an embedding call arrived with no signed-in user, so '

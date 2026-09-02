@@ -328,11 +328,25 @@ RUN python3 /tmp/apply_web_search_embed_failure_1609_patch.py \
 # The Go half ships with this: /v1/embeddings is now in requiresPerUserAuth, so
 # a shim-key embedding with no carrier is refused instead of mis-billed. The two
 # halves are useless apart, which scripts/test_owui_embed_attribution.py asserts.
+#
+# Three files, not one. retrieval/utils.py carries the chokepoint; the identity
+# is already threaded there by upstream. routers/knowledge.py and
+# tools/builtin.py are the two producers where it is NOT, and both would
+# otherwise be refused by the chokepoint, the first inside its own swallowed
+# except. Fixing mis-attribution by silently breaking knowledge base ingest is
+# not a trade this repository makes, so they are threaded rather than left
+# broken. The seven markers in knowledge.py are one per rewritten call site plus
+# the signature, and the count is pinned here so a digest bump that drops one of
+# the identical pairs fails the build instead of half-applying.
 COPY deploy/docker/owui-patches/hive_embed_attribution.py /app/backend/open_webui/utils/hive_embed_attribution.py
 COPY deploy/docker/owui-patches/apply_embed_attribution_1696_patch.py /tmp/apply_embed_attribution_1696_patch.py
 RUN python3 /tmp/apply_embed_attribution_1696_patch.py \
     && test "$(grep -c '# hive (#1696)' /app/backend/open_webui/retrieval/utils.py)" -eq 1 \
+    && test "$(grep -c '# hive (#1696)' /app/backend/open_webui/routers/knowledge.py)" -eq 7 \
+    && test "$(grep -c '# hive (#1696)' /app/backend/open_webui/tools/builtin.py)" -eq 1 \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/retrieval/utils.py').read_text())" \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/knowledge.py').read_text())" \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/tools/builtin.py').read_text())" \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_embed_attribution.py').read_text())"
 
 # The other half of #1609 patches nothing: the batching and the semaphore are

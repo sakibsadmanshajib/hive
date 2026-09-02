@@ -406,7 +406,7 @@ func TestResponseCarriesTheHiveAlias(t *testing.T) {
 	}
 }
 
-// TestTheResponseIsOnTheWireBeforeTheChargeIsSettled pins the ordering rather
+// TestTheResponseIsWrittenBeforeTheChargeIsSettled pins the ordering rather
 // than leaving it to a comment. Finalize is a synchronous control-plane call
 // bounded at the settlement timeout and retried once, so settling first puts up
 // to two of those in front of a customer who has received nothing. Open WebUI
@@ -416,7 +416,13 @@ func TestResponseCarriesTheHiveAlias(t *testing.T) {
 // billingtest.OnFinalize fires as the charge request is handled, which is the
 // only point that can observe the two relative to each other; recording the
 // call afterwards cannot tell which happened first.
-func TestTheResponseIsOnTheWireBeforeTheChargeIsSettled(t *testing.T) {
+//
+// "written", not "on the wire": an httptest.ResponseRecorder buffers
+// everything and has no socket behind it, so what this proves is that the
+// handler called Write before it settled. The handler's Flush is what turns
+// that into bytes leaving the process, and no in-process recorder can observe
+// that.
+func TestTheResponseIsWrittenBeforeTheChargeIsSettled(t *testing.T) {
 	rr := httptest.NewRecorder()
 	bodyLenAtCharge := -1
 	acct := &billingtest.Accounting{OnFinalize: func() { bodyLenAtCharge = rr.Body.Len() }}

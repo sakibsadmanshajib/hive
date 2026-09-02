@@ -19,6 +19,13 @@ Behaviourally, against the real module the image runs:
     shim key. This is the assertion that would go red if somebody "fixed" a
     future 401 by letting the shared key through again, which is the defect
     itself;
+  * a call to anything but the gateway named in the ENVIRONMENT refuses before
+    a credential is even resolved. The destination is admin-writable persistent
+    config, so without this the change would trade a leaked shared platform key
+    for a harvest of per-user session bearers;
+  * the two producers that used to embed with no user (knowledge base metadata,
+    and the knowledge base search builtin) now carry one, so the new refusal
+    does not break knowledge base ingest inside a swallowed except;
   * the caller's header dict is not mutated, per the repository's immutability
     convention;
   * the token cache does not leak one user's credential to another, and a
@@ -58,6 +65,8 @@ from test_owui_chat_delete_authz import vendored_and_pinned_versions  # noqa: E4
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VENDORED_UTILS = REPO_ROOT / "vendor/open-webui/backend/open_webui/retrieval/utils.py"
+VENDORED_KNOWLEDGE = REPO_ROOT / "vendor/open-webui/backend/open_webui/routers/knowledge.py"
+VENDORED_BUILTIN = REPO_ROOT / "vendor/open-webui/backend/open_webui/tools/builtin.py"
 PATCHES = REPO_ROOT / "deploy/docker/owui-patches"
 PATCH_SCRIPT = PATCHES / "apply_embed_attribution_1696_patch.py"
 MODULE = PATCHES / "hive_embed_attribution.py"
@@ -82,6 +91,9 @@ def check(condition: bool, message: str) -> None:
 # --------------------------------------------------------------------------
 # The module, loaded and driven for real.
 # --------------------------------------------------------------------------
+
+
+GATEWAY = "http://edge-api:8080/v1"
 
 
 def load_module(sessions: dict[str, str], resolutions: list[str]) -> types.ModuleType:
@@ -113,6 +125,11 @@ def load_module(sessions: dict[str, str], resolutions: list[str]) -> types.Modul
     sys.modules["open_webui.utils"] = utils_package
     sys.modules["open_webui.utils.middleware"] = fake_middleware
 
+    # The environment is the authority on where a user credential may go, so it
+    # has to be set for the module to attach anything at all.
+    os.environ["RAG_OPENAI_API_BASE_URL"] = GATEWAY
+    os.environ["OPENAI_API_BASE_URL"] = GATEWAY
+
     spec = importlib.util.spec_from_file_location("hive_embed_attribution", MODULE)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -132,7 +149,7 @@ def behaviour() -> None:
 
     base = {"Content-Type": "application/json", "Authorization": "Bearer hk_shim_key"}
 
-    got = asyncio.run(module.attach(base, FakeUser("user-a")))
+    got = asyncio.run(module.attach(base, FakeUser("user-a"), GATEWAY))
     check(
         got.get(CARRIER) == "Bearer token-a",
         "a signed-in user's own token rides on the carrier header",
@@ -146,7 +163,7 @@ def behaviour() -> None:
         "the caller's header dict is not mutated",
     )
 
-    other = asyncio.run(module.attach(base, FakeUser("user-b")))
+    other = asyncio.run(module.attach(base, FakeUser("user-b"), GATEWAY))
     check(
         other.get(CARRIER) == "Bearer token-b",
         "a second user gets their own token, never the first user's",
@@ -156,14 +173,14 @@ def behaviour() -> None:
     # to the platform.
     refused = False
     try:
-        asyncio.run(module.attach(base, FakeUser("user-with-no-session")))
+        asyncio.run(module.attach(base, FakeUser("user-with-no-session"), GATEWAY))
     except module.AttributionUnavailable:
         refused = True
     check(refused, "a user with no resolvable credential is REFUSED, not sent under the shim key")
 
     refused_none = False
     try:
-        asyncio.run(module.attach(base, None))
+        asyncio.run(module.attach(base, None, GATEWAY))
     except module.AttributionUnavailable:
         refused_none = True
     check(refused_none, "a call with no user at all is refused")
@@ -171,14 +188,14 @@ def behaviour() -> None:
     # Cache behaviour. The first two lookups above are one each; a repeat of
     # user-a must not add a third, and the failed lookup must not be cached.
     before = list(resolutions)
-    asyncio.run(module.attach(base, FakeUser("user-a")))
+    asyncio.run(module.attach(base, FakeUser("user-a"), GATEWAY))
     check(
         resolutions == before,
         "a resolved token is reused inside its TTL rather than re-read per batch",
     )
     failed_before = resolutions.count("user-with-no-session")
     try:
-        asyncio.run(module.attach(base, FakeUser("user-with-no-session")))
+        asyncio.run(module.attach(base, FakeUser("user-with-no-session"), GATEWAY))
     except module.AttributionUnavailable:
         pass
     check(
@@ -188,31 +205,155 @@ def behaviour() -> None:
 
     module.forget("user-a")
     check(
-        asyncio.run(module.attach(base, FakeUser("user-a"))).get(CARRIER) == "Bearer token-a",
+        asyncio.run(module.attach(base, FakeUser("user-a"), GATEWAY)).get(CARRIER) == "Bearer token-a",
         "forgetting a cached token re-resolves it rather than failing closed forever",
     )
 
 
+def destination() -> None:
+    """The HIGH finding from the independent security review of PR #1712.
+
+    `agenerate_openai_batch_embeddings` takes its url from
+    `app.state.config.RAG_OPENAI_API_BASE_URL`, which
+    `POST /api/v1/retrieval/embedding/update` lets any instance admin rewrite at
+    runtime, and on this shared chat instance every tenant OWNER is an instance
+    admin. Attaching a per-user session bearer to a destination with that
+    property would turn a leaked shared platform key into a cross-tenant session
+    harvest, so the module compares the destination against the ENVIRONMENT and
+    refuses anything else.
+    """
+    print("\nsecurity: a user credential only ever goes to the Hive gateway")
+
+    resolutions: list[str] = []
+    module = load_module({"user-a": "token-a"}, resolutions)
+    base = {"Authorization": "Bearer hk_shim_key"}
+
+    for name, url in (
+        ("an attacker-controlled host", "https://evil.example/v1"),
+        ("the gateway's name on another port", "http://edge-api:9999/v1"),
+        ("the gateway over a different scheme", "https://edge-api:8080/v1"),
+        ("an empty destination", ""),
+        ("a relative path", "/v1"),
+    ):
+        refused = False
+        try:
+            asyncio.run(module.attach(base, FakeUser("user-a"), url))
+        except module.AttributionUnavailable:
+            refused = True
+        check(refused, f"refuses {name}")
+
+    check(
+        not resolutions,
+        "and refuses BEFORE resolving a credential, so a hostile destination "
+        "cannot mint a token or fill the cache",
+    )
+
+    got = asyncio.run(module.attach(base, FakeUser("user-a"), GATEWAY))
+    check(got.get(CARRIER) == "Bearer token-a", "and still attaches for the real gateway")
+    check(
+        asyncio.run(module.attach(base, FakeUser("user-a"), "http://edge-api:8080/v1/")).get(CARRIER)
+        == "Bearer token-a",
+        "matching on origin, so a trailing slash or a different path is not a refusal",
+    )
+
+    # Asserted on the AST of the function rather than on the file's text: the
+    # module's own comments name app.state.config, because explaining the threat
+    # requires naming it, and a substring check over prose cannot tell an
+    # explanation from a read.
+    origins_fn = None
+    for node in ast.walk(ast.parse(MODULE.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.FunctionDef) and node.name == "_gateway_origins":
+            origins_fn = node
+    check(origins_fn is not None, "the allowed origins come from a dedicated function")
+    if origins_fn is not None:
+        body = ast.dump(ast.Module(body=origins_fn.body, type_ignores=[]))
+        check(
+            "'environ'" in body,
+            "the allowed origins are read from the environment",
+        )
+        check(
+            "'state'" not in body and "'config'" not in body,
+            "and never from the admin-writable persistent config",
+        )
+
+
+def threaded_producers() -> None:
+    """The MEDIUM finding from the same review: two producers call the embedding
+    function with no user at all, so the new refusal would break them, and the
+    first fails inside a swallowed except where nobody would connect it to this
+    change."""
+    print("\nthe two producers that had no user now carry one")
+
+    knowledge = patched_source(VENDORED_KNOWLEDGE, "HIVE_OWUI_KNOWLEDGE_PY")
+    check(
+        "EMBEDDING_FUNCTION(content, user=user)" in knowledge,
+        "embed_knowledge_base_metadata embeds for a user rather than for nobody",
+    )
+    check(
+        knowledge.count("user=user") >= 6,
+        "and all six call sites hand one over (create, admin reindex, both "
+        "external source paths, update, and file add)",
+    )
+    tree = ast.parse(knowledge)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "embed_knowledge_base_metadata":
+            names = [a.arg for a in node.args.args]
+            check("user" in names, "the signature takes a user")
+            check(
+                node.args.defaults and isinstance(node.args.defaults[-1], ast.Constant),
+                "with a default, so a caller added upstream still type checks; it "
+                "fails at the gateway rather than billing the platform",
+            )
+            break
+    else:
+        check(False, "embed_knowledge_base_metadata still exists")
+
+    builtin = patched_source(VENDORED_BUILTIN, "HIVE_OWUI_BUILTIN_PY")
+    check(
+        "EMBEDDING_FUNCTION(query, user=__user__)" in builtin,
+        "the knowledge-base search builtin embeds for the caller",
+    )
+    check(
+        "Users.get_user_by_id" in MODULE.read_text(encoding="utf-8"),
+        "and a mapping principal is resolved through Open WebUI's own model "
+        "layer rather than wrapped in a stand-in that assumes what the resolver reads",
+    )
+
+
 # --------------------------------------------------------------------------
-# The splice, applied to the vendored copy of the file the image runs.
+# The splice, applied to the vendored copies of the files the image runs.
 # --------------------------------------------------------------------------
 
 
-def patched_source() -> str:
+def patched_source(which: Path = None, env_var: str = "HIVE_OWUI_RETRIEVAL_UTILS_PY") -> str:
+    """One of the three patched files, as the image will run it.
+
+    All three are patched in one run rather than one at a time, because the
+    patch script asserts every anchor before it writes anything: applying it to
+    a single file with the other two pointed at copies is the only way to get
+    the same all-or-nothing behaviour the image build gets.
+    """
+    which = which or VENDORED_UTILS
     with tempfile.TemporaryDirectory() as tmp:
-        target = Path(tmp) / "utils.py"
-        target.write_text(VENDORED_UTILS.read_text(encoding="utf-8"), encoding="utf-8")
-        env = dict(os.environ, HIVE_OWUI_RETRIEVAL_UTILS_PY=str(target))
+        env = dict(os.environ)
+        for var, source in (
+            ("HIVE_OWUI_RETRIEVAL_UTILS_PY", VENDORED_UTILS),
+            ("HIVE_OWUI_KNOWLEDGE_PY", VENDORED_KNOWLEDGE),
+            ("HIVE_OWUI_BUILTIN_PY", VENDORED_BUILTIN),
+        ):
+            target = Path(tmp) / f"{var}.py"
+            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            env[var] = str(target)
         result = subprocess.run(
             [sys.executable, str(PATCH_SCRIPT)], env=env, capture_output=True, text=True
         )
         if result.returncode != 0:
             raise AssertionError(
-                "the patch did not apply to the vendored retrieval/utils.py:\n"
+                "the patch did not apply to the vendored open-webui sources:\n"
                 + result.stdout
                 + result.stderr
             )
-        return target.read_text(encoding="utf-8")
+        return Path(env[env_var]).read_text(encoding="utf-8")
 
 
 def splice() -> None:
@@ -253,6 +394,11 @@ def splice() -> None:
             "attribution runs BEFORE the request, so it cannot decorate a call already sent",
         )
 
+    check(
+        "hive_embed_attribution.attach(headers, user, url)" in source,
+        "the splice hands the destination over, so the gateway check has something "
+        "to verify against",
+    )
     check(
         "embeddings = await agenerate_openai_batch_embeddings(" in source,
         "generate_embeddings still dispatches to the function this patch covers",
@@ -322,6 +468,8 @@ def wiring() -> None:
 
 def main() -> int:
     behaviour()
+    destination()
+    threaded_producers()
     splice()
     wiring()
     print()

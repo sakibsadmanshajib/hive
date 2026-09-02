@@ -622,6 +622,14 @@ def main() -> int:
         "unconditionally: this fix supplies the credential, it does not widen "
         "who may go without one (#1511)",
     )
+    # Presence of the four literals is not the whole property: an early
+    # `return false` inserted above the return statement would leave all four in
+    # the extracted body and satisfy the check above while exempting every path.
+    check(
+        "return false" not in predicate,
+        "and the predicate has no early exemption above its return, so the "
+        "literals above are the whole answer rather than dead text",
+    )
     check(
         "\treturn rest == shimKey\n" in unwrap,
         "and the shim key is still matched exactly, so it gained no new reach",
