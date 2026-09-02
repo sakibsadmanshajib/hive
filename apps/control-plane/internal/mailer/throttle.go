@@ -34,6 +34,12 @@ var ErrThrottled = errors.New("mailer: send cap reached")
 // account verification, one-time codes, invoices and balance alerts that fail
 // with the relay if it is exhausted.
 //
+// This is one of two ceilings on that account, not the only one: GoTrue emits
+// auth mail from the same credentials, bounded by its own
+// GOTRUE_RATE_LIMIT_EMAIL_SENT. Neither number means anything on its own, which
+// is why Budget adds them up at boot and says whether the total fits. Read this
+// 250 as "the invitation half of the allowance", never as "the relay is safe".
+//
 // Both are environment variables rather than constants precisely because the
 // safe default is the pessimistic one: raise them once the plan's real daily
 // allowance is confirmed.

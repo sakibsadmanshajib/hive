@@ -197,6 +197,12 @@ func (l InvitationLimits) audit(ctx context.Context, accountID uuid.UUID, viewer
 // This normalises the counter key only. What is stored and what is delivered
 // stay exactly as the inviter typed them, so the address on the invitation row
 // is still the address the recipient sees.
+//
+// What the hash buys is that a key dump or a log line is not a readable address
+// list. It is not confidentiality: addresses are low entropy, so anyone holding
+// both this keyspace and a candidate list can hash the list and confirm
+// membership. The protection is against casual disclosure, and that is enough
+// here because the input is a value the caller supplied and already knows.
 func hashRecipient(email string) string {
 	sum := sha256.Sum256([]byte(normalizeMailbox(email)))
 	return hex.EncodeToString(sum[:16])
@@ -227,8 +233,11 @@ func normalizeMailbox(email string) string {
 	// A trailing dot is the same domain, and most relays deliver it.
 	domain = strings.TrimSuffix(domain, ".")
 	// Sub-addressing: everything from the first plus to the at sign is a label
-	// the recipient's provider strips before delivery.
-	if plus := strings.IndexByte(local, '+'); plus >= 0 {
+	// the recipient's provider strips before delivery. Not inside a quoted
+	// local part, where a plus is literal and "foo+bar"@ and "foo+baz"@ are two
+	// real mailboxes: folding those together would let one person's cooldown
+	// block a stranger, which is the same over-folding the dot rule avoids.
+	if plus := strings.IndexByte(local, '+'); plus >= 0 && !strings.HasPrefix(local, `"`) {
 		local = local[:plus]
 	}
 	if dotFoldingDomains[domain] {

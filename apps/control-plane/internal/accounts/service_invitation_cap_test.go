@@ -266,6 +266,14 @@ func TestCreateInvitation_RecipientCapCountsTheMailboxNotTheSpelling(t *testing.
 			if _, err := svc.CreateInvitation(context.Background(), accountID, viewer, "v.i.c.t.i.m@example.com", accounts.RoleMember); err != nil {
 				t.Fatalf("a dotted local part on a non-folding domain was treated as the same mailbox: %v", err)
 			}
+			// A plus inside a quoted local part is literal, so these are two
+			// real mailboxes rather than one address and its tag.
+			if _, err := svc.CreateInvitation(context.Background(), accountID, viewer, `"quoted+one"@example.com`, accounts.RoleMember); err != nil {
+				t.Fatalf(`"quoted+one"@ was refused before its own first invitation: %v`, err)
+			}
+			if _, err := svc.CreateInvitation(context.Background(), accountID, viewer, `"quoted+two"@example.com`, accounts.RoleMember); err != nil {
+				t.Fatalf(`"quoted+two"@ was folded onto "quoted+one"@, which is a different mailbox: %v`, err)
+			}
 		})
 	}
 }
