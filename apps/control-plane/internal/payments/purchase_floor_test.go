@@ -86,12 +86,18 @@ func readEdgeConst(t *testing.T, path, name string) int64 {
 // SMALLEST hold a variable-price alias such as hive-auto can take.
 //
 // That is the hold for an empty body which sets no max_tokens, so the whole
-// figure is the completion cap priced at the ceiling rate and carried through
-// the margin, exactly as variablePriceRequestHold and CreditsForUpstreamCost do
+// figure is the completion cap priced at the ceiling rate and converted at the
+// credit peg, exactly as variablePriceRequestHold and CreditsForUpstreamCost do
 // it (apps/edge-api/internal/inference/pricing.go, upstream_cost.go). Rationals
 // throughout, because the source arithmetic is exact and a float here would
 // introduce a disagreement the guard would then be measuring instead of the
 // constants.
+//
+// There is no margin factor in this recomputation any more. D-064 retired the
+// 1.4 multiplier from the settlement path on 2026-09-02 and moved margin to the
+// purchase price, so a hold is now the worst-case provider cost at the peg and
+// nothing else. Removing it makes the smallest hold SMALLER, which only widens
+// the headroom the assertion below is checking for.
 //
 // It is the minimum over requests that set NO completion ceiling, not over all
 // requests: clampCompletionLimit takes the smaller of the cap and a caller's
@@ -114,13 +120,11 @@ func smallestVariablePriceHold(t *testing.T) int64 {
 
 	completionCap := readEdgeConst(t, edgeAPIPricingRelPath, "VariablePriceMaxCompletionTokens")
 	completionRate := readEdgeConst(t, edgeAPIPricingRelPath, "VariablePriceCompletionCeilingUSD")
-	marginNum := readEdgeConst(t, edgeAPIUpstreamCostRelPath, "MarginNumerator")
-	marginDen := readEdgeConst(t, edgeAPIUpstreamCostRelPath, "MarginDenominator")
 
-	// tokens * rate / 1e6 USD, times the margin, times credits per USD.
+	// tokens * rate / 1e6 USD, times credits per USD. No margin factor: see the
+	// note above.
 	credits := new(big.Rat).SetInt64(completionCap)
 	credits.Mul(credits, big.NewRat(completionRate, 1_000_000))
-	credits.Mul(credits, big.NewRat(marginNum, marginDen))
 	credits.Mul(credits, new(big.Rat).SetInt64(CreditsPerUSD))
 
 	// Truncate rather than round, so this stays a lower bound on the real hold

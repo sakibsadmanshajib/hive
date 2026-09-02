@@ -74,7 +74,7 @@ func TestCreditsForUpstreamCostRefusesImplausibleMagnitudes(t *testing.T) {
 	overCeiling, _ := new(big.Rat).SetString("100")
 	if _, err := CreditsForUpstreamCost(overCeiling); !errors.Is(err, ErrUpstreamCostImplausible) {
 		t.Fatalf("100 USD is %d credits, above the per-request ceiling, and must refuse; got %v",
-			100*MarginNumerator*CreditsPerUSD/MarginDenominator, err)
+			100*CreditsPerUSD, err)
 	}
 
 	// And the ceiling must not be so tight that ordinary traffic trips it.

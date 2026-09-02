@@ -1,6 +1,9 @@
 package payments
 
-import "testing"
+import (
+	"math/big"
+	"testing"
+)
 
 // TestUSDCentsToLocalPaisa_Exact locks the math/big FX invariant: the
 // USD→BDT paisa conversion must be computed in exact rational arithmetic
@@ -41,7 +44,7 @@ func TestUSDCentsToLocalPaisa_Exact(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := usdCentsToLocalPaisa(tc.usdCents, tc.rate)
+			got, err := usdCentsToLocalPaisa(new(big.Rat).SetInt64(tc.usdCents), tc.rate)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -53,7 +56,7 @@ func TestUSDCentsToLocalPaisa_Exact(t *testing.T) {
 }
 
 func TestUSDCentsToLocalPaisa_InvalidRate(t *testing.T) {
-	if _, err := usdCentsToLocalPaisa(100, "not-a-number"); err == nil {
+	if _, err := usdCentsToLocalPaisa(new(big.Rat).SetInt64(100), "not-a-number"); err == nil {
 		t.Fatal("expected error for invalid effective rate, got nil")
 	}
 }

@@ -265,19 +265,20 @@ func sseBody(frames ...string) string {
 const streamUsageFrame = `{"id":"up-1","choices":[{"index":0,"delta":{"content":"42"},"finish_reason":null}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`
 
 // upstreamCostFrame is the same stream frame carrying the provider-reported
-// cost an upstream_actual alias prices from. 0.0004 USD at the standard 7/5
-// margin and 1e9 credits per USD (D-046) is 560,000 credits, against a
+// cost an upstream_actual alias prices from. 0.0004 USD at 1e9 credits per USD
+// (D-046), with no margin factor since D-064, is 400,000 credits, against a
 // 100,000,000 credit hold, so a settlement that fell back to the hold is off
-// by roughly 178x and cannot be mistaken for a rounding difference.
+// by 250x and cannot be mistaken for a rounding difference.
 const upstreamCostFrame = `{"id":"gen-abc","choices":[{"index":0,"delta":{"content":"42"},"finish_reason":null}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"cost":0.0004}}`
 
 // upstreamCostBody is the non-streaming equivalent of upstreamCostFrame.
 const upstreamCostBody = `{"id":"gen-abc","choices":[{"message":{"role":"assistant","content":"The answer is 42 [1]."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"cost":0.0004}}`
 
-// wantUpstreamActualCredits is 0.0004 x 7/5 x 1e9, computed here rather than
-// by calling the production helper so this cannot pass by agreeing with
-// itself.
-const wantUpstreamActualCredits int64 = 560_000
+// wantUpstreamActualCredits is 0.0004 x 1e9, computed here rather than by
+// calling the production helper so this cannot pass by agreeing with itself.
+// There is no margin factor in it: D-064 retired the 1.4 multiplier from every
+// settlement path on 2026-09-02 and moved margin to the purchase price.
+const wantUpstreamActualCredits int64 = 400_000
 
 // cancelOnDrainBody hands out an SSE body once and cancels the request context
 // when the reader is drained, which is a client that read every content frame
@@ -463,8 +464,8 @@ func TestRAGChatHoldReachesATerminalStateExactlyOnce(t *testing.T) {
 }
 
 // An upstream_actual alias (hive-auto, D-059) carries no catalog token price,
-// so its charge is the cost the upstream reported for this generation times
-// the standard margin. Settling at the hold instead overcharges a sub-cent
+// so its charge is the cost the upstream reported for this generation, at the
+// credit peg. Settling at the hold instead overcharges a sub-cent
 // request by two orders of magnitude and flags it unconfirmed, which is the
 // same defect issue #1198 records on another path.
 //

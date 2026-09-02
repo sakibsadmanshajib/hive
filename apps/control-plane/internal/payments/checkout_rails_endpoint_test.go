@@ -96,8 +96,8 @@ func TestGetRailsEndpoint_AccountWithNoProfileRowAnswers200(t *testing.T) {
 	if payload.Currency != "USD" {
 		t.Errorf("expected USD for an unresolved country, got %q", payload.Currency)
 	}
-	if payload.PricePerBlockMinor == nil || *payload.PricePerBlockMinor != 100 {
-		t.Errorf("expected 100 minor units per block, got %v", payload.PricePerBlockMinor)
+	if payload.PricePerBlockMinor == nil || *payload.PricePerBlockMinor != 106 {
+		t.Errorf("expected 106 minor units per block, got %v", payload.PricePerBlockMinor)
 	}
 	if payload.CreditBlockSize == nil || *payload.CreditBlockSize != CreditsPerUSD {
 		t.Errorf("expected block size %d, got %v", CreditsPerUSD, payload.CreditBlockSize)

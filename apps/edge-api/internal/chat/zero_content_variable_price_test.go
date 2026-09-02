@@ -61,11 +61,13 @@ var variablePriceBurnFrames = []string{
 	"[DONE]",
 }
 
-// 0.0004 USD at the standard 7/5 margin and 1e9 credits per USD (D-046).
-// Written out rather than taken from the production helper so this cannot pass
-// by agreeing with itself, and far enough from both zero and the 100,000,000
-// credit hold that neither can be mistaken for it.
-const wantVariablePriceCredits int64 = 560_000
+// 0.0004 USD at 1e9 credits per USD (D-046), with no margin factor: D-064
+// retired the 1.4 multiplier on 2026-09-02 and moved margin to the purchase
+// price, so a burn now costs exactly what the provider charged. Written out
+// rather than taken from the production helper so this cannot pass by agreeing
+// with itself, and far enough from both zero and the 100,000,000 credit hold
+// that neither can be mistaken for it.
+const wantVariablePriceCredits int64 = 400_000
 
 func variablePriceHandler(t *testing.T, acct *fakeAccounting, upstreamURL string) http.Handler {
 	t.Helper()
@@ -140,5 +142,5 @@ func TestSessionChatStillBillsAVariablePriceTurnThatDeliveredText(t *testing.T) 
 	require.Len(t, finalized, 1, "a delivered answer is charged")
 	require.Empty(t, released)
 	require.Equal(t, wantVariablePriceCredits, finalized[0].ActualCredits,
-		"the delivered charge is the upstream's reported cost times the margin, unchanged by the guard")
+		"the delivered charge is the upstream's reported cost at the peg, unchanged by the guard")
 }

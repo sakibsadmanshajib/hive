@@ -335,9 +335,17 @@ func TestInitiateCheckout_HappyPath_Stripe(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// CreditsPerUSD credits / (CreditsPerUSD/100) = 100 cents = $1.00
-	if intent.AmountUSD != 100 {
-		t.Errorf("expected AmountUSD=100 cents, got %d", intent.AmountUSD)
+	// CreditsPerUSD credits is 100 cents at the peg, and 106 cents once the
+	// 6 percent purchase markup is applied (D-065). The credits granted are
+	// unchanged: the markup is on the price, never on the quantity.
+	if intent.AmountUSD != 106 {
+		t.Errorf("expected AmountUSD=106 cents, got %d", intent.AmountUSD)
+	}
+	if intent.Credits != CreditsPerUSD {
+		t.Errorf("expected Credits=%d (the markup must not move the quantity), got %d", CreditsPerUSD, intent.Credits)
+	}
+	if got := intent.Metadata["purchase_markup_rate"]; got != PurchaseMarkupRate {
+		t.Errorf("expected purchase_markup_rate %q recorded on the intent, got %v", PurchaseMarkupRate, got)
 	}
 	if intent.Status != IntentStatusPendingRedirect {
 		t.Errorf("expected status pending_redirect, got %s", intent.Status)
