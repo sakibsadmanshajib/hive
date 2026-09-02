@@ -682,7 +682,15 @@ def parse_args() -> argparse.Namespace:
             "the newly minted key, before the previous key is revoked."
         ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    # Normalised once, here, so the scope guard below and the account upsert
+    # further down can never be comparing different strings. A padded
+    # " owui-e2e-shim" would otherwise miss the reserved-slug comparison AND
+    # create a second, near-identical account row that nothing rotates.
+    args.account_slug = args.account_slug.strip()
+    args.tenant_slug = args.tenant_slug.strip()
+    args.env_file = args.env_file.strip()
+    return args
 
 
 def main() -> None:

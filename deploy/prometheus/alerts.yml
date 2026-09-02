@@ -137,6 +137,13 @@ groups:
       # found by a customer. The gauge is not written at all while the control
       # plane is unreachable (edge-api holds its last value), so a cold
       # control-plane container cannot fire this.
+      #
+      # Known bound, stated rather than discovered later: the gauge starts at 1
+      # on each edge-api start (see registerOWUIShimKeyMetric for why a 0 start
+      # would page on a slow first probe), so an edge-api restarting more often
+      # than every six minutes keeps resetting this window. A container in that
+      # state is a louder outage than the one this rule watches for, and a
+      # stable one reaches the threshold on the first probe after boot.
       - alert: OWUIShimKeyUnusable
         expr: |
           hive_owui_shim_key_usable == 0

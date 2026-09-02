@@ -668,6 +668,29 @@ def test_the_nightly_workflow_still_names_the_ci_account() -> None:
     print("ok: the nightly rotates the reserved CI account and nothing else")
 
 
+def test_a_padded_reserved_slug_cannot_slip_past_the_guard() -> None:
+    """Whitespace is not a way around the reserved account. Unstripped, a padded
+    slug would both miss the guard's comparison and upsert a second account row
+    nobody rotates, which looks like CI's and is not."""
+    argv = sys.argv
+    saved = _scope_env(OWUI_ADMIN_TOKEN="t")
+    stderr, sys.stderr = sys.stderr, io.StringIO()
+    try:
+        sys.argv = ["seed-owui-e2e-user.py", "--account-slug", "  owui-e2e-shim  "]
+        args = seed_owui_e2e_user.parse_args()
+        assert args.account_slug == "owui-e2e-shim", args.account_slug
+        try:
+            seed_owui_e2e_user.assert_account_scope(args.account_slug, args.env_file)
+        except SystemExit as exc:
+            assert exc.code != 0, exc.code
+        else:
+            raise AssertionError("a padded reserved slug was allowed a consumer")
+    finally:
+        sys.argv, sys.stderr = argv, stderr
+        _restore_scope_env(saved)
+    print("ok: a padded reserved account slug is still the reserved account")
+
+
 def main() -> None:
     os.environ["OWUI_ADMIN_EMAIL"] = "admin@example.com"
     os.environ["OWUI_ADMIN_PASSWORD"] = "pw"
@@ -701,6 +724,7 @@ def main() -> None:
     test_scope_is_asserted_before_any_network_call()
     test_revocation_only_ever_targets_keys_this_script_minted()
     test_the_nightly_workflow_still_names_the_ci_account()
+    test_a_padded_reserved_slug_cannot_slip_past_the_guard()
 
     del os.environ["OWUI_ADMIN_EMAIL"]
     del os.environ["OWUI_ADMIN_PASSWORD"]
