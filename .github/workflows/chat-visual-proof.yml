@@ -84,7 +84,6 @@ on:
       - 'deploy/docker/owui-patches/**'
       - 'deploy/docker/pipelines/**'
       - 'deploy/docker/owui-static/**'
-      - 'deploy/docker/Dockerfile.open-webui'
       - 'deploy/docker/Caddyfile.owui'
       - 'vendor/open-webui/src/lib/hive/**'
       - 'apps/edge-api/internal/auth/owui_unwrap.go'
@@ -101,7 +100,27 @@ on:
       - 'scripts/seed-owui-e2e-user.py'
       - 'apps/web-console/e2e/phase-19/owui/**'
       - 'apps/web-console/e2e/phase-19/sign-in-with-hive.ts'
-      - '.github/workflows/chat-visual-proof.yml'
+    # NOT listed, on purpose, and this is a trade rather than an oversight:
+    # deploy/docker/Dockerfile.open-webui and this workflow file itself. Both
+    # are edited by Dependabot (the docker ecosystem covers /deploy/docker, the
+    # github-actions ecosystem covers /), and a Dependabot-raised pull request
+    # is served from the separate Dependabot secret store, where every
+    # `secrets.*` reference here resolves to the empty string. This job needs a
+    # real provider key to complete a real turn, so unlike ci.yml's browser jobs
+    # it cannot stub its way out; it would be permanently red on every image and
+    # action bump, and a check that is always red for an unrelated reason is a
+    # check nobody reads (issues #820, #821).
+    #
+    # The obvious alternative, keeping the paths and adding
+    # `github.actor != 'dependabot[bot]'` to the job condition, is what this
+    # replaced. tools/verify-spec-wiring.mjs refuses every negated atom by
+    # design and therefore could not prove the capture spec runs on a pull
+    # request at all, which would have demoted real coverage to a ledger entry
+    # saying the opposite of the truth. Closing the exposure at the trigger
+    # keeps the condition provable and the ledger honest.
+    #
+    # A bump to either path that genuinely wants proof asks for it by dispatch,
+    # which is the arm documented at the top of this file.
 
 # No concurrency group, for the reason agent-visual-proof.yml states: GitHub
 # holds one run per group as pending and a third cancels the second outright,
@@ -132,17 +151,18 @@ jobs:
     # finish streaming. A wedged one of either should still fail inside the
     # budget rather than sit until GitHub's own six hour ceiling.
     timeout-minutes: 40
-    # Two kinds of pull request never receive repository secrets, so a run on
-    # either would fail on a blank secret rather than on the change under test.
-    # Same gate, and the same measured reasoning, as agent-visual-proof.yml:
-    # a fork pull request gets none at all, and a Dependabot pull request is
-    # served from the separate Dependabot secret store, where every `secrets.*`
-    # reference here resolves to the empty string. A check that is always red
-    # for an unrelated reason is a check nobody reads.
+    # A fork pull request receives no repository secrets at all, so a run on one
+    # would fail on a blank secret rather than on the change under test. Same
+    # composition as ci.yml's web-e2e job, and deliberately built only from
+    # atoms tools/verify-spec-wiring.mjs can prove: it refuses every negated
+    # form by design, and an unprovable condition means the capture spec cannot
+    # be credited with the pull-request coverage it actually has. The other
+    # secret-less case, Dependabot, is closed at the trigger instead: see the
+    # note on the paths list above.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-       github.actor != 'dependabot[bot]')
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     permissions:
       contents: write
       actions: read
@@ -847,36 +867,42 @@ jobs:
           cat /tmp/console.log
           exit 1
 
-      - name: Sign in through the real Continue with Hive journey
-        # The owui-setup Playwright project, unmodified. It is the ONE
-        # implementation of this journey (apps/web-console/e2e/phase-19/
-        # sign-in-with-hive.ts says at length why there is not a second), it
-        # installs the hive_jwt_forward Functions filter the chat path needs,
-        # and it saves the session as storage state for the capture below.
+      - name: Point the capture at a dead session (deliberate sabotage run)
+        # The negative control for the whole job. The capture is handed a
+        # storage state with no session in it, so it cannot reach a signed-in
+        # surface, and this run must go red rather than pass with an empty
+        # capture directory or a photograph of a login page.
+        #
+        # A dead state file rather than deleting the real one: owui-setup is a
+        # project dependency of the capture and would simply mint a fresh
+        # session over any file this step removed.
+        if: github.event.inputs.sabotage == 'true'
+        run: |
+          set -euo pipefail
+          printf '{"cookies":[],"origins":[]}' > "$RUNNER_TEMP/dead-session.json"
+          echo "PROOF_STORAGE_STATE=$RUNNER_TEMP/dead-session.json" >> "$GITHUB_ENV"
+          echo "::warning::capture pointed at an empty session on purpose; this run is expected to fail"
+
+      - name: Sign in and capture the proof
+        id: capture
+        # One invocation, not two. The owui-proof project depends on owui-setup,
+        # so Playwright runs the real "Continue with Hive" journey first and
+        # hands the capture its session. owui.setup.ts is the ONE implementation
+        # of that journey (sign-in-with-hive.ts says at length why there is not a
+        # second) and it also installs the hive_jwt_forward Functions filter the
+        # chat path needs.
+        #
+        # Deliberately not two steps with the setup project invoked on its own:
+        # tools/verify-spec-wiring.mjs excludes setup files from its spec
+        # universe, so an invocation selecting only owui-setup selects zero specs
+        # and is rejected as a broken selector. It is right to reject it, and the
+        # dependency is the mechanism that exists for this.
         working-directory: apps/web-console
         env:
           HIVE_COMPOSE_FLAGS: --env-file ../../.env.ci --profile local
-        run: npm run e2e:owui:session
-
-      - name: Throw the session away (deliberate sabotage run)
-        # The negative control for the whole job. With the storage state gone
-        # the capture cannot reach a signed-in surface, and this run must go red
-        # rather than pass with an empty capture directory or a photograph of a
-        # login page.
-        if: github.event.inputs.sabotage == 'true'
-        working-directory: apps/web-console
-        run: |
-          set -euo pipefail
-          printf '{"cookies":[],"origins":[]}' > e2e/phase-19/owui/.auth/owui-user.json
-          echo "::warning::session discarded on purpose; this run is expected to fail"
-
-      - name: Capture the proof
-        id: capture
-        working-directory: apps/web-console
-        env:
           PROOF_OUT: ${{ env.CAPTURE_DIR }}
           PROOF_NOTE: PR #${{ steps.target.outputs.pr }} · run ${{ github.run_id }}
-        run: node e2e/phase-19/owui/capture-chat-proof.mjs
+        run: npm run e2e:owui:proof
 
       - name: Refuse an empty capture
         # Belt and braces over the harness's own check: a capture directory with
