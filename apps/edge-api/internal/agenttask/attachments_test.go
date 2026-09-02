@@ -62,7 +62,12 @@ func TestHandler_Create_ForwardsAttachments(t *testing.T) {
 // but a request that cannot be honoured should not take a credit hold or
 // create a row first.
 func TestHandler_Create_RefusesAttachmentNamesThatAreNotFileNames(t *testing.T) {
-	for _, name := range []string{"", "  ", "..", "../escape.txt", "nested/file.txt", `back\slash.txt`} {
+	for _, name := range []string{
+		"", "  ", "..", "../escape.txt", "nested/file.txt", `back\slash.txt`,
+		// A newline in a name would forge a line in the bullet list the run's
+		// initial message repeats the names back to the model as.
+		"a\x00b.txt", "a\nb.txt",
+	} {
 		t.Run(name, func(t *testing.T) {
 			fc := newFakeClient()
 			h := billedHandler(t, fc)

@@ -110,7 +110,13 @@ func TestSandboxEngine_Launch_AttachmentNeverReplacesAPackFile(t *testing.T) {
 // path, so it validates the name itself rather than trusting the two hops
 // above it, exactly as it already does for Task.Pack.
 func TestSandboxEngine_Launch_RejectsAttachmentNamesThatAreNotFileNames(t *testing.T) {
-	for _, name := range []string{"", "   ", ".", "..", "../escape.txt", "nested/file.txt", "a\x00b"} {
+	for _, name := range []string{
+		"", "   ", ".", "..", "../escape.txt", "nested/file.txt", "back\\slash.txt",
+		// A newline is not merely an odd file name. The name is repeated back
+		// to the model as a bullet in the run's initial message, so one would
+		// let the person forge extra lines in it.
+		"a\x00b", "a\nb.txt", "a\tb.txt",
+	} {
 		t.Run(name, func(t *testing.T) {
 			var fake *fakeAgentServer
 			e := newTestEngine(t, &fake)

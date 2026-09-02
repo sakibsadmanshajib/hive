@@ -10,7 +10,9 @@ package engine
 // mechanism issue #1360 established for the pack.
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,8 +71,16 @@ func attachmentFileName(raw string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("engine: attachment has no file name")
 	}
-	if strings.ContainsAny(name, "/\\\x00") {
+	if strings.ContainsAny(name, "/\\") {
 		return "", fmt.Errorf("engine: attachment name %q is a path, not a file name", raw)
+	}
+	// Control characters, NUL and newline included. edge-api refuses these too;
+	// this process refuses them again because it is the one that turns a name
+	// into a path and repeats it back to the model, and a boundary that trusts
+	// its input because something upstream checked it stops being safe the
+	// moment that upstream moves.
+	if strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return "", fmt.Errorf("engine: attachment name %q contains control characters", raw)
 	}
 	if name == "." || name == ".." {
 		return "", fmt.Errorf("engine: attachment name %q is not a file name", raw)
@@ -94,7 +104,10 @@ func writeAttachment(root *os.Root, name, content string) (string, error) {
 		}
 		f, err := root.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err != nil {
-			if os.IsExist(err) {
+			// errors.Is rather than os.IsExist: Root.OpenFile wraps, and the
+			// predicate that unwraps is the one that keeps working if it ever
+			// wraps one layer deeper.
+			if errors.Is(err, fs.ErrExist) {
 				continue
 			}
 			return "", fmt.Errorf("engine: write attachment %s into the agent working directory: %w", name, err)

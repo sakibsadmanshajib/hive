@@ -198,7 +198,14 @@ func validateAttachments(in []Attachment) error {
 		if len(name) > maxAttachmentNameBytes {
 			return errors.New("attachment name is too long")
 		}
-		if strings.ContainsAny(name, "/\\\x00") || name == "." || name == ".." {
+		if strings.ContainsAny(name, "/\\") || name == "." || name == ".." {
+			return fmt.Errorf("attachment name %q is not a file name", name)
+		}
+		// Control characters, NUL and newline included. A newline in a name is
+		// not merely an odd file name: the name is repeated back to the model
+		// as a bullet in the run's initial message, so one would let the person
+		// forge extra lines there.
+		if strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 			return fmt.Errorf("attachment name %q is not a file name", name)
 		}
 		if a.Content == "" {

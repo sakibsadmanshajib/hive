@@ -68,9 +68,11 @@ UPSTREAM_TIMEOUT_SECONDS = 30
 # Bodies here are a pack name, a goal, and since issue #1065 the text of the
 # documents the person attached in the composer. edge-api applies its own limit
 # on the create route (1 MiB of body over a 256 KiB cap on the attachment text);
-# this one exists so a chat container worker never buffers more than it could
-# possibly need, and it has to clear edge-api's or a legal request would be
-# refused here with a message about the description being too long.
+# this one has to clear edge-api's or a legal request would be refused here with
+# a message about the description being too long. It bounds what is forwarded,
+# not what is buffered: `await request.body()` has already read the whole body
+# by the time the check runs, which was true before this number changed and is
+# uvicorn's limit to enforce rather than this handler's.
 MAX_REQUEST_BODY_BYTES = 1024 * 1024
 
 # Kept in step with maxAttachments and maxAttachmentBytes in
