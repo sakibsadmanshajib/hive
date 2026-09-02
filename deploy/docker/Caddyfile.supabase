@@ -48,6 +48,24 @@
 
 {
 	auto_https disable_redirects
+
+	# Who is allowed to tell this Caddy who the client is.
+	#
+	# Every peer that reaches any listener here is another container on the
+	# compose network (the public listener on 8080 is reached only through
+	# caddy-console, which is itself reached only through the Cloudflare
+	# Tunnel), so the trusted set is the private ranges and nothing else. A
+	# request arriving from a public address cannot exist here, and if one ever
+	# did its forwarded headers would be ignored and {client_ip} would fall back
+	# to the peer address.
+	#
+	# This is what makes {client_ip} usable as the rate-limit bucket key below.
+	# Without it Caddy has no trusted set, treats every peer as untrusted, and
+	# {client_ip} is just the peer address again -- which is the deployment-wide
+	# single bucket issue #1744 was filed for.
+	servers {
+		trusted_proxies static private_ranges
+	}
 }
 
 # The CORS preflight for /auth/v1, answered here instead of being proxied.
@@ -218,20 +236,155 @@
 	# rest of the admin API rather than told it would be welcome. Before the
 	# proxy for the reason the snippet documents.
 	import supabase_auth_cors_preflight
+	# Password recovery is routed on its own so ONE thing about it can differ
+	# from the shared proxy below: what the caller is allowed to learn.
+	#
+	# GoTrue answers POST /recover with 200 {} whether or not the address holds
+	# an account, which is deliberate account-existence protection. It stops
+	# holding that line the moment a limit engages. The per-address frequency
+	# check (GOTRUE_SMTP_MAX_FREQUENCY, added for issue #1744) is evaluated in
+	# sendPasswordRecovery, which is reached only for an address that HAS a
+	# user row, so its 429 means "this address is real" while an unknown
+	# address goes on answering 200. Two requests then read the account list.
+	# The per-IP limiter has the same shape from the caller's side.
+	#
+	# So BOTH outcomes are synthesized here, from one handler, rather than one
+	# being proxied and the other rewritten. That is not fussiness. The first
+	# version of this block rewrote only the 429, and the two responses still
+	# differed in their header set (`Vary`, `Server`, and the `Via` hop count),
+	# which is the same oracle at the same cost as the status code was. Two
+	# paths that agree today are one upstream change away from not agreeing;
+	# one path cannot disagree with itself.
+	#
+	# Concretely, what proxying the 429 through would have leaked: GoTrue puts
+	# `X-Sb-Error-Code: over_email_send_rate_limit` on it, and on nothing an
+	# unknown address ever receives. Copying upstream headers is therefore not
+	# an option here either, with or without an exclusion list.
+	#
+	# The Access-Control-* and Vary values below are exactly what GoTrue itself
+	# answers on this route, restated because a synthesized response carries no
+	# upstream header at all. They widen nothing: /recover takes no credential
+	# and returns no data, and the same three values reach the browser today.
+	#
+	# Matcher is the single path form on purpose, unlike @admin above. The
+	# variants that got past that matcher were checked here and do not apply:
+	# POST /auth/v1/recover/ and POST /auth/v1/RECOVER both fall through to the
+	# shared proxy and 404 at GoTrue, which routes /recover exactly.
+	#
+	# This lives in (supabase_public) and not in (supabase_internal), so
+	# /auth/v1/recover on the in-network listener still answers a raw 429. That
+	# is deliberate rather than an oversight: anything on the compose network
+	# can dial supabase-auth:9999 directly and get the same 429, so a rewrite
+	# there would be a control an attacker walks around, not a boundary. If a
+	# server-side caller is ever pointed at the internal listener for password
+	# recovery, it needs this treatment or the public origin, not the internal
+	# route as it stands.
+	#
+	# ponytail: the price is that a throttled reset is indistinguishable from a
+	# sent one, so a user who asks twice inside the window sees success and
+	# gets no second mail. GoTrue still logs the refusal, so operators are not
+	# blind. If that becomes a support cost, the fix is a cooldown on the reset
+	# form, not an informative status here -- an informative status is the
+	# oracle.
+	#
+	# ponytail: identical bytes, not identical timing. A real address costs a
+	# synchronous SMTP send (140-160ms measured locally) and an unknown one
+	# does not (39-62ms), so the wall clock still separates them. Closing that
+	# needs the send moved off the request path, which is GoTrue's to do, not
+	# this gateway's. It is a slower and far noisier oracle than a status code
+	# or a header set, and it is the residual this route does NOT close.
+	#
+	# The matcher names POST, and that is not tidiness. `handle` blocks are
+	# sorted by path specificity rather than by the order they appear in this
+	# file, so an exact /auth/v1/recover outranks the preflight handle's
+	# /auth/v1/* and would take the browser's OPTIONS with it. GoTrue answers
+	# that preflight 204 with no Access-Control-* headers at all, for the
+	# `apikey` reason written out at supabase_auth_cors_preflight, and the
+	# browser then blocks the POST before sending it. Restricting this route to
+	# the method it is about hands OPTIONS back to the preflight handle where
+	# every sibling route already sends it.
+	@recover {
+		method POST
+		path /auth/v1/recover
+	}
+	handle @recover {
+		uri strip_prefix /auth/v1
+		reverse_proxy supabase-auth:9999 {
+			header_up X-Forwarded-For {client_ip}
+			header_up -Sb-Forwarded-For
+
+			# 5xx is in this list because it is the cheapest oracle of the
+			# three, not a completeness flourish. GoTrue reaches its mail
+			# send only for an address that HAS a user row, so a broken relay
+			# answers a real address 500 {"msg":"Error sending recovery
+			# email"} and an unknown one 200 {}. That is ONE request per
+			# candidate, with no per-address window to arm first, and the body
+			# names the reason. Its trigger condition is a mail relay that has
+			# stopped accepting, which is the exact state this issue was filed
+			# over.
+			#
+			# ponytail: a genuine server fault on this route is therefore
+			# invisible to the caller, who sees the same 200 as a sent mail.
+			# That is the same trade the throttle makes and it is the right way
+			# round: the alternative is telling every anonymous caller which
+			# addresses hold accounts whenever mail is down. Everything outside
+			# this list still passes through, so a 400 on a malformed address is
+			# unchanged; those are decided before the user lookup and cannot
+			# vary by account.
+			#
+			# Invisible to the CALLER is not invisible to an operator, and that
+			# distinction is the whole reason this trade is affordable. GoTrue
+			# logs the refusal, and control-plane exports
+			# hive_mail_relay_usable, which MailRelayUnusable in
+			# deploy/prometheus/alerts.yml pages on. That gauge is what stops
+			# this from being a loud failure swapped for a quiet absence: with
+			# the relay down, every user is told to check an inbox nothing will
+			# arrive in, and before the gauge existed nothing anywhere said so.
+			#
+			# It watches the relay, not this route, because there is nowhere
+			# here to watch from. A signal emitted on this branch and not the
+			# others is the oracle again, and Caddy's own metrics record the
+			# status Caddy WROTE, so they see the synthesized 200 and never the
+			# upstream 5xx (measured on caddy 2.11.3 against this file). The
+			# relay is the shared cause in any case: docker-compose.yml gives
+			# control-plane HIVE_SMTP_HOST from the same ENTERPRISE_SMTP_HOST
+			# that feeds GOTRUE_SMTP_HOST. What the gauge does NOT cover is a
+			# 5xx from something other than the relay, a template or database
+			# fault in the recovery path, which stays log-only.
+			@sameanswer status 200 429 5xx
+			handle_response @sameanswer {
+				header Content-Type application/json
+				header Access-Control-Allow-Origin "*"
+				header Access-Control-Allow-Credentials true
+				header Vary Origin
+				respond "{}" 200
+			}
+		}
+	}
 	handle_path /auth/v1/* {
 		reverse_proxy supabase-auth:9999 {
 			# GoTrue keys its rate limits on X-Forwarded-For
 			# (GOTRUE_RATE_LIMIT_HEADER), so what lands here decides whose
-			# bucket a request spends.
+			# bucket a request spends. It reads the LEFTMOST value of that
+			# header (performRateLimitingWithHeader splits on "," and takes
+			# the first field), which is why this replaces the header with a
+			# single value rather than appending to whatever arrived.
 			#
-			# This Caddy already replaces the header rather than appending,
-			# because appending only happens for a peer listed in
-			# trusted_proxies and none is configured. The line is therefore
-			# not what makes the value trustworthy today; it makes it stay
-			# trustworthy. The cutover will want trusted_proxies set, so the
-			# tunnel's client address survives, and that is exactly the
-			# setting that turns appending back on. Leave this here through
-			# that change.
+			# {client_ip} is that single value: with the trusted_proxies set
+			# in the global block above, Caddy walks the incoming
+			# X-Forwarded-For from the right and returns the first hop that
+			# is NOT one of our own proxies. caddy-console put exactly one
+			# value there, the address Cloudflare reported as the client, so
+			# that is what lands here and that is what GoTrue buckets on.
+			#
+			# It is not caller-choosable. A browser's own X-Forwarded-For is
+			# overwritten at the Cloudflare edge before it reaches the
+			# tunnel, and caddy-console replaces the header outright rather
+			# than appending to it, so nothing a caller sends survives to
+			# this point. What an in-network peer sends does survive, since
+			# the whole compose network is inside the trusted set; a
+			# container that can dial this listener directly has better
+			# options than skewing a rate-limit bucket.
 			#
 			# Sb-Forwarded-For is stripped because GoTrue reads it BEFORE
 			# the configured header (performRateLimiting checks
@@ -239,15 +392,7 @@
 			# GOTRUE_SB_FORWARDED_FOR_ENABLED, which defaults false, so it
 			# is inert today and one flag away from handing the bucket key
 			# back to the caller.
-			#
-			# ponytail: {remote_host} is the immediate peer, so behind a
-			# tunnel this is ONE bucket for the whole deployment, not merely
-			# a stricter per-user one: 30 token refreshes an hour shared by
-			# everybody, and one user can lock out the rest. Acceptable
-			# while nothing is tunnelled here; at cutover set
-			# trusted_proxies and rewrite from the tunnel's client-IP header
-			# instead, keeping ENTERPRISE_RATE_LIMIT_HEADER in step.
-			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-For {client_ip}
 			header_up -Sb-Forwarded-For
 		}
 	}

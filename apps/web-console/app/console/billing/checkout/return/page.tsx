@@ -1,11 +1,16 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 
 import {
-  getAccountProfile,
   getCheckoutIntent,
-  getViewer,
+  ControlPlaneError,
+  type CheckoutIntent,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+  tolerate,
+} from "@/lib/console/data";
 import { CheckoutReturnStatus } from "@/components/billing/checkout-return-status";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
@@ -31,7 +36,7 @@ interface CheckoutReturnPageProps {
 // intents to read, and `hint` only selects wording. Neither can produce a
 // success, a failure, or a credit. Settlement stays with the provider webhook.
 export default async function CheckoutReturnPage({ searchParams }: CheckoutReturnPageProps) {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -40,10 +45,31 @@ export default async function CheckoutReturnPage({ searchParams }: CheckoutRetur
   const intentId = parseIntentId(params.intent);
   const hint = parseReturnHint(params.hint);
 
-  const profile = await getAccountProfile();
-  const intent = intentId
-    ? await getCheckoutIntent(intentId).catch((): null => null)
-    : null;
+  const profile = await requireAccountProfile();
+
+  // Three outcomes, and only two of them are "we could not find that
+  // purchase". Someone reading this page has just paid, so telling them their
+  // purchase does not exist because the payment service was unreachable is
+  // the worst answer this console can give (issue #494). 404 and 403 stay
+  // deliberately indistinguishable from each other, so the page still cannot
+  // be used to probe for intent ids belonging to other accounts.
+  let intent: CheckoutIntent | null = null;
+  let statusUnreadable = false;
+  if (intentId) {
+    try {
+      intent = await getCheckoutIntent(intentId);
+    } catch (error) {
+      unstable_rethrow(error);
+      const refused =
+        error instanceof ControlPlaneError &&
+        (error.status === 404 || error.status === 403);
+      statusUnreadable = !refused;
+      console.error(
+        "CheckoutReturnPage: could not load the checkout intent",
+        error,
+      );
+    }
+  }
 
   return (
     <ConsoleShell
@@ -54,7 +80,7 @@ export default async function CheckoutReturnPage({ searchParams }: CheckoutRetur
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active={BILLING_PATH}
       topbar={<span className="font-medium text-[var(--color-ink-2)]">Billing</span>}
     >
@@ -66,6 +92,27 @@ export default async function CheckoutReturnPage({ searchParams }: CheckoutRetur
 
       {intent ? (
         <CheckoutReturnStatus initial={intent} hint={hint} />
+      ) : statusUnreadable ? (
+        <Card>
+          <CardContent className="flex flex-col gap-4 px-6 py-7">
+            <h1 className="font-display text-xl text-[var(--color-ink)]">
+              We could not check your purchase
+            </h1>
+            <p className="text-sm text-[var(--color-ink-2)]">
+              This is a problem reading the payment status, not a statement
+              about your payment. If it went through, the credits appear on the
+              billing page once it is confirmed. Refresh to try again.
+            </p>
+            <div>
+              <Link
+                href={BILLING_PATH}
+                className={buttonVariants({ variant: "accent", size: "md" })}
+              >
+                Back to billing
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
       ) : (
         // No readable intent: either the return carried no id, or the id does
         // not belong to this account. The control-plane reports both the same

@@ -18,6 +18,38 @@
 # X-Forwarded-Proto would otherwise be attacker-controlled) so anything
 # upstream that derives an absolute URL from request scheme sees the scheme
 # users actually arrive on, same pattern as Caddyfile.owui.
+# Who is allowed to tell this Caddy who the client is.
+#
+# Whoever is in the trusted set below chooses their own bucket, so the set has
+# to be small and the reason has to be checkable rather than asserted. What
+# makes it small is a line in docker-compose.yml, not this paragraph: the
+# service publishes 127.0.0.1:3005:80, so the only peers that can reach this
+# listener are the Cloudflare Tunnel (cloudflared runs on the host and dials
+# localhost:3005) and other containers on the compose network. Both are private
+# addresses. A public peer cannot occur, and if one somehow did its forwarded
+# headers would be ignored and {client_ip} would be the peer address.
+#
+# That binding is the control. An earlier version of this comment claimed the
+# same property while the port was published on every interface, which made it
+# false on two paths at once: a direct caller bypassing Cloudflare, and an
+# external connection arriving through docker-proxy with the bridge gateway as
+# its peer, inside the trusted set. Change the binding and this comment is
+# wrong again.
+#
+# Cf-Connecting-Ip is preferred because Cloudflare SETS it on every request,
+# overwriting whatever the browser sent, so an internet caller cannot choose
+# its own value. X-Forwarded-For is the fallback for a terminator that is not
+# Cloudflare; when neither header is present {client_ip} is the peer address,
+# which is the old behaviour rather than an empty value. That fallback matters:
+# GoTrue treats an EMPTY rate-limit header as "no rate limiting at all", so a
+# blank value here would fail open rather than merely lose precision.
+{
+	servers {
+		trusted_proxies static private_ranges
+		client_ip_headers Cf-Connecting-Ip X-Forwarded-For
+	}
+}
+
 http://{$CONSOLE_DOMAIN:console.localhost} {
   # Compress compressible responses for every route in this block (directives
   # are sorted, so encode wraps the handle and reverse_proxy blocks below).
@@ -74,10 +106,15 @@ http://{$CONSOLE_DOMAIN:console.localhost} {
   # construction rather than by someone remembering to keep two values in
   # step. scripts/test_caddy_console_auth_origin.py fails if they diverge.
   #
-  # An inbound X-Forwarded-For is not a concern here even though this appends
-  # to it: the public listener replaces the header outright with its own peer
-  # address before GoTrue sees it, so the rate-limit bucket key still cannot
-  # be chosen by the caller.
+  # X-Forwarded-For is REPLACED with the resolved client address rather than
+  # appended to, and that is the rate-limit bucket key GoTrue will spend
+  # (GOTRUE_RATE_LIMIT_HEADER). Before issue #1744 the public listener rewrote
+  # it to its own peer, which is this container, so every visitor on the
+  # internet shared one bucket: thirty requests from one host exhausted the
+  # deployment's whole hourly quota and 429'd everybody else's password reset.
+  # Sending the real client address is what splits that into one bucket per
+  # caller. The caller cannot choose it, per the global block at the top of
+  # this file.
   # A NAMED matcher, because `handle` takes exactly one matcher token and
   # `handle /auth/v1 /auth/v1/*` is a parse error, not a longer list. Caddy
   # refuses to adapt the file and the container crash-loops, which is how this
@@ -102,6 +139,7 @@ http://{$CONSOLE_DOMAIN:console.localhost} {
       lb_try_duration 30s
       lb_try_interval 1s
       header_up Host {$SUPABASE_DOMAIN:supabase.localhost}
+      header_up X-Forwarded-For {client_ip}
       header_up X-Forwarded-Proto {$CONSOLE_EXTERNAL_SCHEME:http}
       transport http {
         response_header_timeout 30s

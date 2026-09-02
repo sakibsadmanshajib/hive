@@ -15,8 +15,13 @@ import { formatCredits, formatShortDate } from "@/lib/format/credits";
 import { CreditBalance } from "@/components/billing/credit-balance";
 
 interface BillingOverviewProps {
-  balance: BalanceSummary;
-  recentEntries: LedgerEntry[];
+  // null when the balance could not be read. Rendering an unknown balance as
+  // a figure is how a customer ends up trusting a number the system never
+  // had; the card says "Unavailable" instead (issue #494).
+  balance: BalanceSummary | null;
+  // null when the ledger could not be read. [] is an account with no
+  // transactions; the card says which of the two it is (issue #494).
+  recentEntries: LedgerEntry[] | null;
   // Country code is intentionally accepted but not displayed — locale rendering
   // is done downstream by checkout-modal which uses Intl with the rail's
   // currency. Surfacing FX hints to BD accounts is a regulatory violation.
@@ -46,7 +51,7 @@ export function BillingOverview({
   balance,
   recentEntries,
 }: BillingOverviewProps) {
-  const recent = recentEntries.slice(0, 5);
+  const recent = (recentEntries ?? []).slice(0, 5);
 
   const ledgerColumns: Column<LedgerEntry>[] = [
     {
@@ -91,7 +96,16 @@ export function BillingOverview({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-5 px-5 py-5 sm:flex-row sm:items-end sm:justify-between">
-          <CreditBalance balance={balance} />
+          {balance ? (
+            <CreditBalance balance={balance} />
+          ) : (
+            <div className="flex flex-col gap-1">
+              <p className="text-3xl text-[var(--color-ink-3)]">Unavailable</p>
+              <p className="text-xs text-[var(--color-ink-3)]">
+                We could not read your balance just now. Refresh to try again.
+              </p>
+            </div>
+          )}
           <div className="flex items-center gap-3">
             <Link
               href="/console/billing?action=buy"
@@ -125,7 +139,12 @@ export function BillingOverview({
           ) : null}
         </CardHeader>
         <CardContent className="px-5 py-5">
-          {recent.length === 0 ? (
+          {recentEntries === null ? (
+            <EmptyState
+              title="Could not load recent transactions"
+              description="We could not reach the billing service, so this is not showing your latest ledger activity. Refresh to try again."
+            />
+          ) : recent.length === 0 ? (
             <EmptyState
               title="No transactions yet"
               description="Your credit ledger fills up after the first top-up."

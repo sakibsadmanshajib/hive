@@ -6,51 +6,73 @@
 //
 // Regulatory rule: BDT-only on the customer surface. Zero USD/FX strings.
 
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 
 import {
-  EMPTY_ACCOUNT_PROFILE,
-  getAccountProfile,
   getBudget,
-  getViewer,
-  type Viewer,
+  ControlPlaneError,
+  type BudgetSettings,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { BudgetForm } from "@/components/billing/budget-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
+
+/**
+ * Three states, not two (issue #494).
+ *
+ * getBudget answers null for "no budget configured" and throws for everything
+ * else, including the 403 a non-owner gets. Collapsing those into one null
+ * told a member "We could not reach the budget service" -- a claim about a
+ * healthy service, inferred from an authorization answer -- and withheld the
+ * read-only form they are supposed to see.
+ *
+ * Shape follows loadMembers() in app/console/members/page.tsx: a refusal is a
+ * real, known answer and never renders as an outage.
+ */
+async function loadBudget(workspaceId: string): Promise<{
+  budget: BudgetSettings | null;
+  unreadable: boolean;
+}> {
+  try {
+    return { budget: await getBudget(workspaceId), unreadable: false };
+  } catch (error) {
+    unstable_rethrow(error);
+    // Forbidden is an answer about this viewer, not about the service. The
+    // form still renders, disabled by readOnly={!isOwner}, which is what a
+    // member saw before and what tests/e2e/console-budgets.spec.ts pins.
+    if (error instanceof ControlPlaneError && error.status === 403) {
+      return { budget: null, unreadable: false };
+    }
+    console.error("BudgetSettingsPage: could not load the budget", error);
+    return { budget: null, unreadable: true };
+  }
+}
 
 export default async function BudgetSettingsPage() {
-  // getViewer() already retries one transient Supabase Auth hiccup
-  // (lib/control-plane/client.ts). A second failure means the session
-  // genuinely cannot be resolved, so this redirects to sign-in -- the same
-  // destination an expired session already takes (tests/e2e/unauth.spec.ts)
-  // -- instead of letting the throw reach the generic error boundary. There
-  // is nothing else this page can render without a viewer: no role, no
-  // workspace id, no email.
-  let viewer: Viewer;
-  try {
-    viewer = await getViewer();
-  } catch (error) {
-    console.error("BudgetSettingsPage: could not load viewer", error);
-    redirect("/auth/sign-in");
-  }
+  // The redirect-to-sign-in fallback this page used to spell out itself now
+  // lives in requireViewer(), so every console page has it and none of them
+  // carry a private copy that also has to remember to let Next.js's own
+  // control-flow errors past (issue #494).
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
 
-  // A profile-fetch failure is not a session problem -- the page still knows
-  // who the viewer is and which workspace this is, so it degrades to the
-  // same empty/not-yet-set-up profile a fresh account already renders
-  // (EMPTY_ACCOUNT_PROFILE), rather than crashing on a field this page only
-  // needs for a display name fallback.
-  const profile = await getAccountProfile().catch((error: unknown) => {
-    console.error("BudgetSettingsPage: could not load account profile", error);
-    return EMPTY_ACCOUNT_PROFILE;
-  });
+  // A profile-fetch failure is not a session problem: the page still knows
+  // who the viewer is and which workspace this is, and it only needs the
+  // profile for a display-name fallback. requireAccountProfile() resolves it
+  // to null and logs, so this page no longer carries its own copy of that
+  // decision (issue #494).
+  const profile = await requireAccountProfile();
   const workspaceId = viewer.current_account.id;
   const isOwner = viewer.current_account.role === "owner";
 
-  const budget = await getBudget(workspaceId).catch((): null => null);
+  const { budget, unreadable } = await loadBudget(workspaceId);
 
   return (
     <ConsoleShell
@@ -61,7 +83,7 @@ export default async function BudgetSettingsPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/billing"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Budget</span>
@@ -72,11 +94,18 @@ export default async function BudgetSettingsPage() {
         title="Budget settings"
         description="Set soft and hard caps for monthly spend in Bangladeshi taka."
       />
-      <BudgetForm
-        workspaceId={workspaceId}
-        budget={budget}
-        readOnly={!isOwner}
-      />
+      {!unreadable ? (
+        <BudgetForm
+          workspaceId={workspaceId}
+          budget={budget}
+          readOnly={!isOwner}
+        />
+      ) : (
+        <EmptyState
+          title="Could not load your budget"
+          description="We could not reach the budget service, so this form is not showing the caps currently in force. Refresh to try again."
+        />
+      )}
     </ConsoleShell>
   );
 }

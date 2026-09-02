@@ -257,6 +257,29 @@ services:
       # GOTRUE_RATE_LIMIT_TOKEN_REFRESH: max token refresh requests per hour.
       # GoTrue default is 150; tightened to 30 for regulated edge deployments.
       GOTRUE_RATE_LIMIT_TOKEN_REFRESH: ${ENTERPRISE_RATE_LIMIT_TOKEN_REFRESH:-30}
+      # Per-ADDRESS cap on outbound auth mail, issue #1744. Every limit above
+      # is keyed on the caller's address, so an attacker holding a botnet
+      # multiplies them; this one is keyed on the recipient's user row
+      # (sendPasswordRecovery checks it against users.recovery_sent_at before
+      # any mail is composed) and therefore holds no matter how many source
+      # addresses the traffic comes from. Five minutes is twelve recovery
+      # mails an hour to any one person, against the twenty-seven a single
+      # host measurably delivered before.
+      #
+      # GoTrue's own default is one minute and applies whether or not this
+      # line exists, so the behaviour is not new; the window is. It is global
+      # across GoTrue's mailers, not recovery-only, so it also throttles email
+      # change confirmations for the same user. Signup confirmation is not
+      # affected here because GOTRUE_MAILER_AUTOCONFIRM is true on this
+      # deployment and no confirmation mail is sent at all.
+      #
+      # The refusal is a 429 that can only fire for an address that HAS an
+      # account, which would make it an account-existence oracle. It is not
+      # one: Caddyfile.supabase rewrites every 429 on /auth/v1/recover back to
+      # the endpoint's own 200 {}, so the response is identical for a real
+      # address, an unknown address, and a throttled one. Changing this value
+      # without reading that route is how the oracle comes back.
+      GOTRUE_SMTP_MAX_FREQUENCY: ${ENTERPRISE_SMTP_MAX_FREQUENCY:-5m}
       # Minimum password length. GoTrue default is 6; regulated workloads
       # (OSFI B-10, PIPEDA) require at least 12 characters.
       GOTRUE_PASSWORD_MIN_LENGTH: ${ENTERPRISE_PASSWORD_MIN_LENGTH:-12}

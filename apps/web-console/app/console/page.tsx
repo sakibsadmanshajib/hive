@@ -11,12 +11,15 @@ import {
 } from "lucide-react";
 
 import {
-  getAccountProfile,
   getAnalyticsErrors,
   getAnalyticsUsage,
   getBalance,
-  getViewer,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+  tolerate,
+} from "@/lib/console/data";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -69,10 +72,15 @@ const NEXT_STEPS: ReadonlyArray<{
 ];
 
 export default async function ConsolePage() {
-  const viewer = await getViewer();
-  const profile = await getAccountProfile();
+  const viewer = await requireViewer();
+  const profile = await requireAccountProfile();
   const isUnverified = viewer.user.email_verified === false;
-  const needsSetup = profile.profile_setup_complete === false;
+  // Only nag about setup when the profile actually says it is unfinished. A
+  // profile the console could not read says nothing, and the previous
+  // EMPTY_ACCOUNT_PROFILE fallback said "unfinished" for it, which would have
+  // sent a fully set-up customer back through setup on a transient outage
+  // (issue #494).
+  const needsSetup = profile?.profile_setup_complete === false;
 
   // usageRows/errorRows are `null` on a fetch failure and `[]` on a genuine
   // empty result: an analytics outage must not render as "no requests" or
@@ -80,13 +88,9 @@ export default async function ConsolePage() {
   // would never have claimed. Mirrors the usageUnavailable pattern in
   // app/console/catalog/[id]/page.tsx.
   const [balance, usageRows, errorRows] = await Promise.all([
-    isUnverified ? Promise.resolve(null) : getBalance().catch((): null => null),
-    getAnalyticsUsage({ group_by: "model", window: "24h" }).catch(
-      (): null => null,
-    ),
-    getAnalyticsErrors({ group_by: "api_key", window: "24h" }).catch(
-      (): null => null,
-    ),
+    isUnverified ? Promise.resolve(null) : tolerate(getBalance()),
+    tolerate(getAnalyticsUsage({ group_by: "model", window: "24h" })),
+    tolerate(getAnalyticsErrors({ group_by: "api_key", window: "24h" })),
   ]);
 
   const usageUnavailable = usageRows === null;
@@ -113,7 +117,7 @@ export default async function ConsolePage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">Overview</span>
@@ -169,9 +173,19 @@ export default async function ConsolePage() {
             <CardContent className="px-5 py-5">
               {balance ? (
                 <CreditBalance balance={balance} />
-              ) : (
+              ) : isUnverified ? (
                 <p className="text-sm text-[var(--color-ink-3)]">
                   Verify your email to view balances.
+                </p>
+              ) : (
+                /*
+                  A null balance has two causes and they are not the same
+                  sentence. Telling a verified customer to verify their email
+                  because the balance read failed is a claim about their
+                  account made from a failed request (issue #494).
+                */
+                <p className="text-sm text-[var(--color-ink-3)]">
+                  Unavailable. We could not read your balance just now.
                 </p>
               )}
             </CardContent>

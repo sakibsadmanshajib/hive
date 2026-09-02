@@ -1,15 +1,16 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import {
   ControlPlaneError,
-  EMPTY_ACCOUNT_PROFILE,
-  getAccountProfile,
   getApiKeyLimits,
-  getViewer,
   updateApiKeyLimits,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { can } from "@/lib/viewer-gates";
 import {
   parseKeyLimitsInput,
@@ -20,6 +21,7 @@ import { RateLimitForm } from "@/components/api-keys/rate-limit-form";
 import { ConsoleNotFound } from "@/components/app-shell/console-not-found";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -39,7 +41,7 @@ function saveErrorMessage(err: unknown): string {
 
 export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactElement> {
   const { id: keyID } = await props.params;
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
 
   // Account-membership gate runs before the control-plane round-trip.
   // Authenticated users without an active account row should never reach
@@ -53,21 +55,24 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
   // Owner-gate: members without api_keys.write see read-only.
   const canEdit = can(viewer, "api_keys.write");
 
-  // The shell needs a display name, and a profile fetch failure is not a reason
-  // to fail the page: the viewer already carries everything the rail needs, and
-  // the shell falls back to the email. This follows budget/page.tsx rather than
-  // feature-gates/page.tsx: the canonical EMPTY_ACCOUNT_PROFILE sentinel rather
-  // than an ad hoc object, and a log line, so a real control-plane outage on
-  // this path leaves a trace instead of degrading silently.
-  const profile = await getAccountProfile().catch((error: unknown) => {
-    console.error("ApiKeyLimitsPage: could not load account profile", error);
-    return EMPTY_ACCOUNT_PROFILE;
-  });
+  // The shell needs a display name, and a profile fetch failure is not a
+  // reason to fail the page: the viewer already carries everything the rail
+  // needs, and the shell falls back to the email. requireAccountProfile()
+  // holds that decision now, and logs the failure, so a real control-plane
+  // outage on this path still leaves a trace (issue #494).
+  const profile = await requireAccountProfile();
 
-  let limits: KeyLimits;
+  let limits: KeyLimits | null = null;
+  // A refusal is an answer about this viewer, not about the key service, so it
+  // gets its own state rather than sharing the unreadable one (issue #494).
+  // GET /limits is gated on api_keys.read, which authz.Policy grants to owners
+  // only, so this is the ordinary answer for the members this page was
+  // deliberately written to serve read-only.
+  let forbidden = false;
   try {
     limits = await getApiKeyLimits(keyID);
   } catch (err) {
+    unstable_rethrow(err);
     // A key that is not this account's own reads as 404 upstream. Branch on the
     // status rather than on message text: the previous message match also let a
     // transport failure through as an uncaught error and crashed the page.
@@ -89,7 +94,7 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
       return (
         <ConsoleNotFound
           viewer={viewer}
-          ownerName={profile.owner_name || null}
+          ownerName={profile?.owner_name || null}
           active="/console/api-keys"
           section="Rate limits"
           eyebrow="Authentication"
@@ -100,7 +105,15 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
         />
       );
     }
-    throw err;
+    if (err instanceof ControlPlaneError && err.status === 403) {
+      forbidden = true;
+    } else {
+      // Not a 404 and not a refusal, so not an answer about this key or this
+      // viewer: the limits could not be read. Rendering the form from a
+      // fabricated default would show caps that are not in force and invite
+      // the operator to save them (issue #494).
+      console.error("ApiKeyLimitsPage: could not load the key limits", err);
+    }
   }
 
   // The write runs as a server action, so the browser form never needs the
@@ -112,7 +125,7 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
     // A server action is a public endpoint: the disabled fieldset is
     // presentation only, so permission is resolved again from the caller's own
     // session, and the payload is parsed rather than trusted.
-    const actor = await getViewer();
+    const actor = await requireViewer();
     if (!can(actor, "api_keys.write")) {
       return { ok: false, error: "You do not have permission to change rate limits." };
     }
@@ -146,7 +159,7 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/api-keys"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">
@@ -166,7 +179,19 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
         title="Rate limits"
         description="Per-key request and token limits. Tier overrides take precedence over system defaults for the matching tier."
       />
-      <RateLimitForm initial={limits} canEdit={canEdit} onSave={saveLimits} />
+      {limits ? (
+        <RateLimitForm initial={limits} canEdit={canEdit} onSave={saveLimits} />
+      ) : forbidden ? (
+        <EmptyState
+          title="You cannot view these rate limits"
+          description="Only workspace owners can see the rate limits on an API key. Ask an owner of this workspace if you need them."
+        />
+      ) : (
+        <EmptyState
+          title="Could not load these rate limits"
+          description="We could not reach the key service, so this form is not showing the limits currently in force. Refresh to try again."
+        />
+      )}
     </ConsoleShell>
   );
 }

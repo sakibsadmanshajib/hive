@@ -1,15 +1,17 @@
-import { notFound, redirect } from "next/navigation";
+import { notFound, redirect, unstable_rethrow } from "next/navigation";
 
 import { isWorkspaceAdminViewer } from "@/lib/viewer-gates";
 import { ShieldAlert } from "lucide-react";
 
 import {
-  getViewer,
-  getAccountProfile,
   getFeatureGates,
   ControlPlaneError,
   type FeatureGates,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -24,7 +26,7 @@ import { FeatureGateManager } from "@/components/feature-gates/feature-gate-mana
 // OWNER of the selected workspace or platform admin may render, anyone else
 // gets a 404 that does not confirm the surface exists.
 export default async function FeatureGatesPage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
@@ -34,9 +36,7 @@ export default async function FeatureGatesPage() {
     notFound();
   }
 
-  const profile = await getAccountProfile().catch(
-    (): { owner_name: string } => ({ owner_name: "" }),
-  );
+  const profile = await requireAccountProfile();
 
   let gates: FeatureGates | null = null;
   let loadFailed = false;
@@ -44,6 +44,10 @@ export default async function FeatureGatesPage() {
   try {
     gates = await getFeatureGates();
   } catch (err) {
+    // Framework control flow first: a DynamicServerError or a redirect is
+    // not a permission problem and must not be classified as one
+    // (issue #494).
+    unstable_rethrow(err);
     if (err instanceof ControlPlaneError && err.status === 403) {
       notPermitted = true;
     } else {
@@ -60,7 +64,7 @@ export default async function FeatureGatesPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/feature-gates"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">
