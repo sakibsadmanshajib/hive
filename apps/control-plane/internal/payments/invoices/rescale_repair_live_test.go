@@ -226,3 +226,76 @@ func TestUpdateRescaled_RefusesAWriteAgainstAMovedQuantity_Live(t *testing.T) {
 		t.Fatalf("total_bdt_subunits = %d after a refused write, want %d", subunits, preRescaleExpectedSubunits)
 	}
 }
+
+// liveJulyRow is one of the three invoices the demo box holds in the wrong
+// unit, read off it on 2026-09-02.
+type liveJulyRow struct {
+	invoice        string // the live id, for the failure message
+	storedCredits  int64  // what public.invoices holds today
+	storedSubunits int64  // what it bills today
+	ledgerCredits  int64  // what credit_ledger_entries holds for the same account and period
+	wantSubunits   int64  // what it owes, at the rate already on the row
+}
+
+// TestRepairPreRescaleInvoices_ReplaysTheThreeLiveRows_Live runs the exact
+// figures the demo box holds through the real pass against a database carrying
+// the whole migration chain, and reads every row back out of the table.
+//
+// This is a replay and not the live box itself, which only a deploy can reach.
+// It exists because the numbers, not the shape, are what went wrong: the
+// generic fixtures above would still pass if the rescale factor were off, and
+// these will not.
+func TestRepairPreRescaleInvoices_ReplaysTheThreeLiveRows_Live(t *testing.T) {
+	pool := newInvoicesTestPool(t)
+	repo := NewPgxRepository(pool)
+	ctx := context.Background()
+
+	boundary := rescaleBoundary(t, repo)
+	start := boundary.UTC().AddDate(0, 0, -60).Truncate(24 * time.Hour)
+	period := Period{Start: start, End: start.AddDate(0, 1, 0)}
+	if !period.End.Before(boundary) {
+		t.Fatalf("the replay period %s does not close before the boundary %s", period.End, boundary)
+	}
+
+	// 842,760,000 credits is 0.84276 USD, 103.7690388 BDT at 123.13.
+	// 20,000,000 is 0.02 USD, 2.4626 BDT. 1,100,000 is 0.0011 USD, 0.135443 BDT.
+	rows := []liveJulyRow{
+		{invoice: "49a53ec7", storedCredits: 84_276, storedSubunits: 1, ledgerCredits: 842_760_000, wantSubunits: 10_377},
+		{invoice: "9a056d8a", storedCredits: 2_000, storedSubunits: 0, ledgerCredits: 20_000_000, wantSubunits: 246},
+		{invoice: "a1942bcb", storedCredits: 110, storedSubunits: 0, ledgerCredits: 1_100_000, wantSubunits: 14},
+	}
+
+	ids := make([]uuid.UUID, len(rows))
+	for i, row := range rows {
+		ws := seedInvoiceWorkspace(t, pool)
+		ids[i] = insertRepairedRow(t, pool, ws, period, row.storedCredits, row.storedSubunits)
+		seedUsageCharge(t, pool, ws, row.ledgerCredits, "unknown", period.Start.Add(24*time.Hour))
+	}
+
+	svc := NewService(repo, newFakeStorage(), &stubPDF{}, &fakeAccess{}, &fakeNamer{name: "Acme"}, nil)
+	if _, err := svc.RepairPreRescaleInvoices(ctx); err != nil {
+		t.Fatalf("rescale repair: %v", err)
+	}
+
+	for i, row := range rows {
+		subunits, credits, _, _ := readInvoiceRow(t, pool, ids[i])
+		if credits == nil || *credits != row.ledgerCredits {
+			t.Fatalf("invoice %s: total_credits = %v, want the ledger's %d", row.invoice, credits, row.ledgerCredits)
+		}
+		if subunits != row.wantSubunits {
+			t.Fatalf("invoice %s: total_bdt_subunits = %d, want %d (it bills %d today)",
+				row.invoice, subunits, row.wantSubunits, row.storedSubunits)
+		}
+	}
+
+	// Second pass writes nothing, read back rather than assumed.
+	if _, err := svc.RepairPreRescaleInvoices(ctx); err != nil {
+		t.Fatalf("second rescale pass: %v", err)
+	}
+	for i, row := range rows {
+		subunits, credits, _, _ := readInvoiceRow(t, pool, ids[i])
+		if credits == nil || *credits != row.ledgerCredits || subunits != row.wantSubunits {
+			t.Fatalf("invoice %s moved on the second pass: subunits=%d credits=%v", row.invoice, subunits, credits)
+		}
+	}
+}
