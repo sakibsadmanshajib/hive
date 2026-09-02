@@ -565,6 +565,14 @@ func (s *Service) Cancel(ctx context.Context, tenantID, userID, id uuid.UUID) (T
 	// are the record of how far it got, which is the one thing a person who
 	// stopped it wants to see.
 	//
+	// One narrowing this does not close, and cannot: the engine stop runs
+	// after the transition, in the background, so steps the sandbox produces
+	// between this flush and the actual kill are invisible to the live
+	// follower. They are not lost from the record, because finishVanished
+	// picks them up and a reopened conversation shows them, but the person who
+	// just clicked stop will not see them. That is intrinsic to cancelling,
+	// and it is the one way this guarantee is weaker than the poller's.
+	//
 	// The read is what makes this cheap in the ordinary case: a queued task
 	// has no session, so the flush returns immediately and cancelling one
 	// costs a single indexed read. A failed read never blocks the

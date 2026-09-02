@@ -684,6 +684,15 @@ services:
       # The daemon keeps that privilege question off this container entirely:
       # it runs as an ordinary host user with no added capabilities.
       HIVE_AGENT_ENGINE_SOCKET: ${HIVE_AGENT_ENGINE_SOCKET:-}
+      # How often a running task's sandbox is asked what it has done since the
+      # last pass, which is what makes a run's steps appear in the transcript
+      # while it works (issues #1622, #1504). Mapped, unlike its sibling
+      # HIVE_AGENT_TASK_POLL_INTERVAL, because it is the knob most likely to
+      # need turning against a real load: the loop is serial, so raising the
+      # active-task count degrades the effective cadence rather than
+      # overloading anything, and this is how an operator slows it down
+      # without a code change. Clamped to a 500ms floor in NewEventSyncer.
+      HIVE_AGENT_TASK_EVENT_INTERVAL: ${HIVE_AGENT_TASK_EVENT_INTERVAL:-2s}
       # The five path variables below only apply when control-plane itself
       # runs as a bare host process next to an Apptainer install (no compose
       # topology in this repo does). They are still forwarded so that

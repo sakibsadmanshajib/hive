@@ -521,8 +521,11 @@ func TestEventSyncer_DoesNotRewriteAWorkspaceFileThatHasNotChanged(t *testing.T)
 	if err := syncer.RunOnce(context.Background()); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
-	if got := countKind(repo.appends[1], EventFile); got != 0 {
-		t.Fatalf("second pass rewrote %d unchanged file events", got)
+	// Nothing at all this pass, not merely no file rows: with the listing
+	// unchanged the pull is empty and the status has not moved, so the whole
+	// batch is one the dedup index would have thrown away.
+	if len(repo.appends) != 1 {
+		t.Fatalf("second pass rewrote an unchanged listing: %v", repo.appends[1:])
 	}
 
 	// A rewritten file is a different fact and still lands: same name, new
@@ -531,8 +534,8 @@ func TestEventSyncer_DoesNotRewriteAWorkspaceFileThatHasNotChanged(t *testing.T)
 	if err := syncer.RunOnce(context.Background()); err != nil {
 		t.Fatalf("third pass: %v", err)
 	}
-	if got := countKind(repo.appends[2], EventFile); got != 1 {
-		t.Fatalf("third pass recorded %d file events for a rewritten file, want 1", got)
+	if len(repo.appends) != 2 || countKind(repo.appends[1], EventFile) != 1 {
+		t.Fatalf("third pass recorded %v for a rewritten file, want one file event", repo.appends[1:])
 	}
 }
 
@@ -610,5 +613,67 @@ func TestEventSyncer_StillRecordsWorkspaceFilesWhenTheEventReadFails(t *testing.
 	// read again rather than skipped.
 	if syncer.offsets[task.ID] != 0 {
 		t.Fatalf("offset advanced past events that were never read: %d", syncer.offsets[task.ID])
+	}
+}
+
+func TestEventSyncer_SkipsTheWriteWhenNothingChanged(t *testing.T) {
+	// Every row in that batch is already stored, so the write is a
+	// transaction, an advisory lock, a MAX(seq) aggregate and one INSERT the
+	// dedup index is guaranteed to reject. Cheap to skip and worth skipping at
+	// this cadence (raised in review on PR #1709).
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	// Two sandbox events that both map to nothing, so the pull is empty while
+	// the offset still has somewhere to move: the case a naive early return
+	// would re-read for the rest of the run.
+	sandbox := []SandboxEvent{
+		{ID: "s1", Kind: "SystemPromptEvent"},
+		{ID: "s2", Kind: "ConversationStateUpdateEvent"},
+	}
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) { return sandbox, nil },
+		files:  func(context.Context, string) ([]WorkspaceFile, error) { return nil, nil },
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if len(repo.appends) != 1 {
+		t.Fatalf("first pass appends=%d, want the initial status row to land", len(repo.appends))
+	}
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(repo.appends) != 1 {
+		t.Fatalf("second pass wrote a batch the dedup index would have thrown away: %v", repo.appends[1:])
+	}
+	// The bookkeeping still moved, or those two unmappable events are re-read
+	// on every pass for the rest of the run.
+	if syncer.offsets[task.ID] != len(sandbox) {
+		t.Fatalf("offset=%d, want %d", syncer.offsets[task.ID], len(sandbox))
+	}
+
+	// A status change still writes, on a pull that is still empty.
+	moved := task
+	moved.Status = StatusSucceeded
+	repo.listActive = []Task{moved}
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("third pass: %v", err)
+	}
+	if len(repo.appends) != 2 {
+		t.Fatalf("a status transition was not recorded: appends=%d", len(repo.appends))
+	}
+}
+
+func TestNewEventSyncer_ClampsAnAbsurdInterval(t *testing.T) {
+	// HIVE_AGENT_TASK_EVENT_INTERVAL reaches the constructor unvalidated, and
+	// 50ms would put the launcher under twenty paging reads a second per
+	// active task. Nothing else rate limits this loop.
+	s := NewEventSyncer(&fakeRepoForSync{}, &fakeEventSource{}, PollerConfig{Interval: 50 * time.Millisecond})
+	if s.interval != minEventSyncInterval {
+		t.Fatalf("interval=%v, want the %v floor", s.interval, minEventSyncInterval)
 	}
 }

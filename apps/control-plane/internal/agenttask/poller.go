@@ -130,6 +130,11 @@ const engineUnreachableAfterRetriesMessage = "this task's outcome could not be r
 // that slot, reproducing issue #886's leaked-slot symptom through a new
 // door. Deliberately NOT used on the ErrEngineSessionGone path: there is
 // nothing left to stop, the engine already said so.
+// failedTaskFlushTimeout bounds the step flush chargeFailureBudget runs before
+// it gives up on a task. Three seconds, matching Service.Cancel's bound rather
+// than the pull's own ten, for the reason given at the call site.
+const failedTaskFlushTimeout = 3 * time.Second
+
 type budgetExceededCanceler interface {
 	Cancel(ctx context.Context, sessionRef string) error
 }
@@ -157,11 +162,17 @@ type PollerConfig struct {
 	// It sits on PollerConfig rather than on the syncer's own loop because
 	// this is the one place every task's terminal status is published, and a
 	// guarantee that holds for one status transition and not the others is
-	// not a guarantee. Deliberately not consulted on the two paths where the
-	// poller declares a task dead itself (an engine with no memory of the
-	// session, an exhausted failure budget): both mean the session cannot be
-	// read at all, so the call would only add a socket timeout in front of a
-	// transition that has to happen.
+	// not a guarantee. That includes the paths where the poller declares a
+	// task dead itself: chargeFailureBudget flushes too, on a tighter
+	// deadline, because a task that burned its whole failure budget is by
+	// definition one that looked stuck for a long time and is therefore the
+	// run a person is most likely to be staring at.
+	//
+	// ErrEngineSessionGone is the ONE terminal path with no flush, and it is
+	// the only one where the old blanket claim ("the session cannot be read")
+	// is actually true: the engine has said it has no memory of the session,
+	// so there is nothing to read and the call would only add a socket
+	// timeout in front of a transition that has to happen.
 	FlushEvents func(ctx context.Context, t Task)
 }
 
@@ -448,6 +459,23 @@ func (p *Poller) chargeFailureBudget(ctx context.Context, t Task, cause error) (
 			p.logger.WarnContext(ctx, "agenttask: best-effort session stop failed after exhausting the failure budget, its concurrency slot may still be held",
 				"task_id", t.ID, "error", err)
 		}
+	}
+	// And the steps, before the row goes terminal, for the same reason the
+	// completion path flushes (issues #1622, #1504). This path is the one
+	// where dropping them costs the most: the paragraph above is the reason
+	// why, since it argues the session is very likely still live, which means
+	// still readable, and a task that exhausted its failure budget is by
+	// definition one that took a long time and looked stuck the whole way.
+	// Without this it renders as a blank box and then a bare error.
+	//
+	// Deliberately tighter than the pull's own ten seconds: the poller has
+	// just failed taskFailureBudget consecutive status calls against this
+	// session, so this read is likelier than usual to time out, and it sits on
+	// a serial loop. The earlier deadline is the one that fires.
+	if p.flush != nil {
+		flushCtx, done := context.WithTimeout(ctx, failedTaskFlushTimeout)
+		p.flush(flushCtx, t)
+		done()
 	}
 	return p.failTask(ctx, t, engineUnreachableAfterRetriesMessage)
 }

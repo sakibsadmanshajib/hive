@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
 )
 
 // The shipped packs (apps/agent-engine/packs) are only useful if they are laid
@@ -107,4 +109,40 @@ func assertSkillNameMatchesDir(t *testing.T, dir, want string) {
 		}
 	}
 	t.Errorf("skill %s declares no frontmatter name", want)
+}
+
+// reap flips sess.reaped and releases the engine mutex BEFORE it captures the
+// final snapshot, because that capture is a network call plus a workspace walk
+// and neither may run under the lock. A reader that gated on `reaped` was
+// handed the zero value inside that window: an empty event list, no error, and
+// no way to tell it apart from a session that did nothing. Control-plane's
+// terminal flush then published a terminal status with no steps at all, which
+// is the defect PR #1709 exists to close, arriving through a different door.
+//
+// Structural rather than a race: driving the window deterministically needs a
+// hook inside reap, and the property that matters is simply that a session
+// which is reaped but not yet snapshotted does not answer as if it were.
+func TestSandboxEngine_ASessionReapedButNotYetSnapshottedIsNotServedAsEmpty(t *testing.T) {
+	e := &SandboxEngine{}
+	sess := &session{reaped: true}
+
+	if _, ok := e.finalEventsOf(sess); ok {
+		t.Error("events: served a snapshot that has not been captured yet, so a live session reads as one that did nothing")
+	}
+	if _, ok := e.finalFilesOf(sess); ok {
+		t.Error("files: served a snapshot that has not been captured yet")
+	}
+
+	sess.finalEvents = []controlclient.Event{{ID: "e1", Kind: "ActionEvent"}}
+	sess.finalFiles = []controlclient.WorkspaceFile{{Name: "sixcap.txt"}}
+	sess.snapshotDone = true
+
+	events, ok := e.finalEventsOf(sess)
+	if !ok || len(events) != 1 {
+		t.Errorf("events after capture: %v, ok=%v", events, ok)
+	}
+	files, ok := e.finalFilesOf(sess)
+	if !ok || len(files) != 1 {
+		t.Errorf("files after capture: %v, ok=%v", files, ok)
+	}
 }

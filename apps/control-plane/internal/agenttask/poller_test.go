@@ -827,3 +827,70 @@ func TestPoller_TerminalFlushIsOptional(t *testing.T) {
 		t.Fatalf("status=%q want succeeded", got.Status)
 	}
 }
+
+// The third writer of a terminal status: the poller giving up on a task whose
+// status calls keep failing (issues #1622, #1504, raised in review on
+// PR #1709). chargeFailureBudget's own reasoning is that this path leaves the
+// session very likely still live, which is why it stops it, and a live session
+// is a readable one. Dropping its steps here costs the most, because a task
+// that burned its whole failure budget is by definition one that looked stuck
+// for a long time.
+func TestPoller_StoresTheRunsStepsBeforeItGivesUpOnATask(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-1")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-1": {err: errors.New("launcher answered, session is wedged")},
+	}}
+	src := &scriptedEventSource{events: multiStepRun()}
+	syncer := agenttask.NewEventSyncer(repo, src, agenttask.PollerConfig{Logger: quietPollerLogger()})
+	// A five minute budget over a five minute interval is one pass, so this
+	// gives up immediately instead of looping the budget out.
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{
+		Interval:    5 * time.Minute,
+		Logger:      quietPollerLogger(),
+		FlushEvents: syncer.FlushTask,
+	})
+
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	got, err := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != agenttask.StatusFailed {
+		t.Fatalf("status=%q want failed", got.Status)
+	}
+	if stored := repo.eventsAtTransition(task.ID); len(stored) < len(multiStepRun()) {
+		t.Fatalf("gave up on the task with %d steps stored, want the run's %d: the transcript stops at that status, so this is the run a person is most likely staring at when it goes blank",
+			len(stored), len(multiStepRun()))
+	}
+}
+
+// ErrEngineSessionGone stays the one terminal path with no flush: the engine
+// has said it has no memory of the session, so there is nothing to read.
+func TestPoller_DoesNotFlushASessionTheEngineHasForgotten(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-1")
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-1": {err: agenttask.ErrEngineSessionGone},
+	}}
+	src := &scriptedEventSource{events: multiStepRun()}
+	syncer := agenttask.NewEventSyncer(repo, src, agenttask.PollerConfig{Logger: quietPollerLogger()})
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{
+		Logger:      quietPollerLogger(),
+		FlushEvents: syncer.FlushTask,
+	})
+
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	got, _ := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+	if got.Status != agenttask.StatusFailed {
+		t.Fatalf("status=%q want failed", got.Status)
+	}
+	if src.calls != 0 {
+		t.Fatalf("read a session the engine says it has never heard of (%d calls)", src.calls)
+	}
+}

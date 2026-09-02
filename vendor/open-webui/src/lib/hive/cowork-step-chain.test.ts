@@ -27,6 +27,8 @@ import { fileURLToPath } from 'node:url';
 const read = (rel: string): string =>
 	readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
+const chat = () => read('../components/chat/Chat.svelte');
+
 const responseMessage = () => read('../components/chat/Messages/ResponseMessage.svelte');
 const statusHistory = () =>
 	read('../components/chat/Messages/ResponseMessage/StatusHistory.svelte');
@@ -75,5 +77,47 @@ describe('StatusHistory keeps the mechanism the run turn depends on', () => {
 		// to check it, and would make every capture of a finished run show a
 		// bare summary, which is what issue #1504 observed.
 		expect(statusHistory()).not.toMatch(/message\??\.done/);
+	});
+});
+
+/*
+ * The other half of the #1504 fix lives on the server: a run's remaining steps
+ * are flushed immediately before its terminal status is written. That is
+ * necessary and not sufficient. What closes the race is this reader asking for
+ * the status BEFORE the events, so a reading that observes a terminal status
+ * always issues its events request afterwards, and therefore after the flush
+ * that preceded that status.
+ *
+ * Pinned here because reversing those two awaits, or collapsing them into a
+ * Promise.all, reopens the bug while every Go test on the other side still
+ * passes. An invariant that exists only in the order of two lines needs
+ * something that fails when the order changes.
+ */
+describe('the run reader asks for the status before the events (issue #1504)', () => {
+	const readCoworkRun = (): string => {
+		const source = chat();
+		const start = source.indexOf('const readCoworkRun =');
+		expect(start).toBeGreaterThan(-1);
+		const end = source.indexOf('const followCoworkRun =', start);
+		expect(end).toBeGreaterThan(start);
+		return source.slice(start, end);
+	};
+
+	it('awaits getTask before it reaches getTaskEvents', () => {
+		const body = readCoworkRun();
+		const status = body.indexOf('await getTask(');
+		const events = body.indexOf('await getTaskEvents(');
+		expect(status).toBeGreaterThan(-1);
+		expect(events).toBeGreaterThan(-1);
+		expect(status).toBeLessThan(events);
+	});
+
+	it('does not race the two reads against each other', () => {
+		// The call form, not the bare name: the comment inside that function
+		// names Promise.all in order to warn the next reader off it, and a
+		// guard that fires on its own warning is a guard nobody keeps.
+		const body = readCoworkRun();
+		expect(body).not.toContain('Promise.all(');
+		expect(body).not.toContain('Promise.allSettled(');
 	});
 });

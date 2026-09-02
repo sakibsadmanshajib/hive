@@ -381,6 +381,20 @@ type session struct {
 	// SandboxEngine.mu, same as reaped and terminal.
 	finalEvents []controlclient.Event
 	finalFiles  []controlclient.WorkspaceFile
+
+	// snapshotDone reports that finalEvents and finalFiles have actually been
+	// captured, and is what the readers gate on rather than `reaped`. The two
+	// are not the same instant: reap flips `reaped` and releases the mutex
+	// before it captures the snapshot, because the capture is a network call
+	// and a workspace walk that must not be made under the engine lock. In
+	// that window a reader gating on `reaped` was handed the zero value, an
+	// empty event list with no error, which is indistinguishable from a
+	// session that did nothing. Gating on this instead sends such a reader
+	// down the live path, which is still valid there: the kill and the two
+	// RemoveAll calls all happen after the capture (raised in review on
+	// PR #1709; the window widened when control-plane grew a second goroutine
+	// reading sessions at a higher rate).
+	snapshotDone bool
 }
 
 // SandboxEngine launches, polls, and cancels agent-engine sandbox sessions.
@@ -1106,6 +1120,7 @@ func (e *SandboxEngine) reap(ctx context.Context, sess *session, outcome *termin
 	e.mu.Lock()
 	sess.finalEvents = events
 	sess.finalFiles = files
+	sess.snapshotDone = true
 	e.mu.Unlock()
 
 	killErr := sess.proc.Kill()
