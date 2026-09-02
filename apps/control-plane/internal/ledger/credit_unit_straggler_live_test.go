@@ -241,6 +241,59 @@ func TestStragglerDetectorInvertsTheBoundaryForPaymentIntents_Live(t *testing.T)
 	requireOnlyCandidate(t, candidates(t, pool, accountID), "payment_intents", straggler)
 }
 
+// TestStragglerDetectorWithoutABoundaryOpensUp_Live holds the failure mode
+// this detector must not have. Every predicate in the view is anchored to a
+// boundary read out of the database, so the interesting question is what it
+// does when that boundary cannot be read: the marker table is row level
+// secured with no policies, and a connecting role without BYPASSRLS sees it
+// empty. A plain scalar subquery would have returned NO rows there, and an
+// empty result reads as "clean" when it actually means "this database cannot
+// answer the question": a pending answer taken for a negative one. The
+// aggregate in the view yields NULL instead, and NULL opens every arm, so an
+// operator gets a pile to reconcile rather than a false all-clear.
+//
+// The marker is removed inside a transaction that is always rolled back;
+// nothing is committed. The rescale migration's own header is emphatic that
+// this row must never actually be deleted, because with it gone a replay
+// would double every balance.
+func TestStragglerDetectorWithoutABoundaryOpensUp_Live(t *testing.T) {
+	pool := newLedgerTestPool(t)
+	ctx := context.Background()
+	boundary := rescaleBoundary(t, pool)
+	accountID := seedLedgerAccount(t, pool)
+
+	// A row no boundary-aware arm would ever select: stamped by nobody, well
+	// clear of the recreate window.
+	insertLedgerEntry(t, pool, accountID, 100_000_000_000, boundary.Add(96*time.Hour), nil)
+	if got := candidates(t, pool, accountID); len(got) != 0 {
+		t.Fatalf("with a readable boundary this row is not a candidate, got %+v", got)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() {
+		if err := tx.Rollback(ctx); err != nil {
+			t.Fatalf("the marker deletion MUST NOT survive this test: rollback failed: %v", err)
+		}
+	}()
+
+	if _, err := tx.Exec(ctx, `DELETE FROM public.credit_unit_rescale WHERE id = 1`); err != nil {
+		t.Fatalf("hide the boundary: %v", err)
+	}
+
+	var n int
+	if err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM public.credit_unit_straggler_candidates WHERE account_id = $1
+	`, accountID).Scan(&n); err != nil {
+		t.Fatalf("query candidates without a boundary: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("with no boundary the detector reported a clean result; an unanswerable question must not read as a negative answer")
+	}
+}
+
 // TestStragglerDetectorCoversReservationEventsOnTheLedgerRule_Live: the rescale
 // DID stamp the reservation events it scaled, so this table follows the ledger
 // rule, not the intents rule. The live box carries thousands of post-boundary
