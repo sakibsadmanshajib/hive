@@ -279,16 +279,29 @@ export const listTasks = async (
 	return tasks;
 };
 
+/**
+ * Starts a run.
+ *
+ * `pack` is null for an ordinary submission (#1623): the composer no longer
+ * asks anyone to classify their own request, so the field is omitted from the
+ * body entirely and control-plane resolves it from the instructions. A pack is
+ * sent only when the person explicitly corrected the last guess.
+ *
+ * Omitted rather than sent as null or "": the endpoint reads an absent field
+ * and a blank one the same way today, but a body that carries the key is a
+ * body that looks like a choice, and the next reader of this call would take
+ * it for one.
+ */
 export const createTask = async (
 	token: string,
-	pack: TaskPack,
+	pack: TaskPack | null,
 	instructions: string,
 	apiBase: string = DEFAULT_AGENT_API_BASE_URL
 ): Promise<AgentTask> => {
 	const response = await fetch(`${apiBase}/tasks`, {
 		method: 'POST',
 		headers: headers(token),
-		body: JSON.stringify({ pack, instructions })
+		body: JSON.stringify(pack ? { pack, instructions } : { instructions })
 	});
 	if (!response.ok) {
 		await raise(response, 'Failed to create task');

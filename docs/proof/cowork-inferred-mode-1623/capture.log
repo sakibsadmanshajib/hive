@@ -1,0 +1,70 @@
+URL under test: http://localhost:8080  (throwaway local container, no credential in any URL)
+image: hive-owui:pr1623, built from branch feat/1623-single-inferred-mode
+
+signed in as a throwaway local account, the first in an empty container
+password generated per run, never logged, dies with the container
+
+signup status 200, session token received (redacted)
+
+STEP 1  the composer in Cowork mode, before anything is typed
+  Chat/Cowork segments present   -> 2
+  pack segments present          -> 0
+  pack radiogroups present       -> 0
+  cowork row present             -> 1
+  inference disclosure present   -> 0
+  clickable "Knowledge work"     -> 0
+  clickable "Coding"             -> 0
+  cowork row text                -> Runs in a sandbox. Progress appears in this conversation.
+  capture: 1623-01-composer-no-pack-toggle.png
+
+STEP 2  a coding shaped request, with nothing chosen by the user
+  typed: Refactor the retry helper in server.go and run the test suite.
+  request body the browser sent  -> {"instructions":"Refactor the retry helper in server.go and run the test suite."}
+  "pack" key present in body     -> false
+  pack the inference returns     -> coding-pack
+  transcript says                -> Hive ran this as a coding task.
+  cowork row now says            -> Hive read that as Coding. | Run the next one as Knowledge work | Runs in a sandbox. Progress appears in this conversation.
+  correction button offers       -> knowledge-work-pack
+  capture: 1623-02-coding-request-inferred.png
+
+STEP 3  a knowledge shaped request, in a new conversation, again nothing chosen
+  typed: Write a one page brief on how prepaid credit billing works for a new team member.
+  request body the browser sent  -> {"instructions":"Write a one page brief on how prepaid credit billing works for a new team member."}
+  "pack" key present in body     -> false
+  pack the inference returns     -> knowledge-work-pack
+  transcript says                -> Hive ran this as a knowledge work task.
+  capture: 1623-03-knowledge-request-inferred.png
+
+STEP 4  correcting a guess, which is what makes being wrong cheap
+  cowork row now says            -> Next task: Coding. | Let Hive choose | Runs in a sandbox. Progress appears in this conversation.
+  pending override               -> coding-pack
+  capture: 1623-04-correction-pending.png
+
+console noise during the run, all of it from routes this standalone container
+has no back end for and none of it from the code under test:
+  console:error: Failed to load resource: the server responded with a status of 404 (Not Found)
+  console:error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)
+
+The Go side of the same two strings, run in the repository's own toolchain
+container against apps/control-plane/internal/agenttask/infer.go:
+
+  $ docker compose --profile tools run --rm toolchain \
+      "cd /workspace && go test ./apps/control-plane/internal/agenttask/... -run TestInferPack -count=1 -short -v"
+  === RUN   TestInferPack_DefaultsToKnowledgeWorkWithoutCodingEvidence
+  --- PASS: TestInferPack_DefaultsToKnowledgeWorkWithoutCodingEvidence (0.00s)
+  === RUN   TestInferPack_PicksCodingOnPositiveEvidence
+  --- PASS: TestInferPack_PicksCodingOnPositiveEvidence (0.00s)
+  === RUN   TestInferPack_IsCaseAndPunctuationInsensitive
+  --- PASS: TestInferPack_IsCaseAndPunctuationInsensitive (0.00s)
+  === RUN   TestInferPack_DoesNotMatchInsideLongerWords
+  --- PASS: TestInferPack_DoesNotMatchInsideLongerWords (0.00s)
+  === RUN   TestInferPack_ReadsSourceFilenamesButNotDocumentOnes
+  --- PASS: TestInferPack_ReadsSourceFilenamesButNotDocumentOnes (0.00s)
+  === RUN   TestInferPack_AlwaysReturnsAValidPack
+  --- PASS: TestInferPack_AlwaysReturnsAValidPack (0.03s)
+  PASS
+  ok  	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask	0.042s
+
+The first of those two tests contains the exact knowledge string typed in step
+3 and the second contains the exact coding string typed in step 2, so the pack
+each frame shows is the value that function is mechanically held to in CI.

@@ -31,8 +31,13 @@ type fakeClient struct {
 	// get here" is itself the assertion.
 	createCalled  bool
 	lastProjectID uuid.UUID
-	eventsFn      func(taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
-	filesFn       func(taskID uuid.UUID) ([]WorkspaceFile, error)
+
+	// lastPack is what this edge forwarded. Since issue #1623 the interesting
+	// value is the empty one: an absent pack has to arrive at control-plane
+	// still absent, so the inference happens in exactly one place.
+	lastPack string
+	eventsFn func(taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
+	filesFn  func(taskID uuid.UUID) ([]WorkspaceFile, error)
 }
 
 func newFakeClient() *fakeClient {
@@ -43,6 +48,7 @@ func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack, instruction
 	f.createCalled = true
 	f.lastProjectID = projectID
 	f.lastBearerJWT = bearerJWT
+	f.lastPack = pack
 	if f.createErr != nil {
 		return Task{}, f.createErr
 	}
@@ -258,16 +264,27 @@ func TestHandleCreate_Unauthenticated(t *testing.T) {
 	}
 }
 
-func TestHandleCreate_MissingPack(t *testing.T) {
-	h := billedHandler(t, newFakeClient())
-	body, _ := json.Marshal(createTaskRequest{})
+// A missing pack used to be a 400 here. It is a normal submission since issue
+// #1623 (see TestHandleCreate_AbsentPackIsForwardedForInference), so what is
+// left to guard is the case that is still a client bug: a pack that is
+// present and is not a pack. That refusal moved to control-plane, which owns
+// the only list of real pack names, and reaches the customer as the same 400
+// it always did.
+func TestHandleCreate_InvalidPackIsStillRefused(t *testing.T) {
+	client := newFakeClient()
+	client.createErr = ErrInvalidPack
+	h := billedHandler(t, client)
+	body, _ := json.Marshal(createTaskRequest{Pack: "not-a-pack"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
 	req = req.WithContext(userCtx(uuid.New()))
 	w := httptest.NewRecorder()
 	h.routeTasks(w, req)
 
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", w.Code)
+		t.Fatalf("expected 400, got %d; body = %s", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); !strings.Contains(got, "invalid pack") {
+		t.Errorf("body = %s, want it to name the invalid pack", got)
 	}
 }
 
@@ -555,5 +572,51 @@ func TestHandleCreate_RefusesWhenTheBillingLookupFails(t *testing.T) {
 	}
 	if reservations, _ := acct.Counts(); reservations != 0 {
 		t.Errorf("a hold was taken against an unknown billing position: %d", reservations)
+	}
+}
+
+// Since issue #1623 the composer sends no pack at all: the customer stopped
+// choosing between two words that name a system prompt, and control-plane
+// resolves it from the instructions. This edge is only a forwarder, so what
+// it must do is stop refusing, and pass the empty value through untouched
+// rather than substituting a default of its own; two layers each holding
+// their own default is how the two ends end up disagreeing about what ran.
+func TestHandleCreate_AbsentPackIsForwardedForInference(t *testing.T) {
+	client := newFakeClient()
+	h := billedHandler(t, client)
+	body, _ := json.Marshal(createTaskRequest{Instructions: "Refactor the billing module."})
+	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.routeTasks(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("a submission with no pack was refused: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if len(client.tasks) != 1 {
+		t.Fatalf("expected the submission to reach control-plane, got %d tasks", len(client.tasks))
+	}
+	if got := client.lastPack; got != "" {
+		t.Errorf("edge-api substituted a pack of its own (%q); the empty value must reach control-plane", got)
+	}
+}
+
+// Whitespace is not a pack name either, and it is what a hand-rolled client
+// sends when it means "none". It must take the same route as an absent field
+// rather than reaching the CHECK constraint as " ".
+func TestHandleCreate_BlankPackIsTreatedAsAbsent(t *testing.T) {
+	client := newFakeClient()
+	h := billedHandler(t, client)
+	body, _ := json.Marshal(createTaskRequest{Pack: "   ", Instructions: "Summarise the contract."})
+	req := httptest.NewRequest(http.MethodPost, "/v1/agent/tasks", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.routeTasks(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("a submission with a blank pack was refused: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if got := client.lastPack; got != "" {
+		t.Errorf("blank pack reached control-plane as %q, want it normalised to empty", got)
 	}
 }

@@ -7,14 +7,15 @@ import { describe, expect, it } from 'vitest';
 import {
 	COMPOSER_MODES,
 	COMPOSER_PACKS,
-	DEFAULT_COMPOSER_PACK,
 	describeEvent,
+	inferredPackStep,
 	dropSummaryEcho,
 	foldRunSteps,
 	isComposerMode,
 	latestStepSeq,
 	nextMode,
-	nextPack,
+	otherPack,
+	packLabel,
 	renderRun,
 	runTurnIsDone,
 	selectPendingCoworkTurns,
@@ -42,52 +43,55 @@ describe('composer mode', () => {
 });
 
 /*
- * #1500. The pack used to be derived rather than chosen, and the assertion that
- * replaced this one said so approvingly. That was the defect: `coding-pack` was
- * unreachable from the chat surface entirely, and the only route that could
- * reach it was the `/agents` destination D-045 retires. The pack is now offered.
+ * #1623. The pack used to be a segmented control the customer had to set
+ * before sending, which asked them to choose a system prompt using two words
+ * that do not describe what changes. It is inferred server side now
+ * (apps/control-plane/internal/agenttask/infer.go). What survives here is the
+ * vocabulary: the two labels, used to TELL the person what was chosen and to
+ * offer the other one as a correction.
  */
-describe('the pack the composer will send', () => {
-	it('offers both packs the wire accepts, knowledge work first', () => {
+describe('the pack vocabulary the composer still needs', () => {
+	it('names both packs the wire accepts, knowledge work first', () => {
 		expect(COMPOSER_PACKS.map((option) => option.value)).toEqual([
 			'knowledge-work-pack',
 			'coding-pack'
 		]);
 	});
 
-	it('offers only values the API and the database CHECK constraint accept', () => {
+	it('names only values the API and the database CHECK constraint accept', () => {
 		for (const option of COMPOSER_PACKS) {
 			expect(isTaskPack(option.value)).toBe(true);
 		}
 	});
 
-	it('labels the segments in words rather than in wire identifiers', () => {
-		// A customer never reads `knowledge-work-pack`. These are the same two
-		// words the /agents route already used, so retiring that route in #1501
-		// changes no vocabulary anyone has learned.
+	it('labels them in words rather than in wire identifiers', () => {
+		// A customer never reads `knowledge-work-pack`.
 		expect(COMPOSER_PACKS.map((option) => option.label)).toEqual(['Knowledge work', 'Coding']);
 		for (const option of COMPOSER_PACKS) {
 			expect(option.label).not.toContain('-pack');
 		}
 	});
 
-	it('defaults to what the composer already sent, so ignoring the control changes nothing', () => {
-		expect(DEFAULT_COMPOSER_PACK).toBe('knowledge-work-pack');
-		expect(COMPOSER_PACKS[0].value).toBe(DEFAULT_COMPOSER_PACK);
+	it('turns a wire pack into its label, and never leaks the identifier', () => {
+		expect(packLabel('coding-pack')).toBe('Coding');
+		expect(packLabel('knowledge-work-pack')).toBe('Knowledge work');
 	});
 
-	it('the store the composer actually reads carries that same default', () => {
-		// Review finding on #1518: the store lives in $lib/stores rather than
-		// here, because that module is reached by everything and importing
-		// lib/hive from it would invert the dependency. The default was
-		// therefore hand-duplicated, and the assertion above only checked the
-		// constant against itself. This pins the copy against the original, so
-		// changing one without the other goes red.
+	it('names the other pack, which is the whole correction control', () => {
+		expect(otherPack('coding-pack')).toBe('knowledge-work-pack');
+		expect(otherPack('knowledge-work-pack')).toBe('coding-pack');
+	});
+
+	it('leaves the composer store empty, because nobody picks up front any more', () => {
+		// The store lives in $lib/stores rather than here, because that module
+		// is reached by everything and importing lib/hive from it would invert
+		// the dependency. Pinned by reading the source, same as before, so the
+		// default cannot drift back to a pack without this going red: a
+		// non-null default would send an explicit pack on every submission and
+		// the inference would never run at all.
 		const stores = readComponent('../stores/index.ts');
 		const declaration = stores.slice(stores.indexOf('export const composerPack'));
-		expect(declaration).toContain(`writable('${DEFAULT_COMPOSER_PACK}')`);
-		// And that the store offers exactly the packs the control offers, so a
-		// third pack cannot reach the wire without appearing in the row.
+		expect(declaration.slice(0, declaration.indexOf(';'))).toContain('writable(null)');
 		for (const option of COMPOSER_PACKS) {
 			expect(declaration.slice(0, declaration.indexOf('writable('))).toContain(
 				`'${option.value}'`
@@ -96,22 +100,41 @@ describe('the pack the composer will send', () => {
 	});
 });
 
-describe('nextPack', () => {
-	it('moves forward and back with the arrow keys a radiogroup answers to', () => {
-		expect(nextPack('knowledge-work-pack', 'ArrowRight')).toBe('coding-pack');
-		expect(nextPack('knowledge-work-pack', 'ArrowDown')).toBe('coding-pack');
-		expect(nextPack('coding-pack', 'ArrowLeft')).toBe('knowledge-work-pack');
-		expect(nextPack('coding-pack', 'ArrowUp')).toBe('knowledge-work-pack');
+/*
+ * The load-bearing half of #1623: a wrong guess has to be visible.
+ *
+ * The disclosure is one line in the run's own progress chain, which is the
+ * same `statusHistory` shape the tool lines already ride on, so it is a string
+ * rather than a component and it persists with the conversation.
+ */
+describe('the run says which kind of task it was read as', () => {
+	it('names the chosen pack in words, in the shape a progress line takes', () => {
+		const step = inferredPackStep('coding-pack');
+		expect(step.action).toBe('hive_agent_step');
+		// Lower cased inside the sentence: "Hive ran this as a coding task."
+		// reads as English, "as a Coding task" reads as a label leaking into
+		// prose.
+		expect(step.description).toContain('coding');
+		expect(step.description).not.toContain('Coding');
+		expect(step.done).toBe(true);
+		expect(step.seq).toBe(0);
 	});
 
-	it('wraps at both ends, as a native radio group does', () => {
-		expect(nextPack('coding-pack', 'ArrowRight')).toBe('knowledge-work-pack');
-		expect(nextPack('knowledge-work-pack', 'ArrowLeft')).toBe('coding-pack');
+	it('never renders the wire identifier at a customer', () => {
+		for (const option of COMPOSER_PACKS) {
+			expect(inferredPackStep(option.value).description).not.toContain('-pack');
+		}
 	});
 
-	it('ignores every other key, so typing near the control cannot switch packs', () => {
-		for (const key of ['Enter', 'a', 'Tab', 'Escape', ' ']) {
-			expect(nextPack('coding-pack', key)).toBeNull();
+	it('is the first line, so it cannot outrank a real event', () => {
+		// seq 0 is below every real event seq, which starts at 1, so the
+		// cursor latestStepSeq reads is unaffected and no event is skipped.
+		expect(latestStepSeq([inferredPackStep('knowledge-work-pack')])).toBe(0);
+	});
+
+	it('arrives settled, so it cannot shimmer forever under a finished run', () => {
+		for (const option of COMPOSER_PACKS) {
+			expect(inferredPackStep(option.value).done).toBe(true);
 		}
 	});
 });
@@ -262,42 +285,47 @@ describe('the composer actually carries the mode', () => {
 });
 
 /*
- * #1500. The row used to render the pack as a `<span>`, so a Playwright query
- * for clickable elements matching "Knowledge work" returned 0 against the live
- * box and every composer submission ran as knowledge-work-pack. These pins are
- * the source-level half of that; the count-greater-than-zero half is the
- * screenshot on the pull request.
+ * #1623. The row used to carry a two segment pack control that had to be set
+ * before sending. It carries none now: on a fresh conversation the composer
+ * shows one toggle (Chat | Cowork) and nothing else, which is the acceptance
+ * criterion. The correction appears only after there is something to correct.
  */
-describe('the cowork row offers the pack rather than stating it', () => {
+describe('the cowork row infers rather than asks', () => {
 	const row = readComponent('./ComposerCoworkRow.svelte');
 
-	it('is a radiogroup with a radio per pack, the same contract the mode toggle has', () => {
-		expect(row).toContain('role="radiogroup"');
-		expect(row).toContain('role="radio"');
-		expect(row).toContain('data-hive-pack={option.value}');
-		expect(row).toContain('aria-checked={$composerPack === option.value}');
+	it('has no pack radiogroup left to choose from before sending', () => {
+		expect(row).not.toContain('role="radiogroup"');
+		expect(row).not.toContain('role="radio"');
+		expect(row).not.toContain('aria-checked');
 	});
 
-	it('writes the store the submit path reads, so the choice reaches the wire', () => {
-		expect(row).toContain("import { composerPack } from '$lib/stores'");
+	it('shows nothing to correct until a run has been classified', () => {
+		// The override is inside a conditional on the two stores, so a fresh
+		// conversation renders the note and nothing else. Without this the
+		// control is a toggle again, wearing different words.
+		expect(row).toContain('{#if $composerPack}');
+		expect(row).toContain('{:else if $coworkLastPack}');
+	});
+
+	it('tells the person which kind of task the last run was read as', () => {
+		expect(row).toContain('packLabel($coworkLastPack)');
+	});
+
+	it('offers the other pack for the next submission, and a way back to inferring', () => {
+		expect(row).toContain('otherPack($coworkLastPack)');
+		expect(row).toContain('composerPack.set(null)');
+	});
+
+	it('writes the store the submit path reads, so a correction reaches the wire', () => {
+		expect(row).toContain("import { composerPack, coworkLastPack } from '$lib/stores'");
 		expect(row).toContain('composerPack.set(');
 	});
 
-	it('binds the click path, not only the keyboard one', () => {
-		// Review finding on #1518: asserting `composerPack.set(` alone would
-		// stay green with the click handler detached, because the keyboard
-		// handler calls the same function. The mouse is the primary way anyone
-		// picks a pack, so its binding is pinned on its own.
-		expect(row).toContain('on:click={() => select(option.value)}');
+	it('binds the click path, since a button nobody can click corrects nothing', () => {
+		expect(row).toContain('on:click=');
 	});
 
-	it('reuses the mode toggle segment classes rather than inventing a control idiom', () => {
-		expect(row).toContain('hv-mode-segment');
-	});
-
-	it('keeps no static pack label that could disagree with the selection', () => {
-		// The briefcase glyph named one pack and was wrong the moment the other
-		// was chosen, and the bare `<span>` is the defect itself.
+	it('keeps no static pack label that could disagree with what ran', () => {
 		expect(row).not.toContain('hv-cowork-scope');
 	});
 });
@@ -305,9 +333,22 @@ describe('the cowork row offers the pack rather than stating it', () => {
 describe('sending in cowork mode starts a run instead of a completion', () => {
 	const chat = readComponent('../components/chat/Chat.svelte');
 
-	it('sends the pack the person chose, not a derived constant (#1500)', () => {
+	it('sends whatever override is pending and otherwise lets the server infer (#1623)', () => {
 		expect(chat).toContain('createTask(localStorage.token, $composerPack, userPrompt)');
 		expect(chat).not.toContain('packForMode');
+	});
+
+	it('records what the server chose and clears the one shot override', () => {
+		// Both halves matter. Without the first the row has nothing to
+		// disclose or correct; without the second a correction made once
+		// silently pins every later task in the session, which is the toggle
+		// this issue removes, restored by accident.
+		expect(chat).toContain('coworkLastPack.set(task.pack)');
+		expect(chat).toContain('composerPack.set(null)');
+	});
+
+	it('puts the chosen kind of task on the turn, so a wrong guess is visible', () => {
+		expect(chat).toContain('inferredPackStep(task.pack)');
 	});
 
 	it('branches on the mode inside the one submit handler both composers call', () => {
