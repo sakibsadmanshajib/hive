@@ -36,20 +36,29 @@ const twoMemberships: ViewerMembership[] = [
 
 const PLAIN_MEMBER: RoleGateViewer = {
   permissions: ["analytics.view"],
-  current_account: { role: "member" },
+  workspace_admin: false,
 };
-const WORKSPACE_OWNER: RoleGateViewer = {
+const WORKSPACE_ADMIN: RoleGateViewer = {
   permissions: ["members.invite", "members.manage", "workspace.settings"],
-  current_account: { role: "owner" },
+  workspace_admin: true,
+};
+// Issue #1660: a personal tenant's sole owner. Owner of their own billing
+// account, so they hold the workspace permissions above, and deliberately not
+// an administrator of their tenant (signup.insertPersonalMembership writes
+// tenant_users.role = MEMBER), so the control-plane refuses the two surfaces
+// this section offers.
+const PERSONAL_TENANT_SOLE_OWNER: RoleGateViewer = {
+  permissions: ["members.invite", "members.manage", "workspace.settings"],
+  workspace_admin: false,
 };
 const PLATFORM_ADMIN: RoleGateViewer = {
   permissions: ["platform.admin"],
-  current_account: { role: "member" },
+  workspace_admin: false,
 };
 
 function renderShell(
   memberships: ViewerMembership[],
-  viewer: RoleGateViewer = WORKSPACE_OWNER,
+  viewer: RoleGateViewer = WORKSPACE_ADMIN,
 ) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -107,13 +116,21 @@ describe("console sidebar admin section role gating", () => {
     expect(screen.queryByText("Admin")).toBeNull();
   });
 
-  it("shows feature gates and marketplace but not providers for a workspace owner", () => {
-    renderShell([twoMemberships[0]], WORKSPACE_OWNER);
+  it("shows feature gates and marketplace but not providers for a workspace administrator", () => {
+    renderShell([twoMemberships[0]], WORKSPACE_ADMIN);
 
     expect(screen.queryByRole("link", { name: /providers/i })).toBeNull();
     expect(screen.getByRole("link", { name: /feature gates/i })).toBeTruthy();
     expect(screen.getByRole("link", { name: /marketplace/i })).toBeTruthy();
     expect(screen.getByText("Admin")).toBeTruthy();
+  });
+
+  it("offers no admin entries to a personal tenant's sole owner", () => {
+    renderShell([twoMemberships[0]], PERSONAL_TENANT_SOLE_OWNER);
+
+    expect(screen.queryByRole("link", { name: /feature gates/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /marketplace/i })).toBeNull();
+    expect(screen.queryByText("Admin")).toBeNull();
   });
 
   it("shows all three admin entries for a platform admin", () => {

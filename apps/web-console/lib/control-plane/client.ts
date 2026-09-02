@@ -41,6 +41,15 @@ export interface Viewer {
   current_account: ViewerAccount;
   memberships: ViewerMembership[];
   permissions: string[];
+  // Whether this caller administers the workspace in scope, resolved by the
+  // control-plane from public.tenant_users, the table its WorkspaceAdminGate
+  // gates the feature-gate and marketplace surfaces on. current_account.role
+  // above answers a different question (the billing-account scope), and the
+  // two disagree by design for a personal tenant's sole owner, who is 'owner'
+  // there and 'MEMBER' in tenant_users. Deciding workspace administration from
+  // the account role is what showed that user a page the backend then refused
+  // (issue #1660).
+  workspace_admin: boolean;
 }
 
 export interface AccountProfile {
@@ -163,6 +172,7 @@ interface ViewerResponse {
     status: string;
   }>;
   permissions: string[];
+  workspace_admin: boolean;
 }
 
 type JsonPrimitive = string | number | boolean | null;
@@ -358,6 +368,10 @@ function decodeViewerResponse(payload: JsonObject): ViewerResponse | null {
   const currentAccountType = readStringField(currentAccount, "account_type");
   const currentAccountRole = readStringField(currentAccount, "role");
   const permissions = readStringArrayField(payload, "permissions");
+  // Absent means a control-plane that predates the field, and the answer there
+  // is "not an administrator". Fail closed: the alternative fallback is the
+  // account role, which is the conflation issue #1660 removed.
+  const workspaceAdmin = readBooleanField(payload, "workspace_admin") === true;
 
   if (
     !userId ||
@@ -408,6 +422,7 @@ function decodeViewerResponse(payload: JsonObject): ViewerResponse | null {
     },
     memberships,
     permissions,
+    workspace_admin: workspaceAdmin,
   };
 }
 
@@ -640,6 +655,7 @@ export async function getViewer(): Promise<Viewer> {
       status: membership.status,
     })),
     permissions: Array.isArray(rawViewer.permissions) ? rawViewer.permissions : [],
+    workspace_admin: rawViewer.workspace_admin,
   };
 }
 

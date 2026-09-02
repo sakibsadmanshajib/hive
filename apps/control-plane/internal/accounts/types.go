@@ -105,6 +105,22 @@ type ViewerContext struct {
 	CurrentAccount AccountSummary
 	Memberships    []MembershipSummary
 	Permissions    []string
+	// WorkspaceAdmin reports whether this caller administers the workspace in
+	// scope, resolved from public.tenant_users for the tenant they have
+	// selected and widened by the platform-admin overlay: the same two reads,
+	// in the same order, that platform.WorkspaceAdminGate performs before it
+	// admits a request.
+	//
+	// It exists because CurrentAccount.Role answers a different question.
+	// That role comes from public.account_memberships, the billing-account
+	// scope, and a personal tenant's sole owner is 'owner' there while
+	// deliberately staying 'MEMBER' in tenant_users
+	// (signup.insertPersonalMembership). A console that gated the
+	// workspace-administration surfaces on the account role therefore rendered
+	// pages whose data fetch this gate then answered 403, leaving that user on
+	// an empty state telling them to ask an administrator who does not exist
+	// (issue #1660).
+	WorkspaceAdmin bool
 }
 
 // ViewerUser is the user portion of the viewer context.

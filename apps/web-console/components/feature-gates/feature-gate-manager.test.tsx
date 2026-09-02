@@ -114,6 +114,10 @@ describe("FeatureGateManager", () => {
     expect(
       screen.queryByRole("switch", { name: /Extra usage beyond plan/i }),
     ).toBeNull();
-    expect(screen.getByText("Managed by your administrator")).toBeTruthy();
+    // Issue #1660: the label names where the authority sits and stops there.
+    // "your administrator" pointed the reader at a person to go ask, which on
+    // a single-member workspace is nobody, and on any workspace is the wrong
+    // person: an unmanageable gate is platform-admin only (issue #758).
+    expect(screen.getByText("Managed by the platform")).toBeTruthy();
   });
 });

@@ -20,7 +20,7 @@ export function can(viewer: ViewerWithPermissions, perm: Permission): boolean {
 // Shape the predicates need from lib/control-plane/client's Viewer. Kept
 // structural so tests can pass minimal fixtures without casts.
 export interface RoleGateViewer extends ViewerWithPermissions {
-  current_account: { role: string };
+  workspace_admin: boolean;
 }
 
 // Providers is mounted behind control-plane RequirePlatformAdmin
@@ -33,27 +33,26 @@ export function isPlatformAdminViewer(viewer: RoleGateViewer): boolean {
 // Feature gates and Marketplace are mounted behind WorkspaceAdminGate, which
 // admits the OWNER of the selected workspace plus the platform-admin overlay.
 //
-// This is a best-effort UX-layer mirror, not a guaranteed match: the
-// control-plane's WorkspaceAdminGate resolves ownership from
-// public.tenant_users.role, while `current_account.role` here traces to the
-// separate public.account_memberships.role. Until issue #1245's fix
-// (accounts.Service.UpdateMemberRole propagating onto tenant_users via
-// signup.SyncTenantMembershipRole), the two tables could diverge permanently
-// after any Members-page role change: only account_memberships was ever
-// updated post-signup, so a legitimate, currently-promoted co-owner passed
-// this check but then got 403'd by the real backend gate on the data fetch,
-// landing on the "managed by your administrator" empty state instead of
-// their real dashboard (issue #1244). UpdateMemberRole now keeps
-// tenant_users.role in sync with every account_memberships role change it
-// makes, so the two stay aligned going forward; this frontend check needed
-// no change; account_memberships was already the correct signal to read
-// here; it was the backend gate that was reading a stale copy. A genuine
-// non-owner is denied correctly here regardless of any of this, so the
-// customer-facing threat this file exists for (#947/#948/#949) was never
-// affected either way.
+// `workspace_admin` is that gate's own answer, computed by the control-plane
+// from public.tenant_users for the tenant this caller has selected and widened
+// by the same platform-admin overlay. Reading it here is what keeps this
+// predicate from being a second, independently drifting opinion.
+//
+// It used to read `current_account.role === "owner"`, which traces to the
+// separate public.account_memberships. Two tables answering one question
+// produced two live defects. Issue #1244: a promoted co-owner passed here and
+// was then 403'd by the real gate, because only account_memberships was
+// updated post-signup (fixed at the writer by #1245). Issue #1660: a personal
+// tenant's sole owner is 'owner' in account_memberships and deliberately
+// 'MEMBER' in tenant_users (signup.insertPersonalMembership), so this
+// predicate admitted them to a page whose data fetch was refused, leaving
+// them on an empty state that told them to ask an administrator who does not
+// exist. Both are the same shape: the console decided from a table the
+// backend does not gate on.
+//
+// Fail-closed by construction: a control-plane that omits the field decodes to
+// false, so the surface hides rather than rendering for a caller the backend
+// will refuse.
 export function isWorkspaceAdminViewer(viewer: RoleGateViewer): boolean {
-  return (
-    isPlatformAdminViewer(viewer) ||
-    viewer.current_account.role === "owner"
-  );
+  return isPlatformAdminViewer(viewer) || viewer.workspace_admin;
 }

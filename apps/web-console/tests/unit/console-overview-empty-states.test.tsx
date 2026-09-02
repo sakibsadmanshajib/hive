@@ -38,6 +38,7 @@ const viewer: Viewer = {
   },
   memberships: [],
   permissions: [],
+  workspace_admin: false,
 };
 
 const profile: AccountProfile = {

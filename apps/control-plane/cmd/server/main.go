@@ -1187,6 +1187,16 @@ func main() {
 		workspaceAdminGate = platform.NewWorkspaceAdminGate(tenantRoleSvc, roleSvc)
 	}
 
+	// Issue #1660 — hand GET /api/v1/viewer the same tenant-scoped signal the
+	// gate above decides on, so the console stops inferring workspace
+	// administration from the account_memberships role. Without this the
+	// response reports workspace_admin=false for everyone, which is the
+	// fail-closed direction: the console denies a surface the control-plane
+	// would allow, rather than offering one it refuses.
+	if tenantRoleSvc != nil && accountsHandler != nil {
+		accountsHandler = accountsHandler.WithTenantRoleService(tenantRoleSvc)
+	}
+
 	// Issue #309 (blueprint Step 2.3) — MCP and skills marketplace, admin-
 	// curated baseline. Per-tenant enablement is workspace-owner gated and
 	// catalog curation stays platform-admin only (issue #758). The internal
