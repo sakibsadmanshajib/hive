@@ -1,0 +1,15 @@
+Capture run: issue #1745 invitation send cap (before)
+Console under test: http://localhost:3312 (next build + next start, unmodified origin/main)
+Upstream: local proof stub on http://localhost:9312 for Supabase Auth and the
+control plane. No live tenant, no live credential, and no email is sent:
+the stub answers the invitation POST 201, then 429, then 503, with the
+two refusal bodies the control-plane handler produces.
+
+  GET /console/members status: 200
+  invite form present: 1
+
+1. Unmodified main, same cap refusal from the same stub
+  POST /api/console/members status: 201
+  POST /api/console/members status (upstream answered 429): 400
+  alert text: "Could not create the invitation. Please try again."
+  screenshot: 00-before-generic-retry-advice.png

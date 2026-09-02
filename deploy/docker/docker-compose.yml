@@ -578,6 +578,28 @@ services:
       # excludes the relay outright.
       HIVE_MAIL_FROM: ${HIVE_MAIL_FROM:-no_reply@hive.scubed.co}
       HIVE_MAIL_FROM_NAME: ${HIVE_MAIL_FROM_NAME:-Hive}
+      # Transport-wide ceiling on this service's outbound mail (issue #1745),
+      # above every per-caller cap. The day is the window that matters: relay
+      # accounts meter daily, and these credentials are shared with the auth
+      # mailer, so exhausting them fails password resets and one-time codes
+      # too.
+      # Empty rather than repeating the numbers: control-plane treats unset as
+      # "use the default", so 100 and 250 live in one place (mailer/throttle.go)
+      # instead of two that drift.
+      HIVE_MAIL_RELAY_CAP_PER_HOUR: ${HIVE_MAIL_RELAY_CAP_PER_HOUR:-}
+      HIVE_MAIL_RELAY_CAP_PER_DAY: ${HIVE_MAIL_RELAY_CAP_PER_DAY:-}
+      # What the relay plan actually allows in a day, and the two auth-mailer
+      # settings, so control-plane can add every ceiling up at boot and say
+      # whether the total fits. Accounting only: nothing here changes what
+      # GoTrue does, and the auth values are the same ones the enterprise
+      # overlay passes to GoTrue itself.
+      HIVE_MAIL_PLAN_DAILY_ALLOWANCE: ${HIVE_MAIL_PLAN_DAILY_ALLOWANCE:-}
+      # These two DO repeat their defaults, and have to: they are what the
+      # enterprise overlay passes to GoTrue, and the boot-time sum is only
+      # honest if it reads the same values GoTrue runs with. Change them
+      # together with the overlay, never alone.
+      ENTERPRISE_RATE_LIMIT_EMAIL_SENT: ${ENTERPRISE_RATE_LIMIT_EMAIL_SENT:-50/24h}
+      ENTERPRISE_MAILER_AUTOCONFIRM: ${ENTERPRISE_MAILER_AUTOCONFIRM:-true}
       OWUI_BASE_URL: ${OWUI_BASE_URL:-http://open-webui:8080}
       OWUI_ADMIN_TOKEN: ${OWUI_ADMIN_TOKEN:-}
       SUPABASE_WEBHOOK_SECRET: ${SUPABASE_WEBHOOK_SECRET:-}

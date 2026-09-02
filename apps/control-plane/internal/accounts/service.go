@@ -30,6 +30,7 @@ type Service struct {
 	tenantRoleSvc *platform.TenantRoleService // optional — see WithTenantRoleService
 	billing       *pgxpool.Pool               // optional — see WithBillingPool
 	mailer        InvitationMailer            // optional — see WithInvitationMailer
+	inviteLimits  InvitationLimits            // optional — see WithInvitationLimits
 }
 
 // NewService returns a new accounts Service.
@@ -76,6 +77,17 @@ func (s *Service) WithTenantRoleService(tenantRoleSvc *platform.TenantRoleServic
 func (s *Service) WithInvitationMailer(m InvitationMailer) *Service {
 	cloned := *s
 	cloned.mailer = m
+	return &cloned
+}
+
+// WithInvitationLimits returns a copy of the Service that caps how much
+// invitation mail a caller can cause (issue #1745). Without it invitations are
+// uncapped, which is why main.go refuses to wire a mailer at all when it has no
+// counter backend to enforce the cap against: an unbounded relay is worse than
+// an invitation the inviting user has to hand over as a link.
+func (s *Service) WithInvitationLimits(limits InvitationLimits) *Service {
+	cloned := *s
+	cloned.inviteLimits = limits
 	return &cloned
 }
 
@@ -351,6 +363,16 @@ func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, vie
 			Code:    "permission_denied",
 			Message: "members.invite permission required",
 		}
+	}
+
+	// The send cap, before anything is generated or stored (issue #1745). It is
+	// here rather than around the send itself so a refusal is an error the
+	// caller receives, not a stored invitation carrying a "sorry, no email"
+	// field: this path is the one that can mail an arbitrary address, and a
+	// created-but-undelivered invitation is exactly the claimed-state shape
+	// that keeps producing defects in this repo.
+	if err := s.inviteLimits.check(ctx, accountID, viewer, email); err != nil {
+		return InvitationResult{}, err
 	}
 
 	rawToken, tokenHash, err := generateToken()
