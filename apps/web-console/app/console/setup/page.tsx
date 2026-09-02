@@ -1,10 +1,13 @@
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
-  getViewer,
   updateAccountProfile,
+  type AccountProfile,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import {
   accountProfileSchema,
   type AccountProfileFormValues,
@@ -15,9 +18,10 @@ import {
 } from "@/components/profile/account-profile-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 
 function toFormValues(
-  profile: Awaited<ReturnType<typeof getAccountProfile>>,
+  profile: AccountProfile,
 ): AccountProfileFormValues {
   return {
     ownerName: profile.owner_name,
@@ -42,10 +46,15 @@ function readFormValues(formData: FormData): AccountProfileFormValues {
 
 export default async function SetupPage() {
   const [profile, viewer] = await Promise.all([
-    getAccountProfile(),
-    getViewer(),
+    requireAccountProfile(),
+    requireViewer(),
   ]);
-  const initialValues = toFormValues(profile);
+  // A fresh account has no profile row and requireAccountProfile() hands back
+  // the empty needs-setup one, which is exactly what this form is for. null is
+  // the other case: the profile could not be read at all. Seeding a blank form
+  // from that would invite the customer to save those blanks over data that is
+  // still there, so the page says so instead (issue #494).
+  const initialValues = profile ? toFormValues(profile) : null;
 
   async function saveProfile(
     _state: AccountProfileFormState,
@@ -90,7 +99,7 @@ export default async function SetupPage() {
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">
@@ -104,12 +113,19 @@ export default async function SetupPage() {
         description="Three short sections — owner, account and location. Save what you have now; you can return to refine billing and tax details later."
       />
 
-      <AccountProfileForm
-        action={saveProfile}
-        initialValues={initialValues}
-        submitLabel="Save and continue"
-        justSaved={false}
-      />
+      {initialValues ? (
+        <AccountProfileForm
+          action={saveProfile}
+          initialValues={initialValues}
+          submitLabel="Save and continue"
+          justSaved={false}
+        />
+      ) : (
+        <EmptyState
+          title="Could not load your profile"
+          description="We could not reach the profile service, so this form is not showing what is currently saved. Refresh to try again."
+        />
+      )}
     </ConsoleShell>
   );
 }

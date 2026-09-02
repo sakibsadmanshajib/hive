@@ -1,11 +1,14 @@
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
   getCatalogModels,
-  getViewer,
   type CatalogModel,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+  tolerate,
+} from "@/lib/console/data";
 import {
   apiBaseUrl,
   OPENAPI_ROUTE,
@@ -54,17 +57,17 @@ function CodeBlock({ children }: { children: string }) {
 }
 
 export default async function DocsPage() {
-  const viewer = await getViewer();
+  const viewer = await requireViewer();
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
 
   const [profile, models] = await Promise.all([
-    getAccountProfile().catch((): { owner_name: string } => ({ owner_name: "" })),
+    requireAccountProfile(),
     // The quickstart names a model that actually exists on this deployment.
     // If the catalog cannot be read the snippets still have to be runnable, so
     // they fall back to the alias seeded by supabase/migrations.
-    getCatalogModels().catch((): CatalogModel[] => []),
+    tolerate(getCatalogModels()).then((rows): CatalogModel[] => rows ?? []),
   ]);
 
   // Name an alias that actually answers on a fresh account. See
@@ -111,7 +114,7 @@ print(response.choices[0].message.content)`;
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/docs"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">

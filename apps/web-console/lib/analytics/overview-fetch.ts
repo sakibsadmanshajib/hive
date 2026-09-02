@@ -12,7 +12,15 @@
  * shape of this file) silently mislabeled an outage as a real zero on the
  * Total requests, Input tokens, Output tokens, Total spend and Top API keys
  * tiles.
+ *
+ * Each catch re-raises Next.js's own control flow before deciding anything.
+ * redirect(), notFound() and "this route read cookies so it cannot be
+ * prerendered" are all signalled by throwing, and a bare `catch {}` here
+ * would report one of those as a failed analytics read and render the tile
+ * as unavailable (issue #494).
  */
+import { unstable_rethrow } from "next/navigation";
+
 import {
   getAnalyticsErrors,
   getAnalyticsSpend,
@@ -85,7 +93,8 @@ async function fetchMain(
       return { usage: [], spend: await getAnalyticsSpend(fetchParams), errors: [] };
     }
     return { usage: [], spend: [], errors: await getAnalyticsErrors(fetchParams) };
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     return null;
   }
 }
@@ -119,7 +128,8 @@ async function fetchPreviousUsage(
       from: bounds.from,
       to: bounds.to,
     });
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     return null;
   }
 }
@@ -144,7 +154,8 @@ async function fetchCacheSample(
       window: input.timeWindow,
     });
     return { events: page.events, truncated: page.next_cursor !== null };
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     return null;
   }
 }
@@ -178,7 +189,8 @@ async function fetchPreviousCacheSample(
       to: bounds.to,
     });
     return page.events;
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     return null;
   }
 }
@@ -210,7 +222,8 @@ async function fetchTopKeys(
       getApiKeys(),
     ]);
     return { spend, keys };
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     return null;
   }
 }
@@ -234,7 +247,8 @@ async function fetchGroupKeys(
   }
   try {
     return await getApiKeys();
-  } catch {
+  } catch (error) {
+    unstable_rethrow(error);
     return null;
   }
 }

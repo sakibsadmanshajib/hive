@@ -1,10 +1,13 @@
 import { redirect } from "next/navigation";
 
 import {
-  getAccountProfile,
-  getViewer,
   updateAccountProfile,
+  type AccountProfile,
 } from "@/lib/control-plane/client";
+import {
+  requireViewer,
+  requireAccountProfile,
+} from "@/lib/console/data";
 import {
   accountProfileSchema,
   type AccountProfileFormValues,
@@ -16,9 +19,10 @@ import {
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { EmailSettingsCard } from "@/components/email-settings-card";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 
 function toFormValues(
-  profile: Awaited<ReturnType<typeof getAccountProfile>>,
+  profile: AccountProfile,
 ): AccountProfileFormValues {
   return {
     ownerName: profile.owner_name,
@@ -51,10 +55,13 @@ export default async function ProfileSettingsPage({
   const params = await searchParams;
   const justSaved = params.saved === "1";
   const [viewer, profile] = await Promise.all([
-    getViewer(),
-    getAccountProfile(),
+    requireViewer(),
+    requireAccountProfile(),
   ]);
-  const initialValues = toFormValues(profile);
+  // null is "we could not read your profile", not "your profile is blank".
+  // Seeding the form from it would show saved values as empty and invite the
+  // customer to overwrite them with those blanks (issue #494).
+  const initialValues = profile ? toFormValues(profile) : null;
 
   async function saveProfile(
     _state: AccountProfileFormState,
@@ -99,7 +106,7 @@ export default async function ProfileSettingsPage({
       }}
       memberships={viewer.memberships}
       viewer={viewer}
-      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      user={{ email: viewer.user.email, name: profile?.owner_name || null }}
       active="/console/settings/profile"
       topbar={
         <span className="font-medium text-[var(--color-ink-2)]">
@@ -119,12 +126,19 @@ export default async function ProfileSettingsPage({
           emailVerified={viewer.user.email_verified}
         />
 
-        <AccountProfileForm
-          action={saveProfile}
-          initialValues={initialValues}
-          submitLabel="Save profile"
-          justSaved={justSaved}
-        />
+        {initialValues ? (
+          <AccountProfileForm
+            action={saveProfile}
+            initialValues={initialValues}
+            submitLabel="Save profile"
+            justSaved={justSaved}
+          />
+        ) : (
+          <EmptyState
+            title="Could not load your profile"
+            description="We could not reach the profile service, so this form is not showing what is currently saved. Refresh to try again."
+          />
+        )}
       </div>
     </ConsoleShell>
   );

@@ -31,9 +31,17 @@ vi.mock("@/lib/navigate", () => ({
 // already what every case below drives, via window.history.pushState. Next
 // itself resolves this hook from the request URL on the server render, because
 // the root layout awaits cookies() (next-intl) and so every route is dynamic.
-vi.mock("next/navigation", () => ({
+// Only the navigation calls this test drives are replaced.
+// unstable_rethrow() stays real: the console's reads call it first in
+// every catch so a framework throw is never classified as a data
+// failure, and a stubbed one would pass whether or not that holds.
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return {
+    ...actual,
   useSearchParams: () => new URLSearchParams(window.location.search),
-}));
+  };
+});
 
 import SignInPage from "../app/auth/sign-in/page";
 import { navigate } from "@/lib/navigate";

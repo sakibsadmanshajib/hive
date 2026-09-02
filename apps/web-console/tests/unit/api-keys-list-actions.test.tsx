@@ -8,9 +8,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-vi.mock("next/navigation", () => ({
+// Only the navigation calls this test drives are replaced.
+// unstable_rethrow() stays real: the console's reads call it first in
+// every catch so a framework throw is never classified as a data
+// failure, and a stubbed one would pass whether or not that holds.
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return {
+    ...actual,
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
-}));
+  };
+});
 
 import { ApiKeyList } from "@/components/api-keys/api-key-list";
 import type { ApiKey } from "@/lib/control-plane/client";

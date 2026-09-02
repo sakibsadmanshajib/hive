@@ -8,7 +8,11 @@ import { formatCredits } from "@/lib/format/credits";
 
 interface BudgetAlertBannerProps {
   threshold: BudgetThreshold | null;
-  currentBalance: number;
+  // null when the balance could not be read. It is deliberately not a number:
+  // the layout used to substitute 0 for an unreadable balance, and 0 is below
+  // every threshold a customer can set, so an outage rendered as a real
+  // threshold breach on every console route (issue #494).
+  currentBalance: number | null;
 }
 
 export function BudgetAlertBanner({
@@ -18,6 +22,12 @@ export function BudgetAlertBanner({
   const [dismissed, setDismissed] = useState(false);
 
   if (!threshold || threshold.alert_dismissed || dismissed) {
+    return null;
+  }
+
+  // Nothing truthful to say about a balance we do not have. The banner exists
+  // to tell the customer where they stand; it cannot do that from a guess.
+  if (currentBalance === null) {
     return null;
   }
 

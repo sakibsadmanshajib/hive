@@ -67,9 +67,17 @@ vi.mock("next/headers", () => ({
 }));
 
 // --- mock next/navigation ---
-vi.mock("next/navigation", () => ({
+// Only the navigation calls this test drives are replaced.
+// unstable_rethrow() stays real: the console's reads call it first in
+// every catch so a framework throw is never classified as a data
+// failure, and a stubbed one would pass whether or not that holds.
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return {
+    ...actual,
   redirect: vi.fn(),
-}));
+  };
+});
 
 // Snapshot every variable these tests mutate, so the suite cannot leak fake
 // configuration into another suite sharing the same worker.
