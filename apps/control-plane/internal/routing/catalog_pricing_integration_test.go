@@ -102,6 +102,24 @@ var expectedMultiRouteAliases = map[string]int{
 	"hive-free": 2,
 }
 
+// routelessPriceUnits are model_aliases.price_unit values whose rows are PRICE
+// CARRIERS rather than models, and so must carry no provider_routes row at all.
+//
+// 'calls' is the per-call unit the web tools are priced in (issue #1695):
+// hive-web-search and hive-web-fetch exist only so the charge for one
+// web_search or web_fetch call comes out of the catalog instead of a literal in
+// Go. Nothing dispatches to them, they are visibility 'internal' so no tenant
+// is ever entitled to them, and edge-api reads their price through
+// /internal/routing/alias-price, which selects no route.
+//
+// The one-alias-one-route rule does not apply to such a row, and this is NOT a
+// hole in it: the check below inverts for these aliases and requires exactly
+// ZERO enabled routes. Seeding a route under a price carrier would make it
+// dispatchable, which is the thing that must never happen, so it fails here.
+var routelessPriceUnits = map[string]bool{
+	"calls": true,
+}
+
 // TestSeededAliasHasExactlyOneEnabledRoute enforces the owner's rule: one
 // alias maps to exactly one route. An alias with two selectable routes is
 // ambiguous about what a request actually costs, which is what made
@@ -116,11 +134,11 @@ func TestSeededAliasHasExactlyOneEnabledRoute(t *testing.T) {
 	pool := connectCatalogDB(t)
 
 	rows, err := pool.Query(context.Background(), `
-		SELECT a.alias_id, count(r.route_id)
+		SELECT a.alias_id, a.price_unit, count(r.route_id)
 		FROM public.model_aliases a
 		LEFT JOIN public.provider_routes r
 		  ON r.alias_id = a.alias_id AND r.health_state <> 'disabled'
-		GROUP BY a.alias_id
+		GROUP BY a.alias_id, a.price_unit
 		ORDER BY a.alias_id
 	`)
 	if err != nil {
@@ -130,12 +148,20 @@ func TestSeededAliasHasExactlyOneEnabledRoute(t *testing.T) {
 
 	seen := 0
 	for rows.Next() {
-		var aliasID string
+		var aliasID, priceUnit string
 		var enabled int
-		if err := rows.Scan(&aliasID, &enabled); err != nil {
+		if err := rows.Scan(&aliasID, &priceUnit, &enabled); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
 		seen++
+		if routelessPriceUnits[priceUnit] {
+			// Inverted, not exempted: a price carrier must dispatch to nothing.
+			if enabled != 0 {
+				t.Errorf("alias %s is priced per %s, which makes it a price carrier, but it has %d enabled routes; a price carrier must have none",
+					aliasID, priceUnit, enabled)
+			}
+			continue
+		}
 		if reason, pending := pendingMultiRouteAliases[aliasID]; pending {
 			if enabled == 1 {
 				t.Errorf("alias %s now has exactly 1 enabled route; drop it from pendingMultiRouteAliases (%s)", aliasID, reason)
