@@ -416,3 +416,40 @@ func priceClassRank(priceClass string) int {
 
 	return idx
 }
+
+// AliasPrice answers what one alias costs, with the unit that price is quoted
+// in, and nothing else. No route is selected and no entitlement is resolved.
+//
+// It exists for the per-call tools (issue #1695). A web_search or web_fetch
+// call has to be charged from the catalog rather than from a literal in Go,
+// but its alias is a price carrier rather than a model: it has no
+// provider_routes row to select, no LiteLLM deployment behind it, and
+// visibility 'internal' so it can never appear in a model list or a chat
+// picker. SelectRoute cannot answer for such an alias, and making it able to
+// would mean seeding routing state that nothing dispatches to.
+//
+// Fail closed is the CALLER's job here, and deliberately so. This returns
+// exactly what the row says, including the zero value for an alias with no row
+// at all, because "no row" and "priced at zero" are the same observation from
+// the repository (see Repository.LoadAliasPricing). edge-api refuses a tool
+// call whose unit is not the one it meters or whose price is not positive
+// (D-034); inventing a verdict here as well would put the same rule in two
+// places that could drift.
+func (s *Service) AliasPrice(ctx context.Context, aliasID string) (catalog.CatalogPricing, string, error) {
+	aliasID = strings.TrimSpace(aliasID)
+	if aliasID == "" {
+		return catalog.CatalogPricing{}, "", fmt.Errorf("%w: alias_id is required", ErrAliasNotFound)
+	}
+	pricing, priceUnit, err := s.repo.LoadAliasPricing(ctx, aliasID)
+	if err != nil {
+		return catalog.CatalogPricing{}, "", fmt.Errorf("routing: load alias pricing for %s: %w", aliasID, err)
+	}
+	if priceUnit == "" {
+		// LoadAliasPricing reports a missing row as an empty unit alongside the
+		// zero pricing. An empty unit is never a real row: the column is NOT
+		// NULL with a default of 'tokens'. So this is "no such alias", which is
+		// a 404 rather than a price of zero the caller might try to charge.
+		return catalog.CatalogPricing{}, "", fmt.Errorf("%w: alias %s", ErrAliasNotFound, aliasID)
+	}
+	return pricing, priceUnit, nil
+}

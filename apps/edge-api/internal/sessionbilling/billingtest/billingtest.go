@@ -29,8 +29,20 @@ type Accounting struct {
 
 	// ReservationStatus, when non-zero, refuses the hold with that status.
 	ReservationStatus int
+	// OnFinalize, when set, is called as the finalize request is handled. It
+	// exists so a test can observe WHEN the charge settled relative to
+	// something else it controls, which is the one thing recording the call
+	// after the fact cannot show. Called on the fake server's goroutine, so
+	// anything it touches has to be safe for that.
+	OnFinalize func()
+	// FinalizeStatus, when non-zero, fails every finalize with that status.
+	// The hold must then be handed back rather than left stranded (#616), so
+	// this is the branch that proves a reservation still reaches a terminal
+	// state exactly once when the charge itself cannot land.
+	FinalizeStatus int
 
 	reservations []inference.CreateReservationInput
+	finalized    []inference.FinalizeReservationInput
 	released     []inference.ReleaseReservationInput
 }
 
@@ -58,6 +70,23 @@ func (a *Accounting) Client(t *testing.T) *inference.AccountingClient {
 			ID: id, AccountID: in.AccountID, Status: "active", ReservedCredits: in.EstimatedCredits,
 		})
 	})
+	mux.HandleFunc("/internal/accounting/reservations/finalize", func(w http.ResponseWriter, r *http.Request) {
+		var in inference.FinalizeReservationInput
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		a.mu.Lock()
+		a.finalized = append(a.finalized, in)
+		status, observe := a.FinalizeStatus, a.OnFinalize
+		a.mu.Unlock()
+		if observe != nil {
+			observe()
+		}
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, `{"error":"finalize refused"}`)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("/internal/accounting/reservations/release", func(w http.ResponseWriter, r *http.Request) {
 		var in inference.ReleaseReservationInput
 		_ = json.NewDecoder(r.Body).Decode(&in)
@@ -76,6 +105,13 @@ func (a *Accounting) Counts() (reservations, released int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return len(a.reservations), len(a.released)
+}
+
+// Finalized returns a copy of the charges settled, credits included.
+func (a *Accounting) Finalized() []inference.FinalizeReservationInput {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]inference.FinalizeReservationInput(nil), a.finalized...)
 }
 
 // Reservations returns a copy of the holds taken.

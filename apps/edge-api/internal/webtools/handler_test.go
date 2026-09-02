@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sessionbilling/billingtest"
 )
 
 type stubSearcher struct {
@@ -46,8 +47,24 @@ func okHits() []Hit {
 	}
 }
 
+// newTestHandler builds the two routes with a working money path unless the
+// test supplies its own.
+//
+// The default is deliberate and is NOT a way to make billing optional: the
+// handler refuses every call when Deps.Billing is absent (issue #1695), which
+// TestWebToolRefusesWhenBillingIsNotWired holds in place by constructing the
+// handler directly. Injecting a billable tenant here keeps every test about
+// search behaviour, budgets and envelopes stating only what it is about,
+// instead of restating the money path thirty times.
 func newTestHandler(t *testing.T, d Deps) http.Handler {
 	t.Helper()
+	if d.Billing == nil {
+		d.Billing = &Billing{
+			Accounting: (&billingtest.Accounting{}).Client(t),
+			Resolver:   billingtest.Billable(),
+			Pricer:     catalogPricer(),
+		}
+	}
 	mux := http.NewServeMux()
 	NewHandler(d).Register(mux)
 	return mux

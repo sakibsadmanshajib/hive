@@ -557,6 +557,19 @@ func main() {
 		webtools.NewHandler(webtools.Deps{
 			Search: webtools.NewSearXNG(resolveSearXNGQueryURL()),
 			Fetch:  buildWebFetchPipeline(ragBatchEmbedder),
+			// Money path (issue #1695). Both tools spend real money and
+			// charged nothing for it: a search is an HTTP call to SearXNG on
+			// our own hosting, and a fetch embeds any page past MaxCallChars.
+			// Accounting and the billing resolver are the same two dependencies
+			// session chat, RAG chat and agent-task submission settle through.
+			// The pricer is the third, and it is what keeps the per-call price
+			// in model_aliases instead of in Go: without it every tool call is
+			// refused rather than served free (D-034).
+			Billing: &webtools.Billing{
+				Accounting: accountingClient,
+				Resolver:   &metering.PGBillingAccountResolver{Pool: dbPool},
+				Pricer:     webtools.NewCatalogPricer(routingClient),
+			},
 		}).Register(webToolsMux)
 		registerWebToolRoutes(mux, webToolsMux)
 	}

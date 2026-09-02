@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
 type Handler struct {
@@ -47,9 +49,46 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/routing/select":
 		h.handleSelectRoute(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/internal/routing/alias-price":
+		h.handleAliasPrice(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
+}
+
+// aliasPriceResponse is what GET /internal/routing/alias-price answers with:
+// one alias's catalog price and the unit it is quoted in, per million units.
+//
+// The pricing block is catalog.CatalogPricing verbatim, the same shape
+// /internal/routing/select already carries, so edge-api decodes it with the
+// type it already has and the two cannot drift into different price shapes.
+type aliasPriceResponse struct {
+	AliasID   string                 `json:"alias_id"`
+	Pricing   catalog.CatalogPricing `json:"pricing"`
+	PriceUnit string                 `json:"price_unit"`
+}
+
+// handleAliasPrice serves the price of one alias, for a caller that has to
+// charge against the catalog but has no route to select (issue #1695: the
+// per-call web tools). Shared-secret gated like every other /internal route.
+func (h *Handler) handleAliasPrice(w http.ResponseWriter, r *http.Request) {
+	aliasID := strings.TrimSpace(r.URL.Query().Get("alias_id"))
+	if aliasID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "alias_id is required"})
+		return
+	}
+
+	pricing, priceUnit, err := h.svc.AliasPrice(r.Context(), aliasID)
+	if err != nil {
+		writeRoutingError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, aliasPriceResponse{
+		AliasID:   aliasID,
+		Pricing:   pricing,
+		PriceUnit: priceUnit,
+	})
 }
 
 func (h *Handler) handleSelectRoute(w http.ResponseWriter, r *http.Request) {

@@ -248,6 +248,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	if cfg.RoutingHandler != nil {
 		mux.Handle("/internal/routing/select", internal(cfg.RoutingHandler))
+		// Alias price without route selection, for a caller that must charge
+		// against the catalog but has no route to select (issue #1695, the
+		// per-call web tools). Same shared-secret gate as its sibling.
+		mux.Handle("/internal/routing/alias-price", internal(cfg.RoutingHandler))
 	}
 
 	if cfg.AccountingHandler != nil {
