@@ -55,7 +55,7 @@ by the authenticated caller, never round-tripped.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| POST | `/v1/agent/tasks` | `{"pack": "...", "instructions": "..."}` | 201 with the created Task in `queued`; `instructions` is optional |
+| POST | `/v1/agent/tasks` | `{"pack": "...", "instructions": "..."}` | 201 with the created Task in `queued`; both fields are optional. Since issue #1623 an absent, empty or whitespace-only `pack` is a normal submission, not a 400: control-plane infers it from `instructions` (`agenttask.InferPack`) and the response carries the resolved value. A pack that is present but is neither of the two real values is still a 400 |
 | GET | `/v1/agent/tasks` | — | `{"tasks": [Task, ...]}`, newest first, scoped to the caller |
 | GET | `/v1/agent/tasks/{id}` | — | 404 if the task belongs to a different user or does not exist |
 | POST | `/v1/agent/tasks/{id}/cancel` | — | 409 if the task already reached a terminal state |
@@ -116,7 +116,7 @@ untrusted client input.
 
 | Method | Path | Body |
 |---|---|---|
-| POST | `/internal/agent-tasks/{tenant_id}/{user_id}` | `{"pack": "...", "instructions": "..."}` |
+| POST | `/internal/agent-tasks/{tenant_id}/{user_id}` | `{"pack": "...", "instructions": "..."}`; `pack` optional and inferred when absent, exactly as on the edge surface |
 | GET | `/internal/agent-tasks/{tenant_id}/{user_id}` | — |
 | GET | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}` | — |
 | POST | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/cancel` | — |

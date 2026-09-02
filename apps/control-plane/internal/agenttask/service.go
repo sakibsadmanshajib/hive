@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,7 +141,14 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 	// A pack that is neither empty nor real is still refused. That is a broken
 	// client, not a caller declining to choose, and guessing on its behalf
 	// would hide the bug.
-	if pack == "" {
+	//
+	// Trimmed here rather than only at the edge, so that "the one point every
+	// caller routes through" is true of the whitespace normalisation as well
+	// as the inference. edge-api trims before forwarding, so a customer never
+	// saw the difference, but the internal surface took a pack of " " to the
+	// CHECK constraint and answered ErrInvalidPack for an input the public
+	// path infers, which is two surfaces disagreeing about one value.
+	if pack = Pack(strings.TrimSpace(string(pack))); pack == "" {
 		pack = InferPack(instructions)
 	}
 	if !pack.Valid() {

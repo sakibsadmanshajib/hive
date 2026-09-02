@@ -880,3 +880,50 @@ func (f *fakeRepository) ListEvents(_ context.Context, _, _ uuid.UUID, id uuid.U
 	}
 	return out, nil
 }
+
+// A pack that is only whitespace is a caller declining to choose, not a
+// broken client, and both surfaces have to read it the same way. edge-api
+// already trims before forwarding, so a customer never saw the difference,
+// but the internal surface took the untrimmed value straight to the CHECK
+// constraint and answered ErrInvalidPack for an input the public path
+// infers. Trimming here, where the inference already lives, is what makes
+// the edge handler's own comment ("control-plane is the single place that
+// decides") literally true rather than true only for its own caller.
+func TestService_CreateTask_WhitespaceOnlyPackIsInferred(t *testing.T) {
+	repo := newFakeRepository()
+	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+	tenantID, userID := uuid.New(), uuid.New()
+
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.Pack("  "),
+		"Summarise the vendor contract into a one page memo.", uuid.Nil, "")
+	if err != nil {
+		t.Fatalf("CreateTask with a whitespace-only pack: %v", err)
+	}
+	svc.WaitIdle()
+
+	if created.Pack != agenttask.PackKnowledgeWork {
+		t.Errorf("returned pack = %q, want %q", created.Pack, agenttask.PackKnowledgeWork)
+	}
+	stored, err := svc.Get(context.Background(), tenantID, userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Pack != agenttask.PackKnowledgeWork {
+		t.Errorf("stored pack = %q, want %q", stored.Pack, agenttask.PackKnowledgeWork)
+	}
+}
+
+// The same trim, on a pack the caller did name. A padded but real value is
+// the caller's word and is honoured; inference never runs.
+func TestService_CreateTask_PaddedExplicitPackIsHonoured(t *testing.T) {
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+	created, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(),
+		agenttask.Pack(" coding-pack "), "Summarise the vendor contract into a one page memo.", uuid.Nil, "")
+	if err != nil {
+		t.Fatalf("CreateTask with a padded pack: %v", err)
+	}
+	svc.WaitIdle()
+	if created.Pack != agenttask.PackCoding {
+		t.Errorf("pack = %q, want %q", created.Pack, agenttask.PackCoding)
+	}
+}

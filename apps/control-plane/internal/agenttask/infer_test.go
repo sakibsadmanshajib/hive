@@ -158,3 +158,103 @@ func TestInferPack_AlwaysReturnsAValidPack(t *testing.T) {
 		}
 	}
 }
+
+// Ordinary business English that the first cut of this rule read as code.
+// Every string here is a request a knowledge-work customer plausibly types,
+// and every one of them routed to the coding pack before the extension list
+// and the term corpus were narrowed. They are pinned as fixtures rather than
+// described in a comment because the failure they guard is silent: the caller
+// loses the deck skill and the publish path, and the only signal is one muted
+// progress line.
+func TestInferPack_DoesNotReadOrdinaryBusinessEnglishAsCode(t *testing.T) {
+	for _, instructions := range []string{
+		// Single-letter extensions. A clock time is not a C file, and meeting
+		// times are ordinary vocabulary in exactly the requests the
+		// knowledge-work default exists to protect.
+		"Summarise the 9 a.m. board meeting notes into action items.",
+		"3 p.m. standup recap",
+		"Draft the agenda for the 3 p.m. steering committee.",
+		"Prepare slides on the C.H. Robinson logistics case study.",
+		"Summarise Rev.C of the mechanical drawing package.",
+		// Build-tool names that are ordinary trade vocabulary. Three of these
+		// four are core to this product's first market: cargo is freight,
+		// yarn is thread, and "cotton lint" is the standard term for ginned
+		// cotton in the ready-made-garment trade.
+		"cotton yarn price trends for the RMG sector",
+		"Write a brief on cargo insurance claims at Chittagong port.",
+		"Compare cotton lint import duties across the last three years.",
+		"Profile the marketing maven who ran the campaign.",
+	} {
+		if got := agenttask.InferPack(instructions); got != agenttask.PackKnowledgeWork {
+			t.Errorf("InferPack(%q) = %q, want %q", instructions, got, agenttask.PackKnowledgeWork)
+		}
+	}
+}
+
+// The unambiguous two-word forms of the build-tool names that were dropped as
+// bare words. An engineer asking about a Rust or a JavaScript build types the
+// command, and the phrase mechanism already matched multi-word terms, so the
+// coding signal survives the narrowing without the trade-vocabulary cost.
+func TestInferPack_ReadsBuildToolCommandsAsCoding(t *testing.T) {
+	for _, instructions := range []string{
+		"cargo build is failing on the workspace crate, work out why.",
+		"Run cargo test and tell me which cases fail.",
+		"yarn install fails on a peer dependency, sort it out.",
+		"Get yarn build green again before the release.",
+	} {
+		if got := agenttask.InferPack(instructions); got != agenttask.PackCoding {
+			t.Errorf("InferPack(%q) = %q, want %q", instructions, got, agenttask.PackCoding)
+		}
+	}
+}
+
+// A "Skill:" prefix is a documented convention on this same instructions
+// field (SYNC_CONTRACT.md), all three skills it can name ship only in
+// packs/knowledge-work-pack/, and only that pack's AGENTS.md tells the agent
+// to honour the tag at all. So a tagged request that also carries coding
+// evidence would land where the named skill file does not exist and the
+// convention is not read, losing the capability the caller asked for outright
+// with no error anywhere. code-canvas is why this is not hypothetical:
+// rendering a code preview is its whole job, so its instructions carry a
+// filename or a fenced block almost by construction.
+func TestInferPack_SkillTagStaysOnKnowledgeWork(t *testing.T) {
+	for _, instructions := range []string{
+		"Skill: code-canvas render a preview of the pricing calculator in server.go",
+		"Skill: deck-generation build a five slide deck on the git migration",
+		"  skill: doc-layout lay out the codebase overview as a one pager",
+		"Skill: code-canvas\n```go\nfunc main() {}\n```",
+	} {
+		if got := agenttask.InferPack(instructions); got != agenttask.PackKnowledgeWork {
+			t.Errorf("InferPack(%q) = %q, want %q", instructions, got, agenttask.PackKnowledgeWork)
+		}
+	}
+
+	// Anchored at the start, because that is where the convention puts it. The
+	// word "skill" in the middle of a sentence decides nothing.
+	const midSentence = "Refactor the skill: prefix parsing in server.go"
+	if got := agenttask.InferPack(midSentence); got != agenttask.PackCoding {
+		t.Errorf("InferPack(%q) = %q, want %q", midSentence, got, agenttask.PackCoding)
+	}
+}
+
+// A term inside a link must not decide the launch. "Summarise this link" is a
+// common knowledge-work shape and a page hosted on GitHub is not a coding
+// request. This also retires the ".sh hostname" false positive for any host
+// reached through a scheme.
+func TestInferPack_IgnoresTermsInsideURLs(t *testing.T) {
+	for _, instructions := range []string{
+		"Summarise this article: https://github.com/blog/state-of-the-octoverse",
+		"Read https://gitlab.example.org/handbook and write a culture memo.",
+		"Write up what http://example.sh/quarterly says about margins.",
+	} {
+		if got := agenttask.InferPack(instructions); got != agenttask.PackKnowledgeWork {
+			t.Errorf("InferPack(%q) = %q, want %q", instructions, got, agenttask.PackKnowledgeWork)
+		}
+	}
+
+	// Only the URL is dropped, never the sentence around it.
+	const withLink = "Refactor the retry helper in server.go, context at https://example.com/docs"
+	if got := agenttask.InferPack(withLink); got != agenttask.PackCoding {
+		t.Errorf("InferPack(%q) = %q, want %q", withLink, got, agenttask.PackCoding)
+	}
+}

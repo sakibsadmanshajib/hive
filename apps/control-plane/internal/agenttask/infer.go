@@ -66,11 +66,13 @@ import (
  * scheduler and every existing client can still name one outright.
  */
 
-// scanLimit bounds how much of the instructions this function reads. It
-// matches the 64 KiB read limit edge-api already puts on this endpoint's
-// body, so on the path a customer can actually reach it truncates nothing;
-// it is here because control-plane's own limit is larger and this is an
-// input-parsing path that feeds a launch decision. Cutting mid-rune is
+// scanLimit bounds how much of the instructions this function reads. Both
+// surfaces in front of it already read 64 KiB and no more: edge-api's
+// handler and control-plane's own http.go each wrap the body in the same
+// io.LimitReader, so this bound truncates nothing on any path today. It is
+// here so the cost of this function stays bounded by its own declaration if
+// either of those limits is ever raised, which is the sort of change nobody
+// would think to check an inference function against. Cutting mid-rune is
 // harmless: every pattern below is ASCII, so a broken tail matches nothing
 // rather than matching wrongly.
 const scanLimit = 64 << 10
@@ -91,9 +93,40 @@ var wordPattern = regexp.MustCompile(`[a-z0-9]+`)
 // knowledge-work requests start ("summarise notes.md", "read proposal.pdf"),
 // so a list that reached into document formats would send the most common
 // knowledge request straight to the coding pack.
+//
+// The single-letter C-family extensions are absent for a sharper reason than
+// that, and their absence is load-bearing rather than an oversight: ".c",
+// ".h" and ".m" turn a clock time into a filename. "the 9 a.m. board
+// meeting" matched "a.m", "the 3 p.m. steering committee" matched "p.m",
+// and "C.H. Robinson" and "Rev.C" matched too, so a meeting summary lost the
+// deck skill. Meeting times are not a rare edge; they are ordinary
+// vocabulary in exactly the requests this default exists to protect. The
+// multi-letter forms (cc, cpp, cxx, hpp, mm) carry the same signal without
+// the collision, and a genuine question about a bare main.c or parser.h
+// almost always carries other coding evidence in the same sentence.
 var sourceFilePattern = regexp.MustCompile(
-	`[a-z0-9_./-]+\.(go|ts|tsx|js|jsx|mjs|cjs|py|rb|rs|java|kt|kts|swift|php|cs|scala|ex|exs|c|cc|cpp|cxx|h|hpp|m|mm|sh|bash|zsh|sql|svelte|vue|css|scss|sass|less|proto|tf|gradle|ipynb)\b`,
+	`[a-z0-9_./-]+\.(go|ts|tsx|js|jsx|mjs|cjs|py|rb|rs|java|kt|kts|swift|php|cs|scala|ex|exs|cc|cpp|cxx|hpp|mm|sh|bash|zsh|sql|svelte|vue|css|scss|sass|less|proto|tf|gradle|ipynb)\b`,
 )
+
+// urlPattern matches a link so it can be dropped before anything else is
+// read. Splitting on non-alphanumerics turns a URL into its component words,
+// which let a term inside a link decide the launch: "summarise this article:
+// https://github.com/blog/..." was a coding request on the strength of the
+// host. "Summarise this link" is a common knowledge-work shape and a page
+// hosted on GitHub is not a coding request.
+//
+// Scheme-carrying links only, which also retires the ".sh hostname" false
+// positive for any host reached through one. A bare hostname typed as prose
+// ("the company behind github.com") still reads as coding, and that is left
+// alone on purpose: at that point "github" is just a word in the sentence,
+// and treating it differently from the same word without a TLD would be a
+// rule nobody could explain to the person it surprised.
+var urlPattern = regexp.MustCompile(`https?://\S+`)
+
+// skillTagPattern matches the documented "Skill: <name>" prefix on this same
+// instructions field (SYNC_CONTRACT.md). See InferPack for why it decides
+// the pack outright.
+var skillTagPattern = regexp.MustCompile(`^\s*skill:`)
 
 // codingTerms are the words and phrases that move a task off the default.
 // Curated rather than generated: each one had to be a term whose presence in
@@ -115,13 +148,27 @@ var sourceFilePattern = regexp.MustCompile(
 // instead, and the way an engineer actually shortens it, "the git repo",
 // needs no entry of its own because "git" already matches it.
 //
+// The build-tool names "cargo", "yarn", "lint" and "maven" are absent for
+// exactly that reason and with more force, because the vertical is this
+// product's first market rather than a future one. Cargo is freight, yarn is
+// thread, "cotton lint" is the standard trade term for ginned cotton and a
+// maven is an expert, so "cotton yarn price trends for the RMG sector" and
+// "cargo insurance claims at Chittagong port" were both coding requests. A
+// ready-made-garment or port brief is a knowledge-work request by
+// definition. The two-word command forms are here instead, which is how an
+// engineer actually types them, and "eslint" and "linter" already carry the
+// unambiguous half of "lint".
+//
 // Known false positive, left in deliberately rather than papered over: a
-// hostname whose TLD is a code extension, ".sh" being the realistic one, is
-// read as a filename. A request naming a shell script is far commoner in this
-// product than one naming such a host, and the correction control exists for
-// the case where it is not.
+// bare hostname whose TLD is a code extension, ".sh" being the realistic
+// one, is read as a filename when it is typed without a scheme. A request
+// naming a shell script is far commoner in this product than one naming such
+// a host, and the correction control exists for the case where it is not.
+// The same host inside a real link is stripped before this runs, see
+// urlPattern.
 var codingTerms = []string{
-	"cargo",
+	"cargo build",
+	"cargo test",
 	"codebase",
 	"compilation",
 	"compile",
@@ -135,10 +182,8 @@ var codingTerms = []string{
 	"gofmt",
 	"gradle",
 	"integration test",
-	"lint",
 	"linter",
 	"makefile",
-	"maven",
 	"merge conflict",
 	"npm",
 	"null pointer",
@@ -164,7 +209,8 @@ var codingTerms = []string{
 	"typecheck",
 	"unit test",
 	"unit tests",
-	"yarn",
+	"yarn build",
+	"yarn install",
 }
 
 // InferPack resolves the pack for a task whose caller named none. It always
@@ -178,11 +224,31 @@ func InferPack(instructions string) Pack {
 	}
 	text = strings.ToLower(text)
 
+	// An instruction that names a skill is a knowledge-work request by
+	// construction, so it is answered before any evidence is read. All three
+	// skills the tag can name ship only in packs/knowledge-work-pack/, and
+	// only that pack's AGENTS.md tells the agent to honour the tag at all, so
+	// a tagged request sent to the coding pack loses the capability the
+	// caller explicitly asked for with no error anywhere. It also fits the
+	// rule the rest of this function follows rather than bending it: evidence
+	// is required to leave the default, and an explicit skill tag is evidence
+	// for staying in it. code-canvas is why the ordering matters in practice,
+	// since rendering a code preview is its whole job and its instructions
+	// therefore carry a filename or a fenced block almost by construction.
+	if skillTagPattern.MatchString(text) {
+		return PackKnowledgeWork
+	}
+
 	// A fenced block is the least ambiguous signal there is: nobody pastes one
 	// into a request to have a memo written.
 	if strings.Contains(text, "```") {
 		return PackCoding
 	}
+
+	// Links go before the two evidence tests below and after the fence test,
+	// which reads the raw text: a URL is not vocabulary, and leaving one in
+	// lets its host and path decide the launch. See urlPattern.
+	text = urlPattern.ReplaceAllString(text, " ")
 
 	if sourceFilePattern.MatchString(text) {
 		return PackCoding
