@@ -38,11 +38,24 @@ ALLOWED = {
 
 SERVICE = re.compile(r"^  ([A-Za-z0-9][A-Za-z0-9_.-]*):\s*$")
 KEY = re.compile(r"^    ([A-Za-z0-9_-]+):")
-ENTRY = re.compile(r'^\s*-\s*"?([^"#]+?)"?\s*$')
+
+
+def clean(text):
+    """Strip a trailing comment and one wrapping layer of quotes."""
+    text = re.sub(r"(^|\s)#.*$", "", text.strip()).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    return text
 
 
 def published(path):
-    """Yield (service, port_entry) for every list item under a `ports:` key."""
+    """Yield (service, port_entry) for every entry under a `ports:` key.
+
+    Anything under `ports:` that this parser cannot reduce to an entry is
+    yielded verbatim so main() fails on it. A parser that silently skipped
+    what it did not understand would let an all-interface binding through
+    while still reporting OK, which is the one way this check can lie.
+    """
     service = None
     in_ports = False
     for line in path.read_text().splitlines():
@@ -50,13 +63,62 @@ def published(path):
         if match:
             service, in_ports = match.group(1), False
             continue
-        if KEY.match(line):
-            in_ports = line.strip().startswith("ports:")
+        key = KEY.match(line)
+        if key:
+            in_ports = key.group(1) == "ports"
+            if in_ports:
+                value = clean(line.split(":", 1)[1])
+                if value.startswith("["):
+                    # Flow style: ports: ["8080:8080", "80:80"]
+                    for item in value.strip("[]").split(","):
+                        if clean(item):
+                            yield service, clean(item)
+                elif value and not value.startswith(("!", "&", "*")):
+                    # Not a tag, anchor or alias, and not a block list either.
+                    # Unknown shape: yield it so it fails rather than vanishes.
+                    yield service, value
             continue
-        if in_ports and line.strip().startswith("- "):
-            entry = ENTRY.match(line)
-            if entry:
-                yield service, entry.group(1)
+        if in_ports and line.lstrip().startswith("- "):
+            yield service, clean(line.lstrip()[2:])
+
+
+# Regression fixtures for the parser itself. Every shape below once slipped
+# through silently (issue #1754 review): the entry was skipped, `checked` never
+# counted it, and the run still printed OK. A check that cannot go red is worse
+# than no check, so each wide binding here must be seen.
+SELFCHECK = [
+    ("block", 'services:\n  api:\n    ports:\n      - "0.0.0.0:8080:8080"\n', True),
+    ("trailing comment", 'services:\n  api:\n    ports:\n      - "0.0.0.0:8080:8080" # public\n', True),
+    ("unquoted comment", "services:\n  api:\n    ports:\n      - 0.0.0.0:8080:8080  # public\n", True),
+    ("single quotes", "services:\n  api:\n    ports:\n      - '0.0.0.0:8080:8080'\n", True),
+    ("flow style", 'services:\n  api:\n    ports: ["0.0.0.0:8080:8080"]\n', True),
+    ("flow mixed", 'services:\n  api:\n    ports: ["127.0.0.1:80:80", "0.0.0.0:8080:8080"]\n', True),
+    ("long form", "services:\n  api:\n    ports:\n      - target: 80\n        published: 8080\n", True),
+    ("loopback", 'services:\n  api:\n    ports:\n      - "127.0.0.1:8080:8080" # fine\n', False),
+    ("loopback v6", 'services:\n  api:\n    ports:\n      - "[::1]:8080:8080"\n', False),
+    ("override tag", 'services:\n  api:\n    ports: !override\n      - "127.0.0.1:8080:8080"\n', False),
+    ("empty flow list", "services:\n  api:\n    ports: []\n", False),
+    ("key line comment", 'services:\n  api:\n    ports:  # published\n      - "127.0.0.1:80:80"\n', False),
+]
+
+
+def selfcheck():
+    import tempfile
+
+    for name, text, expected_wide in SELFCHECK:
+        path = pathlib.Path(tempfile.mkdtemp()) / "docker-compose.yml"
+        path.write_text(text)
+        entries = list(published(path))
+        wide = [
+            entry
+            for _, entry in entries
+            if not entry.startswith("127.0.0.1:") and not entry.startswith("[::1]:")
+        ]
+        assert bool(wide) == expected_wide, (
+            f"{name}: parsed {entries}, wide={wide}, expected wide={expected_wide}"
+        )
+    print(f"OK selfcheck: {len(SELFCHECK)} parser fixtures")
+    return 0
 
 
 def main():
@@ -102,4 +164,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--selfcheck" in sys.argv:
+        sys.exit(selfcheck())
     sys.exit(main())
