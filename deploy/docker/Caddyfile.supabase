@@ -48,6 +48,24 @@
 
 {
 	auto_https disable_redirects
+
+	# Who is allowed to tell this Caddy who the client is.
+	#
+	# Every peer that reaches any listener here is another container on the
+	# compose network (the public listener on 8080 is reached only through
+	# caddy-console, which is itself reached only through the Cloudflare
+	# Tunnel), so the trusted set is the private ranges and nothing else. A
+	# request arriving from a public address cannot exist here, and if one ever
+	# did its forwarded headers would be ignored and {client_ip} would fall back
+	# to the peer address.
+	#
+	# This is what makes {client_ip} usable as the rate-limit bucket key below.
+	# Without it Caddy has no trusted set, treats every peer as untrusted, and
+	# {client_ip} is just the peer address again -- which is the deployment-wide
+	# single bucket issue #1744 was filed for.
+	servers {
+		trusted_proxies static private_ranges
+	}
 }
 
 # The CORS preflight for /auth/v1, answered here instead of being proxied.
@@ -218,20 +236,66 @@
 	# rest of the admin API rather than told it would be welcome. Before the
 	# proxy for the reason the snippet documents.
 	import supabase_auth_cors_preflight
+	# Password recovery is routed on its own so ONE thing about it can differ
+	# from the shared proxy below: what a refusal looks like. Everything else,
+	# upstream and headers included, is deliberately identical.
+	#
+	# GoTrue answers POST /recover with 200 {} whether or not the address holds
+	# an account, which is deliberate account-existence protection. It stops
+	# holding that line the moment a limit engages. The per-address frequency
+	# check (GOTRUE_SMTP_MAX_FREQUENCY, added for issue #1744) is evaluated in
+	# sendPasswordRecovery, which is reached only for an address that HAS a
+	# user row, so its 429 means "this address is real" while an unknown
+	# address goes on answering 200. Two requests then read the account list.
+	#
+	# Rewriting every 429 on this one route back to the endpoint's own 200 {}
+	# closes that, and takes nothing from a caller that the endpoint's contract
+	# ever promised: the contract is already "we tell you nothing".
+	#
+	# ponytail: the price is that a throttled reset is indistinguishable from a
+	# sent one, so a user who asks twice inside the window sees success and
+	# gets no second mail. GoTrue still logs the refusal, so operators are not
+	# blind. If that becomes a support cost, the fix is a cooldown on the reset
+	# form, not an informative status here -- an informative status is the
+	# oracle.
+	@recover path /auth/v1/recover
+	handle @recover {
+		uri strip_prefix /auth/v1
+		reverse_proxy supabase-auth:9999 {
+			header_up X-Forwarded-For {client_ip}
+			header_up -Sb-Forwarded-For
+
+			@throttled status 429
+			handle_response @throttled {
+				header Content-Type application/json
+				respond "{}" 200
+			}
+		}
+	}
 	handle_path /auth/v1/* {
 		reverse_proxy supabase-auth:9999 {
 			# GoTrue keys its rate limits on X-Forwarded-For
 			# (GOTRUE_RATE_LIMIT_HEADER), so what lands here decides whose
-			# bucket a request spends.
+			# bucket a request spends. It reads the LEFTMOST value of that
+			# header (performRateLimitingWithHeader splits on "," and takes
+			# the first field), which is why this replaces the header with a
+			# single value rather than appending to whatever arrived.
 			#
-			# This Caddy already replaces the header rather than appending,
-			# because appending only happens for a peer listed in
-			# trusted_proxies and none is configured. The line is therefore
-			# not what makes the value trustworthy today; it makes it stay
-			# trustworthy. The cutover will want trusted_proxies set, so the
-			# tunnel's client address survives, and that is exactly the
-			# setting that turns appending back on. Leave this here through
-			# that change.
+			# {client_ip} is that single value: with the trusted_proxies set
+			# in the global block above, Caddy walks the incoming
+			# X-Forwarded-For from the right and returns the first hop that
+			# is NOT one of our own proxies. caddy-console put exactly one
+			# value there, the address Cloudflare reported as the client, so
+			# that is what lands here and that is what GoTrue buckets on.
+			#
+			# It is not caller-choosable. A browser's own X-Forwarded-For is
+			# overwritten at the Cloudflare edge before it reaches the
+			# tunnel, and caddy-console replaces the header outright rather
+			# than appending to it, so nothing a caller sends survives to
+			# this point. What an in-network peer sends does survive, since
+			# the whole compose network is inside the trusted set; a
+			# container that can dial this listener directly has better
+			# options than skewing a rate-limit bucket.
 			#
 			# Sb-Forwarded-For is stripped because GoTrue reads it BEFORE
 			# the configured header (performRateLimiting checks
@@ -239,15 +303,7 @@
 			# GOTRUE_SB_FORWARDED_FOR_ENABLED, which defaults false, so it
 			# is inert today and one flag away from handing the bucket key
 			# back to the caller.
-			#
-			# ponytail: {remote_host} is the immediate peer, so behind a
-			# tunnel this is ONE bucket for the whole deployment, not merely
-			# a stricter per-user one: 30 token refreshes an hour shared by
-			# everybody, and one user can lock out the rest. Acceptable
-			# while nothing is tunnelled here; at cutover set
-			# trusted_proxies and rewrite from the tunnel's client-IP header
-			# instead, keeping ENTERPRISE_RATE_LIMIT_HEADER in step.
-			header_up X-Forwarded-For {remote_host}
+			header_up X-Forwarded-For {client_ip}
 			header_up -Sb-Forwarded-For
 		}
 	}

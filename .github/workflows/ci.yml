@@ -972,6 +972,22 @@ jobs:
               validate --config - --adapter caddyfile < "$f"
           done
 
+      # The /auth/v1/recover abuse controls, exercised rather than read (issue
+      # #1744). Every part of that fix is configuration: a Caddy placeholder
+      # for the rate-limit bucket key, a response rewrite, and one GoTrue
+      # variable. A structural check can see that the lines are present and
+      # cannot see whether they work, and the defect they close was itself a
+      # config line that read correctly and gave the whole internet one bucket.
+      #
+      # This boots the real Caddyfiles in front of the digest-pinned GoTrue,
+      # with Postgres and MailHog, and measures delivered mail. It runs here
+      # rather than in `make test-scripts` because it needs Docker, and in this
+      # job rather than a new one because this job is a required check and a
+      # new non-required job's failure is invisible.
+      - if: needs.changes.outputs.run != 'false'
+        name: Recover abuse controls hold at runtime
+        run: scripts/test-recover-abuse-controls.sh
+
       # The Hive authored half of the vendored chat front end. Same reason as
       # the step above: nothing ran these. `test:frontend` in that package is
       # referenced only by an upstream workflow file this repository never

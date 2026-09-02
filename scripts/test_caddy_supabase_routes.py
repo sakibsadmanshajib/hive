@@ -117,8 +117,18 @@ REQUIRED_PUBLIC_AUTH_PATHS = [
 INTERNAL_ONLY_PREFIXES = ["/rest/v1", "/storage/v1"]
 
 # The bucket key GoTrue is told to use, and the value it must carry.
+#
+# {client_ip}, not {remote_host}, since issue #1744. The peer of this listener
+# is always caddy-console, so keying on it gave the whole internet one bucket:
+# thirty requests from one host exhausted the deployment's hourly quota and
+# 429'd every other user's password reset. {client_ip} resolves to the first
+# untrusted hop of X-Forwarded-For, which is the address Cloudflare reported,
+# and it only does that because of TRUSTED_PROXIES below.
 RATE_LIMIT_HEADER = "X-Forwarded-For"
-RATE_LIMIT_VALUE = "{remote_host}"
+RATE_LIMIT_VALUE = "{client_ip}"
+# Without a trusted set Caddy treats every peer as untrusted and {client_ip}
+# collapses back to the peer address, silently restoring the single bucket.
+TRUSTED_PROXIES = "trusted_proxies static private_ranges"
 # Read before the configured header by performRateLimiting, so it has to go.
 STRIPPED_HEADER = "Sb-Forwarded-For"
 
@@ -526,6 +536,57 @@ def check_rate_limit_agreement():
         )
 
 
+def check_trusted_proxies(text):
+    """{client_ip} is only the client's address when Caddy has a trusted set.
+    With none configured every peer is untrusted, {client_ip} is the peer, and
+    the deployment is back to one rate-limit bucket for the whole internet with
+    nothing failing."""
+    if TRUSTED_PROXIES not in text:
+        fail(
+            "the global block no longer sets '" + TRUSTED_PROXIES + "', so {client_ip} "
+            "resolves to the caddy-console peer and every caller shares one GoTrue "
+            "rate-limit bucket again (issue #1744)"
+        )
+
+
+def check_recover_refusal_is_indistinguishable(public):
+    """A 429 on /auth/v1/recover is an account-existence oracle.
+
+    GoTrue answers that route 200 {} for an address it has never seen. Both
+    limits that can refuse it -- the per-IP limiter and the per-address
+    GOTRUE_SMTP_MAX_FREQUENCY check -- answer 429, and the per-address one can
+    only fire for an address that HAS a user row. So an honest status here
+    reads the account list two requests at a time. The route rewrites every 429
+    back to the endpoint's own 200 {}."""
+    if "@recover path /auth/v1/recover" not in public:
+        fail(
+            "the public snippet no longer routes /auth/v1/recover on its own, so a "
+            "rate-limited reset answers 429 while an unknown address answers 200, which "
+            "tells an attacker which addresses hold accounts (issue #1744)"
+        )
+        return
+    if "@throttled status 429" not in public or 'respond "{}" 200' not in public:
+        fail(
+            "the /auth/v1/recover route no longer rewrites 429 to the endpoint's own "
+            "200 {}, so a refusal distinguishes a real address from an unknown one "
+            "(issue #1744)"
+        )
+
+
+def check_per_address_cap():
+    """The four GOTRUE_RATE_LIMIT_* values are keyed on the caller's address, so
+    a botnet multiplies every one of them. GOTRUE_SMTP_MAX_FREQUENCY is keyed on
+    the recipient's user row and is the only cap that survives that."""
+    compose = strip_comments(COMPOSE.read_text())
+    if "GOTRUE_SMTP_MAX_FREQUENCY" not in compose:
+        fail(
+            "GOTRUE_SMTP_MAX_FREQUENCY is gone from the enterprise compose file, so the "
+            "only per-RECIPIENT cap on auth mail falls back to GoTrue's 1m default and "
+            "one address can be mailed 60 times an hour from enough source addresses "
+            "(issue #1744)"
+        )
+
+
 def main():
     text = strip_comments(CADDYFILE.read_text())
     blocks = parse_blocks(text)
@@ -540,6 +601,9 @@ def main():
             fail("the internal snippet no longer routes " + prefix + ", which in-stack callers need")
     check_sites(blocks)
     check_rate_limit_agreement()
+    check_trusted_proxies(text)
+    check_recover_refusal_is_indistinguishable(public)
+    check_per_address_cap()
 
     check_unmatched_host_catch_alls(text)
     if failures:

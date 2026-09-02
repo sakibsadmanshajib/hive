@@ -176,6 +176,36 @@ def check(console_raw: str, supabase_raw: str, compose_raw: str) -> list[str]:
         fail("could not read the auth handle's body out of Caddyfile.console")
         return failures
 
+    # Issue #1744: whose rate-limit bucket a request spends.
+    #
+    # GoTrue keys its limits on X-Forwarded-For. Everything reaching the public
+    # listener arrives from THIS container, so a listener that keyed on its own
+    # peer gave the entire internet one bucket: thirty requests from one host
+    # exhausted the deployment's hourly quota and 429'd every other user's
+    # password reset. This origin is the only place that still knows who the
+    # caller is, so it is the only place that can put the right value there.
+    if not re.search(r"header_up\s+X-Forwarded-For\s+\{client_ip\}", auth_body):
+        fail(
+            "the auth handle no longer forwards X-Forwarded-For as {client_ip}, so GoTrue "
+            "buckets every caller on this container's address and one client can 429 "
+            "password reset for the whole deployment (issue #1744)"
+        )
+    # {client_ip} is only the caller's address when Caddy has a trusted set and
+    # is told which header carries it. With neither, it is the peer address and
+    # the line above is a no-op that reads as a fix.
+    if "trusted_proxies static private_ranges" not in console:
+        fail(
+            "Caddyfile.console no longer declares `trusted_proxies static private_ranges`, "
+            "so every peer is untrusted, {client_ip} collapses to the peer address and the "
+            "per-caller rate-limit bucket silently becomes one global bucket (issue #1744)"
+        )
+    if not re.search(r"client_ip_headers\s+Cf-Connecting-Ip", console):
+        fail(
+            "Caddyfile.console no longer reads Cf-Connecting-Ip for the client address. It "
+            "is the one header Cloudflare overwrites on every request, so it is the only "
+            "value here an internet caller cannot choose (issue #1744)"
+        )
+
     upstream = re.search(r"reverse_proxy\s+(\S+)", auth_body)
     if not upstream:
         fail("the auth handle proxies nothing")
@@ -297,6 +327,21 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
         "console",
         "reverse_proxy caddy-supabase:8080 {",
         "reverse_proxy supabase-auth:9999 {",
+    ),
+    "the client address dropped from the rate-limit header": (
+        "console",
+        "      header_up X-Forwarded-For {client_ip}\n",
+        "",
+    ),
+    "the trusted set dropped, so {client_ip} is the peer again": (
+        "console",
+        "trusted_proxies static private_ranges",
+        "trusted_proxies static 10.0.0.0/8",
+    ),
+    "the Cloudflare client-IP header no longer read": (
+        "console",
+        "client_ip_headers Cf-Connecting-Ip X-Forwarded-For",
+        "client_ip_headers X-Forwarded-For",
     ),
     "the Host rewrite dropped": (
         "console",
