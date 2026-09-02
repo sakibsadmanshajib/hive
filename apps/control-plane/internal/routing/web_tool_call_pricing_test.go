@@ -33,11 +33,20 @@ const webToolPricingMigrationRelPath = "supabase/migrations/20260902_01_web_tool
 // figure is multiplied by 1e6 before it lands in output_price_credits.
 // Integers only, no float64 anywhere near a money figure (repo convention):
 // 0.0001 USD is one ten-thousandth of the peg, and 0.0002 USD is two.
+// Every one of these is a typed CONSTANT expression, evaluated exactly at
+// compile time with arbitrary precision, so no float touches them and an
+// overflow is a compile error rather than a silent wrap. The per-million
+// figures are folded here rather than multiplied inside the loop for exactly
+// that reason: a runtime int64 multiply of two money values is the one shape in
+// this file that could have wrapped without saying so.
 const (
 	creditsPerUSDV2           = int64(1_000_000_000)
 	webSearchCreditsPerCall   = creditsPerUSDV2 / 10_000
 	webFetchCreditsPerCall    = 2 * (creditsPerUSDV2 / 10_000)
 	creditsPerMillionMultiple = int64(1_000_000)
+
+	webSearchCreditsPerMillionCalls = webSearchCreditsPerCall * creditsPerMillionMultiple
+	webFetchCreditsPerMillionCalls  = webFetchCreditsPerCall * creditsPerMillionMultiple
 )
 
 func readWebToolPricingMigration(t *testing.T) string {
@@ -91,11 +100,12 @@ func TestWebToolMigrationPricesBothToolsPerCall(t *testing.T) {
 	}
 
 	cases := []struct {
-		alias         string
-		creditsPerCal int64
+		alias             string
+		creditsPerCall    int64
+		creditsPerMillion int64
 	}{
-		{"hive-web-search", webSearchCreditsPerCall},
-		{"hive-web-fetch", webFetchCreditsPerCall},
+		{"hive-web-search", webSearchCreditsPerCall, webSearchCreditsPerMillionCalls},
+		{"hive-web-fetch", webFetchCreditsPerCall, webFetchCreditsPerMillionCalls},
 	}
 	for _, tc := range cases {
 		tuple := aliasTuple(t, sql, tc.alias)
@@ -109,10 +119,9 @@ func TestWebToolMigrationPricesBothToolsPerCall(t *testing.T) {
 		if got := fields[7]; got != "0" {
 			t.Errorf("%s: input_price_credits = %s, want 0 (model_aliases_single_unit_price)", tc.alias, got)
 		}
-		want := tc.creditsPerCal * creditsPerMillionMultiple
-		if got := fields[8]; got != strconv.FormatInt(want, 10) {
+		if got := fields[8]; got != strconv.FormatInt(tc.creditsPerMillion, 10) {
 			t.Errorf("%s: output_price_credits = %s, want %d (%d credits per call, quoted per million)",
-				tc.alias, got, want, tc.creditsPerCal)
+				tc.alias, got, tc.creditsPerMillion, tc.creditsPerCall)
 		}
 		if got := fields[11]; got != "'calls'" {
 			t.Errorf("%s: price_unit = %s, want 'calls'", tc.alias, got)
