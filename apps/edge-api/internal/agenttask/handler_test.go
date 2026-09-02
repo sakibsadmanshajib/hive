@@ -33,8 +33,8 @@ type fakeClient struct {
 	lastProjectID uuid.UUID
 	// lastAttachments records what handleCreate forwarded (issue #1065).
 	lastAttachments []Attachment
-	eventsFn      func(taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
-	filesFn       func(taskID uuid.UUID) ([]WorkspaceFile, error)
+	eventsFn        func(taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
+	filesFn         func(taskID uuid.UUID) ([]WorkspaceFile, error)
 }
 
 func newFakeClient() *fakeClient {

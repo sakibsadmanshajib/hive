@@ -36,7 +36,7 @@ import (
 // project today (issue #1595 covers the interactive surfaces only), and
 // passing Nil is what "no project attached" means on this call.
 type TaskCreator interface {
-	CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string, projectID uuid.UUID, bearerJWT string) (agenttask.Task, error)
+	CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string, projectID uuid.UUID, attachments []agenttask.Attachment, bearerJWT string) (agenttask.Task, error)
 }
 
 // scheduledPack is the pack every scheduled run launches as in this first
@@ -156,7 +156,7 @@ func (s *Scheduler) RunOnce(ctx context.Context, now time.Time) (fired int) {
 			continue
 		}
 
-		task, err := s.tasks.CreateTask(ctx, sched.TenantID, sched.UserID, scheduledPack, sched.Instructions, uuid.Nil, "")
+		task, err := s.tasks.CreateTask(ctx, sched.TenantID, sched.UserID, scheduledPack, sched.Instructions, uuid.Nil, nil, "")
 		if err != nil {
 			// Provider-blind persistence; the real detail stays in the log.
 			s.logger.WarnContext(ctx, "agentsched: scheduled create failed, backing off one cadence",

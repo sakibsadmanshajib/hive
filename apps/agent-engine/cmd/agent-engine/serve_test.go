@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -192,7 +193,14 @@ func TestWriteJSON(t *testing.T) {
 
 func TestMessageTypesRoundTripJSON(t *testing.T) {
 	t.Run("launchRequest", func(t *testing.T) {
-		want := launchRequest{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(), Pack: "knowledge-work-pack", Instructions: "write a memo", BearerJWT: "secret-jwt"}
+		want := launchRequest{
+			ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+			Pack: "knowledge-work-pack", Instructions: "write a memo", BearerJWT: "secret-jwt",
+			// Issue #1065. The document the person attached has to survive the
+			// hop as its own field: this is the seam where a value that was set
+			// upstream quietly stops existing.
+			Attachments: []launchAttachment{{Name: "inventory.txt", Content: "QAFILE7731"}},
+		}
 		raw, err := json.Marshal(want)
 		if err != nil {
 			t.Fatalf("Marshal: %v", err)
@@ -201,7 +209,8 @@ func TestMessageTypesRoundTripJSON(t *testing.T) {
 		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Fatalf("Unmarshal: %v", err)
 		}
-		if got != want {
+		// reflect.DeepEqual rather than ==: launchRequest carries a slice now.
+		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("round trip mismatch: got %+v, want %+v", got, want)
 		}
 	})
