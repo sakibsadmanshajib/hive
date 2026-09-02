@@ -28,7 +28,13 @@ import (
 //
 //   - credit_ledger_entries: the rescale stamped every row it scaled, so an
 //     unstamped row from BEFORE the boundary is one the scan missed, and an
-//     unstamped row from after it is simply a writer that does not stamp.
+//     unstamped row from after it is simply a writer that does not stamp. The
+//     one hour of container recreate that follows is ambiguous and stays a
+//     candidate, because PostEntry stamps and an unstamped row in that hour
+//     therefore narrows down to an old binary.
+//   - credit_reservation_events: the same rule WITHOUT that window, because
+//     nothing has ever stamped this table, so after the boundary an absent
+//     stamp narrows nothing and every event in the hour would be a hit.
 //   - payment_intents: the rescale scaled every row and stamped NONE of them
 //     (its step 6 has no metadata clause at all), so the older rows are the
 //     correctly scaled ones and a candidate sits in a band around the boundary:
@@ -340,6 +346,14 @@ func TestStragglerDetectorCoversReservationEventsOnTheLedgerRule_Live(t *testing
 
 	missed := insertReservationEvent(t, pool, accountID, -5_000, boundary.Add(-72*time.Hour), nil)
 	insertReservationEvent(t, pool, accountID, -50_000_000, boundary.Add(96*time.Hour), nil)
+
+	// Inside the container recreate window, and still NOT a candidate on this
+	// table. The window narrows a writer down only where some writer stamps,
+	// and nothing has ever stamped credit_reservation_events, so every event in
+	// that hour would be a hit: 56 of them on the live box, all agreeing with
+	// their own reservations' scaled columns. A detector whose hits are known
+	// false positives is this issue.
+	insertReservationEvent(t, pool, accountID, -20_000_000, boundary.Add(30*time.Minute), nil)
 
 	requireCandidates(t, candidates(t, pool, accountID), "credit_reservation_events", missed)
 }

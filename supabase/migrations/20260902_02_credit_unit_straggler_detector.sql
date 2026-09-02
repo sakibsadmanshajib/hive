@@ -31,6 +31,22 @@
 --       so an unstamped nonzero row from BEFORE the boundary is one the scan
 --       missed: a genuine candidate. After the boundary it is an unstamped
 --       writer, not an unscaled row.
+--       The two differ on the recreate window below. The ledger gets it,
+--       because PostEntry stamps and so an unstamped row in that hour narrows
+--       to an old binary. Reservation events do not, because nothing has ever
+--       stamped that table, so after the boundary an absent stamp carries no
+--       information and every event in the hour would be a hit: 56 of them on
+--       the box, all agreeing with their own reservations' scaled columns.
+--       RESIDUAL, stated rather than hidden: an old-binary reservation event
+--       inside that hour is therefore not detectable from metadata. What does
+--       find one is comparing its credits_delta against its reservation's own
+--       reserved_credits, which the rescale scaled; that is a per-row
+--       reconciliation and not something this view can express without
+--       flagging every small settlement. Run once for the 2026-08-24 window
+--       (00:25 to 00:48 UTC, 28 reserved and 28 finalized events): every delta
+--       is a new-unit magnitude matching its reservation, so nothing hid there.
+--       The durable fix is making that writer stamp, which is a change to five
+--       INSERT sites on the reservation path and is tracked separately.
 --     payment_intents
 --       20260823_40 scaled every intent and stamped NONE of them (its step 6
 --       has no metadata clause at all), so on this table the pre-boundary
@@ -112,7 +128,18 @@ SELECT 'credit_reservation_events'::text,
   CROSS JOIN boundary b
  WHERE ev.credits_delta <> 0
    AND NOT (ev.metadata ? 'credit_unit')
-   AND (b.applied_at IS NULL OR ev.created_at <= b.applied_at + interval '1 hour')
+   -- No recreate window on this arm, unlike the ledger's. The window only
+   -- discriminates on a table where SOME writer stamps, because there the
+   -- absence of a stamp after the boundary narrows the writer down to an old
+   -- binary. Nothing has ever stamped credit_reservation_events (accounting/
+   -- repository.go writes it through five INSERTs and none of them stamp), so
+   -- after the boundary the absence of a stamp says nothing at all and every
+   -- event in that hour would be a hit. Measured on the box: 56 of them, all
+   -- agreeing with their own reservations' scaled columns, so all noise. A
+   -- detector whose hits are known false positives is the defect this file
+   -- exists to remove, so this arm stops at the boundary and the residual is
+   -- named in the header rather than drowned.
+   AND (b.applied_at IS NULL OR ev.created_at <= b.applied_at)
 UNION ALL
 SELECT 'payment_intents'::text,
        i.id,
@@ -143,7 +170,7 @@ SELECT 'payment_intents'::text,
             AND i.created_at <= b.applied_at + interval '1 hour'));
 
 COMMENT ON VIEW public.credit_unit_straggler_candidates IS
-    'Rows that MIGHT still be denominated in the pre-rescale credit unit (1 USD = 100,000 credits), for migration 20260823_40. A row appears here only if its own table says it could be old: unstamped and written at or before public.credit_unit_rescale.applied_at (plus one hour of container-recreate window) for credit_ledger_entries and credit_reservation_events, which the rescale stamped as it scaled; unstamped and written within one hour EITHER SIDE of the boundary for payment_intents, which the rescale scaled without stamping any of them, so its older rows are the correctly scaled ones while a row inserted during that transaction was outside its snapshot and never scaled at all. Both arms end at the same instant: an unstamped row written later than that is a writer that does not stamp, on either table. Zero rows is the expected state. THERE IS NO BLANKET REMEDY: a hit is a candidate, not a verdict, and multiplying it by 10,000 without first reconciling that one account against public.credit_ledger_entries is how issue #1704 nearly inflated 221 billion credits of real grants. Reconcile per account, in the shape apps/control-plane/internal/payments/invoices/rescale_repair.go uses: ask the ledger what the figure is worth, refuse to write anything the ledger does not support, and correct one row at a time under a guard pinning the value you read. An empty result from a database with no marker row is impossible by construction: the boundary subquery yields NULL there and every unstamped row becomes a candidate.';
+    'Rows that MIGHT still be denominated in the pre-rescale credit unit (1 USD = 100,000 credits), for migration 20260823_40. A row appears here only if its own table says it could be old: unstamped and written at or before public.credit_unit_rescale.applied_at for credit_ledger_entries (plus one hour of container-recreate window, since PostEntry stamps and an unstamped row in that hour therefore narrows to an old binary) and for credit_reservation_events (no window: nothing has ever stamped that table, so after the boundary an absent stamp carries no information and every event in the hour would be a known false positive); unstamped and written within one hour EITHER SIDE of the boundary for payment_intents, which the rescale scaled without stamping any of them, so its older rows are the correctly scaled ones while a row inserted during that transaction was outside its snapshot and never scaled at all. An unstamped row written after its own arm ends is a writer that does not stamp, on any of the three tables. Zero rows is the expected state. THERE IS NO BLANKET REMEDY: a hit is a candidate, not a verdict, and multiplying it by 10,000 without first reconciling that one account against public.credit_ledger_entries is how issue #1704 nearly inflated 221 billion credits of real grants. Reconcile per account, in the shape apps/control-plane/internal/payments/invoices/rescale_repair.go uses: ask the ledger what the figure is worth, refuse to write anything the ledger does not support, and correct one row at a time under a guard pinning the value you read. An empty result from a database with no marker row is impossible by construction: the boundary subquery yields NULL there and every unstamped row becomes a candidate.';
 
 do $lockdown$
 begin
