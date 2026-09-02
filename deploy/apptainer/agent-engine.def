@@ -7,7 +7,14 @@ From: nikolaik/python-nodejs:python3.14-nodejs24-bookworm
 
 %files
     ../../vendor/openhands /opt/hive/vendor/openhands
-    ../../apps/agent-engine/packs /opt/hive/packs
+# The packs are deliberately NOT baked in. They used to be, at
+# /opt/hive/packs, and nothing in this image ever opened that path: the
+# vendored SDK loads AGENTS.md and .agents/skills from the conversation's own
+# working directory and from nowhere else, so a copy anywhere but there is
+# unread by construction (issue #1360). The launcher copies the pack into the
+# session working directory before launch, and that directory is what gets
+# bind-mounted as /workspace. Baking a second, always-stale copy back in would
+# only recreate the impression that this image carries the pack.
 
 %post
     set -eu
@@ -66,7 +73,19 @@ From: nikolaik/python-nodejs:python3.14-nodejs24-bookworm
     # earlier by openhands-sdk). Re-assert both vendored packages' floors
     # (openhands-sdk: litellm>=1.84.1; openhands-agent-server: openai>=2.33,
     # <3) here so the final resolved environment satisfies both.
-    python3 -m pip install --no-cache-dir "litellm>=1.84.1" "openai>=2.33.0,<3"
+    #
+    # fastmcp is on this line for the same reason and is not optional: it is
+    # openhands-sdk's own dependency (fastmcp>=3.0.0), the --no-deps install
+    # above skipped it, and openhands-agent-server does not depend on it, so
+    # nothing else in this file installs it deliberately. What ends up present
+    # instead is fastmcp-slim, pulled in transitively, and its client support
+    # now lives behind an extra: importing openhands.sdk then dies with
+    # "FastMCP client support is not installed", the agent-server never binds
+    # its port, and every task fails with the control socket never becoming
+    # ready. That is what a fresh rebuild of this image produced on 2026-09-02
+    # (CI job "Capture token deltas from a live sandbox"); the images built
+    # before that predate the split and hid it.
+    python3 -m pip install --no-cache-dir "litellm>=1.84.1" "openai>=2.33.0,<3" "fastmcp>=3.0.0"
 
     # browser-use (from the block above) dropped its own playwright
     # dependency as of the 0.13.x line: it now drives Chromium over CDP via
@@ -100,6 +119,31 @@ From: nikolaik/python-nodejs:python3.14-nodejs24-bookworm
     ln -sfn \
         "$(find /opt/ms-playwright -type f -name chrome -path '*chrome-linux*' | head -n1)" \
         /usr/bin/chromium
+
+    # Every one of openhands-sdk's eighteen runtime dependencies was skipped by
+    # the deliberate --no-deps above, so what is present is whatever the
+    # agent-server install and the plain PyPI block dragged in transitively.
+    # pip check reads installed metadata, so it catches a missing one at BUILD
+    # time instead of leaving it to an ImportError at the first task launch. It
+    # would have caught the fastmcp break on the run that shipped it
+    # (2026-09-02), and it covers the same live exposure on python-frontmatter,
+    # which parses the packs' SKILL.md frontmatter and is likewise present only
+    # transitively.
+    #
+    # Only "is not installed" fails the build, not every line pip check prints.
+    # Two version conflicts here are deliberate and long standing: browser-use
+    # pins mcp==1.26.0 and openai==2.16.0 exactly, while openhands-sdk and
+    # openhands-agent-server need the newer ones the block above re-asserts on
+    # purpose. Those are a decision already taken, and failing on them would
+    # mean deleting this check within the hour. A dependency that is absent
+    # altogether is never a decision.
+    python3 -m pip check > /tmp/pip-check.txt 2>&1 || true
+    cat /tmp/pip-check.txt
+    if grep -q "is not installed" /tmp/pip-check.txt; then
+        echo "FATAL: a dependency of the vendored packages is not installed (see above)" >&2
+        exit 1
+    fi
+    rm -f /tmp/pip-check.txt
 
     mkdir -p /workspace
     chmod 0777 /workspace

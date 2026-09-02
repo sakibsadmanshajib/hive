@@ -277,6 +277,49 @@ func newTestEngine(t *testing.T, captured **fakeAgentServer) *SandboxEngine {
 	return newTestEngineWithQuota(t, captured, 4, 2)
 }
 
+// Pack fixture bodies. Deliberately not the real pack text: an assertion that
+// matched the shipped AGENTS.md would also pass if Launch copied some other
+// pack, and these strings are unique enough that finding them inside the
+// agent's working directory can only mean this pack got there.
+const (
+	packFixtureAgentsMD = "# Fixture pack\n\nfixture-pack-agents-md-body\n"
+	packFixtureSkillMD  = "---\nname: fixture-skill\ndescription: Fixture skill.\n---\n\nfixture-pack-skill-body\n"
+)
+
+// seededPacksDir is a stand-in for a real deployment's
+// HIVE_AGENT_ENGINE_PACKS_DIR, which holds every pack. An empty directory
+// would exercise a launch no deployment performs (and, since #1360, one that
+// fails closed).
+func seededPacksDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, pack := range []string{"coding-pack", packKnowledgeWork} {
+		seedPack(t, dir, pack)
+	}
+	return dir
+}
+
+// seedPack writes one pack into packsDir in the layout the vendored OpenHands
+// SDK loads from a conversation's working directory: AGENTS.md at the root
+// (Skill.PATH_TO_THIRD_PARTY_SKILL_NAME) and .agents/skills/<name>/SKILL.md
+// (USER/project skills dirs in openhands/sdk/skills/skill.py).
+func seedPack(t *testing.T, packsDir, pack string) {
+	t.Helper()
+	skillDir := filepath.Join(packsDir, pack, ".agents", "skills", "fixture-skill")
+	if err := os.MkdirAll(skillDir, 0o700); err != nil {
+		t.Fatalf("seed pack %s: %v", pack, err)
+	}
+	writes := map[string]string{
+		filepath.Join(packsDir, pack, "AGENTS.md"): packFixtureAgentsMD,
+		filepath.Join(skillDir, "SKILL.md"):        packFixtureSkillMD,
+	}
+	for path, body := range writes {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("seed pack %s: %v", pack, err)
+		}
+	}
+}
+
 func newTestEngineWithQuota(t *testing.T, captured **fakeAgentServer, tenantConcurrency, userConcurrency int) *SandboxEngine {
 	t.Helper()
 	cfg := Config{
@@ -284,7 +327,7 @@ func newTestEngineWithQuota(t *testing.T, captured **fakeAgentServer, tenantConc
 		QuotaUserConcurrency:   userConcurrency,
 
 		SIFPath:       "/fake/agent-server.sif",
-		PacksDir:      t.TempDir(),
+		PacksDir:      seededPacksDir(t),
 		WorkspaceRoot: t.TempDir(),
 		RunDir:        shortTempDir(t),
 		ResolveEgressHosts: func(ctx context.Context, tenantID, userID uuid.UUID) ([]string, error) {
@@ -945,25 +988,47 @@ func TestSandboxEngine_Launch_SendsConfiguredSystemMessageSuffix(t *testing.T) {
 	}
 }
 
-// The default, and the one that protects every task launched today. The
-// sandbox's OpenHandsAgentSettings.agent_context has default_factory=AgentContext
-// (vendor/openhands/openhands-sdk/openhands/sdk/settings/model.py), so an
-// omitted key reproduces exactly the agent Hive launches now. Sending an
-// explicit empty context instead would start shaping every launch on the
-// strength of a variable nobody set, and a system prompt reaches every user of
-// the surface.
-func TestSandboxEngine_Launch_OmitsAgentContextWhenNoSuffixConfigured(t *testing.T) {
-	var fake *fakeAgentServer
-	e := newTestEngine(t, &fake)
-	e.cfg.LLMModel = "openai/hive-test-model"
+// Issue #1360, second half. Putting the pack in the working directory is not
+// enough on its own: AgentContext.load_project_skills defaults to False
+// (vendor/openhands/openhands-sdk/openhands/sdk/context/agent_context.py), and
+// it is the only thing that makes LocalConversation read the workspace for
+// AGENTS.md and .agents/skills at all
+// (conversation/impl/local_conversation.py). Hive used to send agent_context
+// only when a system-message suffix was configured, so on the arm that runs
+// every real task the flag was False on every launch.
+//
+// Asserted on the raw launch body rather than on the Go struct, because the
+// JSON name is what the sandbox reads, and asserted for both suffix states,
+// because the suffix is unset on every deployment today.
+func TestSandboxEngine_Launch_EnablesProjectSkillLoading(t *testing.T) {
+	for _, suffix := range []string{"", "Always cite the file you changed."} {
+		name := "no suffix configured"
+		if suffix != "" {
+			name = "suffix configured"
+		}
+		t.Run(name, func(t *testing.T) {
+			var fake *fakeAgentServer
+			e := newTestEngine(t, &fake)
+			e.cfg.LLMModel = "openai/hive-test-model"
+			e.cfg.SystemMessageSuffix = suffix
 
-	if _, err := e.Launch(context.Background(), testTask()); err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
+			if _, err := e.Launch(context.Background(), testTask()); err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
 
-	if ctxFields := fake.launchAgentContext(t); ctxFields != nil {
-		t.Fatalf("expected no agent_context when none is configured, got fields %v",
-			slices.Sorted(maps.Keys(ctxFields)))
+			ctxFields := fake.launchAgentContext(t)
+			if ctxFields == nil {
+				t.Fatal("launch body carried no agent_settings.agent_context at all")
+			}
+			var enabled bool
+			if err := json.Unmarshal(ctxFields["load_project_skills"], &enabled); err != nil {
+				t.Fatalf(`agent_context has no "load_project_skills" on the wire; fields sent: %v`,
+					slices.Sorted(maps.Keys(ctxFields)))
+			}
+			if !enabled {
+				t.Fatal("load_project_skills = false; the pack in the workspace is never read")
+			}
+		})
 	}
 }
 
@@ -982,6 +1047,182 @@ func TestSandboxEngine_Launch_SendsProfileIDWhenNoLLMConfigured(t *testing.T) {
 	}
 	if req.AgentProfileID == nil || *req.AgentProfileID != e.cfg.AgentProfileID {
 		t.Fatalf("agent_profile_id = %v, want %v", req.AgentProfileID, e.cfg.AgentProfileID)
+	}
+}
+
+// --- pack materialization (issue #1360) -----------------------------------
+
+// The pack was bind-mounted read-only at /opt/hive/pack and baked into the SIF
+// at /opt/hive/packs, and the vendored OpenHands SDK reads neither: it loads
+// AGENTS.md and .agents/skills/ from the conversation's own working directory
+// (openhands/sdk/skills/skill.py load_project_skills). Launch handed it a
+// freshly created empty directory, so every real task ran with no pack context
+// and none of the pack's skills.
+//
+// Asserting the pack exists on disk under PacksDir would prove nothing: it
+// always did, and that is why the defect survived. This reads the bodies back
+// out of the directory this launch bind-mounts as /workspace, at the exact
+// paths the SDK loader walks.
+func TestSandboxEngine_Launch_MaterializesPackIntoTheAgentWorkingDir(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	task := testTask()
+
+	if _, err := e.Launch(context.Background(), task); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	workingDir := filepath.Join(e.cfg.WorkspaceRoot, task.ID.String())
+	for rel, want := range map[string]string{
+		"AGENTS.md": packFixtureAgentsMD,
+		filepath.Join(".agents", "skills", "fixture-skill", "SKILL.md"): packFixtureSkillMD,
+	} {
+		got, err := os.ReadFile(filepath.Join(workingDir, rel))
+		if err != nil {
+			t.Fatalf("pack file %s never reached the agent working directory: %v", rel, err)
+		}
+		if string(got) != want {
+			t.Fatalf("pack file %s = %q, want %q", rel, got, want)
+		}
+	}
+}
+
+// Fail closed, loudly. A packs directory that does not hold the requested pack
+// is a misconfigured deployment, and the outcome it used to produce was a task
+// that ran anyway with an empty context and looked like a bad model.
+func TestSandboxEngine_Launch_FailsWhenThePackIsMissing(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	task := testTask()
+	task.Pack = "no-such-pack"
+
+	if _, err := e.Launch(context.Background(), task); err == nil {
+		t.Fatal("expected Launch to fail with no pack directory to copy")
+	}
+
+	if _, err := os.Stat(filepath.Join(e.cfg.WorkspaceRoot, task.ID.String())); !os.IsNotExist(err) {
+		t.Fatalf("failed launch left its working directory behind: %v", err)
+	}
+}
+
+// Task.Pack names a directory under PacksDir, and it arrives over the launcher
+// socket from control-plane. Control-plane validates it (agenttask.ErrInvalidPack),
+// but this process is the one that turns it into a path, so it validates it too.
+func TestSandboxEngine_Launch_RejectsPackNamesThatAreNotPackNames(t *testing.T) {
+	for _, pack := range []string{"../coding-pack", "..", ".", "nested/coding-pack"} {
+		t.Run(pack, func(t *testing.T) {
+			var fake *fakeAgentServer
+			e := newTestEngine(t, &fake)
+			task := testTask()
+			task.Pack = pack
+
+			if _, err := e.Launch(context.Background(), task); err == nil {
+				t.Fatalf("Launch accepted pack name %q", pack)
+			}
+		})
+	}
+}
+
+// The name check above is string handling and cannot see a symlink. This is
+// the second layer: the copy resolves through os.Root, so a pack directory
+// that is a link out of PacksDir fails to open at all rather than copying
+// whatever it points at into a directory the agent can read.
+func TestSandboxEngine_Launch_RefusesAPackSymlinkedOutOfThePacksDir(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "AGENTS.md"), []byte("not the pack"), 0o600); err != nil {
+		t.Fatalf("seed outside dir: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(e.cfg.PacksDir, "escaping-pack")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	task := testTask()
+	task.Pack = "escaping-pack"
+	if _, err := e.Launch(context.Background(), task); err == nil {
+		t.Fatal("Launch followed a pack symlink out of the packs directory")
+	}
+}
+
+// os.CopyFS recreates a symlink verbatim, and the pack is read through an
+// fs.FS whose ReadLink hands back the raw target, so os.Root does nothing
+// about a link INSIDE a pack: it confines the read, never the write. Refusing
+// the copy is what keeps the link out of the directory that gets bind mounted
+// as /workspace.
+func TestSandboxEngine_Launch_RefusesAPackWhoseContentsContainASymlink(t *testing.T) {
+	for _, at := range []string{"leak", filepath.Join(".agents", "leak")} {
+		t.Run(at, func(t *testing.T) {
+			var fake *fakeAgentServer
+			e := newTestEngine(t, &fake)
+			task := testTask()
+
+			link := filepath.Join(e.cfg.PacksDir, task.Pack, at)
+			if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.Symlink("/etc/passwd", link); err != nil {
+				t.Fatalf("symlink: %v", err)
+			}
+
+			if _, err := e.Launch(context.Background(), task); err == nil {
+				t.Fatalf("Launch copied a pack containing a symlink at %s", at)
+			}
+			if _, err := os.Stat(filepath.Join(e.cfg.WorkspaceRoot, task.ID.String())); !os.IsNotExist(err) {
+				t.Fatalf("refused launch left its working directory behind: %v", err)
+			}
+		})
+	}
+}
+
+// The listing hides pack scaffolding, and a name-only filter would hand the
+// sandboxed agent a way to hide its own output: write to AGENTS.md and the
+// panel never shows it. The pack now carries untrusted document content into
+// the model's context, so this is reachable rather than theoretical. The
+// rewrite here also restores the original mtime, which is what a shell makes
+// trivial and what a timestamp based filter would fall for.
+func TestSandboxEngine_Files_ShowsAPlantedNameTheTaskRewrote(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	task := testTask()
+
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	files, err := e.Files(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Files: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("expected the untouched pack to be hidden, got %+v", files)
+	}
+
+	// What an agent following an injected "write your notes to AGENTS.md"
+	// instruction would leave behind, and then the timestamp forgery a shell
+	// makes trivial: read the planted mtime first, overwrite the file, put the
+	// old mtime back. The listing must still show it, which is why the pack is
+	// identified by content and not by when it was planted.
+	planted := filepath.Join(e.cfg.WorkspaceRoot, task.ID.String(), "AGENTS.md")
+	before, err := os.Stat(planted)
+	if err != nil {
+		t.Fatalf("stat planted file: %v", err)
+	}
+	if err := os.WriteFile(planted, []byte("exfiltrated"), 0o600); err != nil {
+		t.Fatalf("rewrite planted file: %v", err)
+	}
+	if err := os.Chtimes(planted, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	files, err = e.Files(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Files after rewrite: %v", err)
+	}
+	if len(files) != 1 || files[0].Name != "AGENTS.md" {
+		t.Fatalf("a rewritten AGENTS.md stayed hidden from the panel, got %+v", files)
 	}
 }
 
@@ -1045,7 +1286,7 @@ func newTestEngineWithPublisher(t *testing.T, captured **fakeAgentServer, publis
 		QuotaUserConcurrency:   2,
 
 		SIFPath:       "/fake/agent-server.sif",
-		PacksDir:      t.TempDir(),
+		PacksDir:      seededPacksDir(t),
 		WorkspaceRoot: workspaceRoot,
 		RunDir:        shortTempDir(t),
 		ResolveEgressHosts: func(ctx context.Context, tenantID, userID uuid.UUID) ([]string, error) {

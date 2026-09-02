@@ -1,3 +1,8 @@
+---
+name: doc-layout
+description: Read, summarize, or extract fields from a scanned contract, PDF, or photographed form through the doc-layout vision route.
+---
+
 # Doc-layout skill
 
 Contract and PDF page understanding via a serverless vision route. No new
@@ -27,7 +32,18 @@ not need this skill.
    `docvlm_test.go` for a worked example); replicate it byte-for-byte when
    constructing the request by hand (curl/python) inside the sandbox.
 3. POST that request to Hive's OpenAI-compatible chat completions endpoint
-   with `response_format: {"type": "json_object"}`.
+   with `response_format: {"type": "json_object"}`. That call needs a gateway
+   base URL and a credential, and this sandbox is given neither: the model
+   credential reaches the agent runtime over the control channel, not the
+   shell, and all egress is bound to the tenant's allowlist. So today this
+   step is not available. Do not go looking through the environment for a
+   credential to use here, do not use any environment variable as one, and
+   never repeat a credential in your reply or write one into a file. Say the
+   vision route is unavailable and fall back to the ordinary text tools
+   (`pdftotext`, `pdftoppm` plus whatever the document already exposes as
+   text). When a gateway URL and key are genuinely wired into this sandbox
+   they will be named here explicitly, and only those two are ever to be
+   used.
 4. The model returns a single JSON object:
    `{"pages":[{"page":0,"elements":[{"type":"heading|paragraph|table|figure|signature_block|page_number","text":"..."}]}]}`.
    Parse it and relay the structured result (or a summary built from it) to
@@ -40,7 +56,7 @@ No new task-lifecycle field is introduced by this skill. The panel starts a
 knowledge-work-pack task the same way as any other; to hint this specific
 skill, prefix the task's instructions with a `Skill: doc-layout` line (the
 pack's top-level AGENTS.md tells the agent to check for a `Skill:` tag and
-load the matching `skills/<name>/AGENTS.md` before improvising). Absent that
+load the matching `.agents/skills/<name>/SKILL.md` before improvising). Absent that
 tag, the agent still recognizes doc-understanding tasks from their content
 per "When to use" above.
 
@@ -48,8 +64,8 @@ per "When to use" above.
 
 A parsed-document result: the structured JSON from step 4, plus whatever
 prose summary or extracted-field answer the user's instructions asked for.
-This skill does not publish an artifact; see `deck-generation` and
-`code-canvas` for the artifact-publishing skills.
+This skill does not publish an artifact; `deck-generation` is the one skill
+that does.
 
 ## Live wiring (env-gated, Wave 3 integration)
 

@@ -33,10 +33,13 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -242,8 +245,8 @@ const (
 	// bound (how many files, how large) implicit in whatever the task
 	// happened to leave behind. A single well-known path is a hard, visible
 	// rule instead: nothing here is "the deck" unless the deck-generation
-	// skill (apps/agent-engine/packs/knowledge-work-pack/skills/deck-
-	// generation/AGENTS.md) wrote exactly this file.
+	// skill (apps/agent-engine/packs/knowledge-work-pack/.agents/skills/
+	// deck-generation/SKILL.md) wrote exactly this file.
 	deckManifestRelPath = ".hive/deck.json"
 
 	// maxDeckManifestBytes bounds the manifest read below. This is a JSON
@@ -344,6 +347,12 @@ type session struct {
 	pack      string
 	bearerJWT string
 
+	// packFiles are the top-level entries materializePack planted in
+	// workingDir at launch, identified by content. The workspace listing
+	// hides an entry that still matches: pack scaffolding is not output of
+	// this task, but an entry the task rewrote is.
+	packFiles map[string]packEntry
+
 	// finishMu serializes finishTerminal for this one session: two Status
 	// calls can each independently observe the same terminal execution
 	// status from the agent-server (asking does not change it), and without
@@ -408,6 +417,143 @@ func New(cfg Config) *SandboxEngine {
 	}
 }
 
+// materializePack copies the named pack out of packsDir into workingDir and
+// returns the top-level entries it planted there, each identified by content
+// rather than by name. The workspace listing (events.go) filters those back
+// out so the panel's working folder shows what the task produced rather than
+// the scaffolding it started with, and it re-derives the identity when it
+// lists, so an entry the task rewrote reappears instead of staying hidden
+// under a name the pack happened to use. Content rather than a timestamp
+// because the sandboxed agent has a shell: it can restore an mtime, and it
+// cannot restore a digest while also smuggling anything into the file.
+//
+// Two different confinements, because they cover two different things and
+// conflating them is how the next reader builds something unsafe on top:
+//
+//   - os.Root confines the READ to packsDir. pack arrives from control-plane,
+//     so that holds against a name climbing out (Launch rejects those too) and
+//     against the pack directory itself being a symlink elsewhere.
+//   - the walk below is what keeps a symlink out of the WRITE. os.CopyFS
+//     recreates a symlink verbatim (os/dir.go, ModeSymlink case), and
+//     Root.FS()'s ReadLink returns the raw target unresolved, so a link inside
+//     a pack would land in the workspace with an absolute target intact.
+//     os.Root does nothing about that: it never sees the destination.
+//
+// Refusing is right rather than merely safe here. No shipped pack contains a
+// symlink, packs are repo authored, and a pack that grows one is either a
+// mistake or something that wants reviewing, not copying.
+func materializePack(packsDir, pack, workingDir string) (map[string]packEntry, error) {
+	root, err := os.OpenRoot(packsDir)
+	if err != nil {
+		return nil, fmt.Errorf("engine: open packs directory %s: %w", packsDir, err)
+	}
+	defer func() { _ = root.Close() }()
+
+	packFS, err := fs.Sub(root.FS(), pack)
+	if err != nil {
+		return nil, fmt.Errorf("engine: locate pack %s: %w", pack, err)
+	}
+	entries, err := fs.ReadDir(packFS, ".")
+	if err != nil {
+		return nil, fmt.Errorf("engine: read pack %s under %s: %w", pack, packsDir, err)
+	}
+	if err := fs.WalkDir(packFS, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("engine: pack %s contains a symlink at %s, refusing to copy it into the workspace", pack, p)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := os.CopyFS(workingDir, packFS); err != nil {
+		return nil, fmt.Errorf("engine: copy pack %s into the agent working directory: %w", pack, err)
+	}
+
+	// Read back through a second os.Root, on the workspace this time. A
+	// directory entry name cannot contain a separator, so a plain join would
+	// be safe in fact, but this stays symmetrical with the read above and
+	// keeps the guarantee in the mechanism rather than in a reader's
+	// reasoning about what fs.ReadDir can return.
+	workRoot, err := os.OpenRoot(workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("engine: open agent working directory %s: %w", workingDir, err)
+	}
+	defer func() { _ = workRoot.Close() }()
+
+	planted := make(map[string]packEntry, len(entries))
+	for _, entry := range entries {
+		p, err := describePlanted(workRoot, entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("engine: read back planted pack entry %s: %w", entry.Name(), err)
+		}
+		planted[entry.Name()] = p
+	}
+	return planted, nil
+}
+
+// packEntry identifies one top-level entry the pack planted in the workspace,
+// closely enough that the listing can tell the pack's own file apart from one
+// the task rewrote under the same name. A directory carries no digest: this
+// listing is top level only, so a planted directory's contents were never
+// listed and hiding the entry conceals nothing that was ever visible.
+type packEntry struct {
+	isDir  bool
+	size   int64
+	digest string
+}
+
+// describePlanted reads one just-planted entry back out of the workspace.
+func describePlanted(root *os.Root, name string) (packEntry, error) {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return packEntry{}, err
+	}
+	if info.IsDir() {
+		return packEntry{isDir: true}, nil
+	}
+	digest, err := digestIn(root, name)
+	if err != nil {
+		return packEntry{}, err
+	}
+	return packEntry{size: info.Size(), digest: digest}, nil
+}
+
+// digestIn hashes one file inside root. Confined to root for the same reason
+// every other access on this path is.
+func digestIn(root *os.Root, name string) (string, error) {
+	f, err := root.Open(name)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// matchesPlanted reports whether the entry now at name inside root is still
+// byte for byte what materializePack planted. The size check comes first so a
+// task that replaced a small pack file with a large one is answered without
+// hashing it.
+func matchesPlanted(root *os.Root, name string, info os.FileInfo, p packEntry) bool {
+	if info.IsDir() != p.isDir {
+		return false
+	}
+	if p.isDir {
+		return true
+	}
+	if info.Size() != p.size {
+		return false
+	}
+	digest, err := digestIn(root, name)
+	return err == nil && digest == p.digest
+}
+
 // freePort asks the OS for an ephemeral TCP port and immediately releases
 // it, for use as the agent-server's --port. Racy in theory (another process
 // could grab it first) but standard practice for this and acceptable here:
@@ -430,6 +576,13 @@ func freePort() (int, error) {
 func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, err error) {
 	if t.Pack == "" {
 		return "", fmt.Errorf("engine: Task.Pack is required")
+	}
+	// Task.Pack names a directory under Config.PacksDir and arrives from
+	// control-plane over the launcher socket. Control-plane validates it
+	// (agenttask.ErrInvalidPack), but this process is the one that turns it
+	// into a path, so it refuses anything that is not a single path element.
+	if t.Pack != filepath.Base(t.Pack) || t.Pack == "." || t.Pack == ".." {
+		return "", fmt.Errorf("engine: Task.Pack %q is not a pack name", t.Pack)
 	}
 
 	release, err := e.q.Acquire(t.TenantID, t.UserID)
@@ -487,6 +640,27 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", fmt.Errorf("engine: create session directory %s: %w", dir, err)
 		}
+	}
+
+	// Issue #1360: the pack has to be IN the working directory, because that
+	// is the only place the sandboxed agent looks for it. The vendored
+	// OpenHands SDK loads AGENTS.md and .agents/skills/ from the
+	// conversation's own working directory
+	// (vendor/openhands/openhands-sdk/openhands/sdk/skills/skill.py,
+	// load_project_skills), and reads neither the read-only bind at
+	// /opt/hive/pack nor the copy baked into the SIF at /opt/hive/packs. So
+	// for as long as this directory was created empty and left that way,
+	// every task ran with no pack instructions and no pack skills, and the
+	// two mounts made the wiring look complete.
+	//
+	// Copied rather than bind-mounted at the paths the loader reads: the
+	// mount points would have to exist inside the workspace first anyway,
+	// the workspace is per-task and thrown away with the session, and a copy
+	// is testable on any host, while a bind is only observable on a box with
+	// Apptainer. The read-only bind stays as the pristine reference copy.
+	packFiles, err := materializePack(e.cfg.PacksDir, t.Pack, workingDir)
+	if err != nil {
+		return "", err
 	}
 
 	egressSocketPath := filepath.Join(sessionDir, "e.sock")
@@ -571,14 +745,17 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 				Stream: true,
 			},
 		}
-		if e.cfg.SystemMessageSuffix != "" {
-			// Only when configured. An explicit empty context would be sent
-			// on every launch and would displace the SDK's own
-			// default_factory=AgentContext, changing the agent on the
-			// strength of a variable nobody set.
-			settings.AgentContext = &controlclient.AgentContext{
-				SystemMessageSuffix: e.cfg.SystemMessageSuffix,
-			}
+		// Always sent, for LoadProjectSkills alone (issue #1360). The SDK's
+		// own default_factory=AgentContext leaves load_project_skills False,
+		// and that flag is the only thing that makes LocalConversation read
+		// the workspace for AGENTS.md and .agents/skills at all
+		// (conversation/impl/local_conversation.py), so without it the pack
+		// copied into the working directory above is never opened. The
+		// suffix keeps its old behaviour: unset stays absent from the JSON,
+		// so an unconfigured deployment still gets the preset prompt.
+		settings.AgentContext = &controlclient.AgentContext{
+			SystemMessageSuffix: e.cfg.SystemMessageSuffix,
+			LoadProjectSkills:   true,
 		}
 		if e.cfg.BrowserTools {
 			// An explicit Tools list replaces the default set wholesale
@@ -620,6 +797,7 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		workingDir:     workingDir,
 		release:        release,
 		pack:           t.Pack,
+		packFiles:      packFiles,
 		bearerJWT:      t.BearerJWT,
 	}
 	e.mu.Lock()
@@ -921,7 +1099,7 @@ func (e *SandboxEngine) reap(ctx context.Context, sess *session, outcome *termin
 	if err != nil {
 		log.Printf("engine: reap: capture final events for %s: %v", sess.conversationID, err)
 	}
-	files, err := listWorkspaceFiles(sess.workingDir)
+	files, err := listWorkspaceFiles(sess.workingDir, sess.packFiles)
 	if err != nil {
 		log.Printf("engine: reap: capture final files for %s: %v", sess.conversationID, err)
 	}

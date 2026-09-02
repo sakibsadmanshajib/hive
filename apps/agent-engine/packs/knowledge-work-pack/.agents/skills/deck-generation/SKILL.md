@@ -1,3 +1,8 @@
+---
+name: deck-generation
+description: Outline a slide deck or presentation from the task content and publish it as an artifact.
+---
+
 # Deck-generation skill
 
 Template-driven slide deck generation. No LLM call of its own beyond the
@@ -54,7 +59,7 @@ Instead:
 
 No new task-lifecycle field is introduced by this skill. Prefix the task's
 instructions with `Skill: deck-generation` to hint it explicitly (see
-`skills/doc-layout/AGENTS.md` for the same `Skill:` tag convention); absent
+`.agents/skills/doc-layout/SKILL.md` for the same `Skill:` tag convention); absent
 the tag, the agent recognizes deck-request tasks from their content. The
 panel should render the returned artifact URL in a sandboxed iframe
 (`sandbox="allow-scripts"`, no `allow-same-origin` — see

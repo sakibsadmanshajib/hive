@@ -137,6 +137,18 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 			return fmt.Errorf("agent-engine: create %s: %w", dir, err)
 		}
 	}
+	// The packs directory is the one path here that must already exist:
+	// creating it would only produce an empty directory holding no pack. Since
+	// issue #1360 a launch fails closed when it cannot read its pack, so a
+	// typo, a moved checkout, or a unit whose REPO_DIR drifted would otherwise
+	// leave a launcher that boots healthy and fails every task. Refusing to
+	// start is the honest signal for a process that cannot serve one.
+	// os.ReadDir rather than os.Stat: a stat is satisfied by a regular file
+	// and says nothing about whether the directory can be read, and both of
+	// those launch exactly the same way, which is not at all.
+	if _, err := os.ReadDir(packsDir); err != nil {
+		return fmt.Errorf("agent-engine: HIVE_AGENT_ENGINE_PACKS_DIR %s is not a readable directory, every task would fail closed: %w", packsDir, err)
+	}
 
 	llmAPIKey := os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY")
 	llmBaseURL := os.Getenv("HIVE_AGENT_ENGINE_LLM_BASE_URL")
