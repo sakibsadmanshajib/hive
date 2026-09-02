@@ -41,13 +41,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    # Argument first, so the command in the README beside this file reads the
-    # way its sibling in voice-listen-stop-1627 does, then PORT, then a
-    # default. The bare sys.argv[1] this replaced answered a missing argument
-    # with an IndexError.
-    port = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PORT", "8000")
+    # Environment only, per the repository's configuration rule, and validated
+    # at startup. A positional argument was a second configuration channel for
+    # the one value this file takes, and it answered a missing argument with an
+    # IndexError.
+    raw = os.environ.get("PORT", "8000")
     try:
-        port = int(port)
+        port = int(raw)
     except ValueError:
-        raise SystemExit(f"stub: port must be a number, got {port!r}")
+        raise SystemExit(f"stub: PORT must be a number, got {raw!r}")
     HTTPServer(("0.0.0.0", port), Handler).serve_forever()

@@ -16,7 +16,14 @@ renders them showed one at a time.
 | --- | --- | --- | --- |
 | `origin/main` build, `origin/main` wire | 0 of 11 samples | 0 | none, just the summary |
 | `origin/main` build, this branch's wire | 5 of 11 samples | 1 | 1 |
-| This branch, both | 5 of 11 samples | 3 | 3 |
+| This branch, both | 4 of 11 samples | 4 | 3 |
+
+The last row's peak is four and its ending is three because the run's closing
+message arrives twice, once as a `message` event and once as the task's own
+summary, and `dropSummaryEcho` removes the duplicate when the run settles
+(#1509). The two tool steps also collapse into their results as those arrive,
+which is `foldRunSteps` closing each `tool_call` in place rather than adding a
+line for its result.
 
 `capture-*.log` are the runs, with a per sample line naming what the transcript
 showed and, at the end, every agent API call the front end made with its
@@ -29,6 +36,15 @@ single assistant message carrying the summary and no step lines.
 The third row is the fix: two tool steps and the workspace file rendered as a
 chain, appearing one at a time as the run produced them, with the newest
 shimmering while its tool call is open.
+
+`timeline-*.json` carries two clocks per sample. `at` is measured with
+`performance.now()` from the capture's start, because this runs on WSL2, whose
+wall clock is periodically resynchronised against the Windows host and steps
+backwards by a few hundred milliseconds when it is. An earlier version of these
+artifacts stamped the samples with `Date.now()` and had one or two of them out
+of order in consequence, at a different point each run. `since_submit` is the
+same monotonic clock measured from the moment the composer's submission landed,
+and is null for the samples taken before it did.
 
 ## What was real and what was scripted
 
@@ -71,9 +87,9 @@ workflow exercises on this pull request.
 ```bash
 docker build -f deploy/docker/Dockerfile.open-webui -t hive-owui:proof-1622 .
 docker network create proof1622
-docker run -d --name proof1622-stub --network proof1622 \
+docker run -d --name proof1622-stub --network proof1622 -e PORT=8000 \
   -v "$PWD/docs/proof/cowork-step-streaming-1622:/work" \
-  -w /work python:3.12-alpine python stub.py 8000
+  -w /work python:3.12-alpine python stub.py
 # Both of these are generated rather than written down. Neither authenticates
 # anything (the upstream is the stub beside this file, which ignores the key),
 # but a literal in a documented command reads like a credential and this

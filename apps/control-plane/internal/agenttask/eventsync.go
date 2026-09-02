@@ -321,22 +321,32 @@ func pullSessionEvents(ctx context.Context, src EventSource, logger *slog.Logger
 	ctx, done := context.WithTimeout(ctx, eventPullTimeout)
 	defer done()
 
+	// The two reads are independent, and a failure of one does not make the
+	// other's answer worthless: they hit different surfaces (the sandbox's
+	// control socket, and a host directory the launcher lists), so an event
+	// read that fails while the workspace listing succeeds is a reachable
+	// state. This used to return here, which meant that state dropped every
+	// file the run had produced, and on the flush path a terminal status could
+	// then be published with none of them recorded (raised in review on
+	// PR #1709). The offset is left where it was, so the events this pass
+	// could not read are read again next time rather than skipped.
 	sandboxEvents, err := src.Events(ctx, t.EngineSessionRef)
 	if err != nil {
 		logger.WarnContext(ctx, "agenttask: event sync pull failed",
 			"task_id", t.ID, "error", err)
-		return events, next
-	}
-	// The conversation's event log only grows, so what this pass has not seen
-	// is its tail. A shorter log than the offset (a source that reset under
-	// us) reads as everything being new rather than as a negative slice.
-	next = len(sandboxEvents)
-	if offset > 0 && offset <= len(sandboxEvents) {
-		sandboxEvents = sandboxEvents[offset:]
-	}
-	for _, se := range sandboxEvents {
-		if ev, ok := mapSandboxEvent(se); ok {
-			events = append(events, ev)
+	} else {
+		// The conversation's event log only grows, so what this pass has not
+		// seen is its tail. A shorter log than the offset (a source that reset
+		// under us) reads as everything being new rather than as a negative
+		// slice.
+		next = len(sandboxEvents)
+		if offset > 0 && offset <= len(sandboxEvents) {
+			sandboxEvents = sandboxEvents[offset:]
+		}
+		for _, se := range sandboxEvents {
+			if ev, ok := mapSandboxEvent(se); ok {
+				events = append(events, ev)
+			}
 		}
 	}
 

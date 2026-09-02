@@ -44,14 +44,29 @@ if (!PASSWORD) {
 	throw new Error('PROOF_PASSWORD is required: this account is created on a throwaway container');
 }
 
+/*
+ * performance.now(), not Date.now(), for every elapsed measurement here.
+ *
+ * Not a style choice. This runs on WSL2, whose wall clock is periodically
+ * resynchronised against the Windows host and steps BACKWARDS when it is, by a
+ * few hundred milliseconds. Stamping the samples with Date.now() put a sample
+ * or two out of order in every published timeline, at a different point each
+ * run, which reads as a broken harness and was flagged as one in review.
+ * performance.now() is monotonic from process start and cannot do that.
+ *
+ * The scripted wire below still uses Date.now(), deliberately: those values
+ * are ISO timestamps on a payload, where the wall clock is the right clock and
+ * a few hundred milliseconds do not matter.
+ */
 const log = [];
 const say = (line) => {
-	const stamp = ((Date.now() - t0) / 1000).toFixed(2).padStart(6);
+	const stamp = (since() / 1000).toFixed(2).padStart(6);
 	log.push(`[+${stamp}s] ${line}`);
 	console.log(`[+${stamp}s] ${line}`);
 };
 const t0 = Date.now();
-const since = () => Date.now() - t0;
+const mono0 = performance.now();
+const since = () => performance.now() - mono0;
 
 /*
  * The run this capture plays back: two tool calls with their results, a
@@ -59,13 +74,18 @@ const since = () => Date.now() - t0;
  * TestPoller_StoresEveryStepBeforeItPublishesATerminalStatus asserts on.
  */
 const TASK_ID = '6567c0fb-e34a-4609-9fc7-bbea32fde598';
+// `source_event_id` is on the wire (TaskEvent in
+// apps/control-plane/internal/agenttask/events.go) and is carried here even
+// though this front end's decodeEvent ignores it, so the playback cannot pass
+// against a shape the server never sends. HIVE-COWORK-OK is fourteen bytes;
+// the sizes below say fourteen for the same reason.
 const STEPS = [
-	{ seq: 1, kind: 'tool_call', payload: { tool_name: 'bash', tool_call_id: 'c1', preview: 'list the workspace' } },
-	{ seq: 2, kind: 'tool_result', payload: { tool_name: 'bash', tool_call_id: 'c1', preview: 'AGENTS.md' } },
-	{ seq: 3, kind: 'tool_call', payload: { tool_name: 'str_replace_editor', tool_call_id: 'c2', preview: 'write sixcap.txt' } },
-	{ seq: 4, kind: 'tool_result', payload: { tool_name: 'str_replace_editor', tool_call_id: 'c2', preview: 'wrote 13 bytes' } },
-	{ seq: 5, kind: 'file', payload: { name: 'sixcap.txt', size: 13 } },
-	{ seq: 6, kind: 'message', payload: { role: 'agent', preview: 'sixcap.txt now holds HIVE-COWORK-OK' } }
+	{ seq: 1, source_event_id: 'e1', kind: 'tool_call', payload: { tool_name: 'bash', tool_call_id: 'c1', preview: 'list the workspace' } },
+	{ seq: 2, source_event_id: 'e2', kind: 'tool_result', payload: { tool_name: 'bash', tool_call_id: 'c1', preview: 'AGENTS.md' } },
+	{ seq: 3, source_event_id: 'e3', kind: 'tool_call', payload: { tool_name: 'str_replace_editor', tool_call_id: 'c2', preview: 'write sixcap.txt' } },
+	{ seq: 4, source_event_id: 'e4', kind: 'tool_result', payload: { tool_name: 'str_replace_editor', tool_call_id: 'c2', preview: 'wrote 14 bytes' } },
+	{ seq: 5, source_event_id: 'file:sixcap.txt:14:1756800000', kind: 'file', payload: { name: 'sixcap.txt', size: 14 } },
+	{ seq: 6, source_event_id: 'e6', kind: 'message', payload: { role: 'agent', preview: 'sixcap.txt now holds HIVE-COWORK-OK' } }
 ];
 
 // When each step becomes readable, in milliseconds after the run was
@@ -87,6 +107,8 @@ const taskAt = (elapsed) => {
 		updated_at: new Date().toISOString(),
 		started_at: elapsed >= SANDBOX_READY_MS ? new Date(t0 + SANDBOX_READY_MS).toISOString() : null,
 		finished_at: elapsed >= FINISHED_MS ? new Date(t0 + FINISHED_MS).toISOString() : null
+		// See the clock note at the top: these are wall-clock ISO strings on a
+		// payload, which is what the real wire carries.
 	};
 	if (elapsed >= FINISHED_MS) {
 		return { ...base, status: 'succeeded', result_summary_ref: 'sixcap.txt now holds HIVE-COWORK-OK' };
@@ -124,11 +146,11 @@ const page = await context.newPage();
 await page.route('**/api/v1/hive/agent/**', async (route) => {
 	const request = route.request();
 	const url = new URL(request.url());
-	const elapsed = submittedAt === null ? 0 : Date.now() - submittedAt;
+	const elapsed = submittedAt === null ? 0 : performance.now() - submittedAt;
 	const json = (body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
 
 	if (request.method() === 'POST' && url.pathname.endsWith('/tasks')) {
-		submittedAt = Date.now();
+		submittedAt = performance.now();
 		requests.push(`${since()} POST /tasks`);
 		say('composer submitted the run');
 		return json(taskAt(0));
@@ -200,14 +222,25 @@ const deadline = Date.now() + 42000;
 let shots = 0;
 while (Date.now() < deadline) {
 	await page.waitForTimeout(1500);
-	const elapsed = submittedAt === null ? 0 : Date.now() - submittedAt;
 	const lines = await page
 		.locator('.status-description')
 		.allInnerTexts()
 		.catch(() => []);
+	// Sampled AFTER the read, and on the capture's own clock rather than on
+	// one that only starts when the submission lands, so the committed
+	// timeline is monotonic by construction. The earlier version stamped each
+	// sample before an await and against a start time that was still null on
+	// the first iterations, which put a sample or two out of order in the
+	// published artifacts and cost more to explain than to remove.
+	const elapsed = since();
+	const sinceSubmit = submittedAt === null ? null : performance.now() - submittedAt;
 	const cleaned = lines.map((line) => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
-	timeline.push({ at: Math.round(elapsed / 100) / 10, lines: cleaned });
-	say(`t+${(elapsed / 1000).toFixed(1)}s transcript shows ${cleaned.length} step line(s): ${JSON.stringify(cleaned)}`);
+	timeline.push({
+		at: Math.round(elapsed / 100) / 10,
+		since_submit: sinceSubmit === null ? null : Math.round(sinceSubmit / 100) / 10,
+		lines: cleaned
+	});
+	say(`run t+${sinceSubmit === null ? '?' : (sinceSubmit / 1000).toFixed(1)}s transcript shows ${cleaned.length} step line(s): ${JSON.stringify(cleaned)}`);
 	if ([8, 14, 26].includes(++shots)) {
 		await shoot(`04-running-${shots}`);
 	}
@@ -217,11 +250,14 @@ await shoot('05-finished');
 
 const finalLines = timeline.at(-1)?.lines ?? [];
 const peak = Math.max(...timeline.map((sample) => sample.lines.length), 0);
-const duringRun = timeline.filter((sample) => sample.at < 17 && sample.lines.length > 0).length;
+const whileRunning = timeline.filter(
+	(sample) => sample.since_submit !== null && sample.since_submit < FINISHED_MS / 1000
+);
+const duringRun = whileRunning.filter((sample) => sample.lines.length > 0).length;
 
 say('--- summary ---');
 say(`most step lines on screen at once: ${peak}`);
-say(`samples during the run that showed any step: ${duringRun} of ${timeline.filter((s) => s.at < 17).length}`);
+say(`samples during the run that showed any step: ${duringRun} of ${whileRunning.length}`);
 say(`final step lines: ${JSON.stringify(finalLines)}`);
 say('--- agent API calls the front end made ---');
 for (const line of requests) {

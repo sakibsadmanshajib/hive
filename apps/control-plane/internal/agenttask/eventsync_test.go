@@ -3,6 +3,9 @@ package agenttask
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"testing"
@@ -575,5 +578,37 @@ func TestEventSyncer_BoundsEverySessionRead(t *testing.T) {
 	}
 	if filesDeadline <= 0 || filesDeadline > eventPullTimeout {
 		t.Fatalf("workspace listing carried no usable deadline: %v", filesDeadline)
+	}
+}
+
+func TestEventSyncer_StillRecordsWorkspaceFilesWhenTheEventReadFails(t *testing.T) {
+	// The two reads hit different surfaces, so one failing does not make the
+	// other's answer worthless. Returning early on the event read meant a
+	// terminal flush could publish a status with none of the run's files
+	// recorded (raised in review on PR #1709).
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) {
+			return nil, errors.New("control socket is not answering")
+		},
+		files: func(context.Context, string) ([]WorkspaceFile, error) {
+			return []WorkspaceFile{{Name: "sixcap.txt", Size: 14, ModTime: time.Unix(1000, 0)}}, nil
+		},
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(repo.appends) != 1 || countKind(repo.appends[0], EventFile) != 1 {
+		t.Fatalf("a failed event read dropped the workspace listing: %v", repo.appends)
+	}
+
+	// And the offset did not move, so the events this pass could not read are
+	// read again rather than skipped.
+	if syncer.offsets[task.ID] != 0 {
+		t.Fatalf("offset advanced past events that were never read: %d", syncer.offsets[task.ID])
 	}
 }

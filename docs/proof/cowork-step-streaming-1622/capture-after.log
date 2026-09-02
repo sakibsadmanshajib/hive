@@ -1,58 +1,57 @@
-[+  0.26s] capture start, wire=new, label=after
-[+  7.43s] signed in, url=http://127.0.0.1:3422/
-[+ 10.52s] shot 01-composer
-[+ 11.44s] composer switched to Work
-[+ 11.53s] shot 02-work-mode
-[+ 12.21s] shot 03-brief-typed
-[+ 12.69s] composer submitted the run
-[+ 13.89s] t+1.2s transcript shows 0 step line(s): []
-[+ 15.40s] t+2.7s transcript shows 0 step line(s): []
-[+ 16.91s] t+4.2s transcript shows 0 step line(s): []
-[+ 18.43s] t+5.7s transcript shows 0 step line(s): []
-[+ 19.94s] t+7.2s transcript shows 0 step line(s): []
-[+ 21.46s] t+8.8s transcript shows 0 step line(s): []
-[+ 22.97s] t+10.3s transcript shows 1 step line(s): ["Using bash: list the workspace"]
-[+ 24.48s] t+11.8s transcript shows 1 step line(s): ["Using bash: list the workspace"]
-[+ 24.57s] shot 04-running-8
-[+ 26.08s] t+13.4s transcript shows 2 step line(s): ["Used bash: AGENTS.md","Using str_replace_editor: write sixcap.txt"]
-[+ 27.60s] t+14.9s transcript shows 2 step line(s): ["Used bash: AGENTS.md","Using str_replace_editor: write sixcap.txt"]
-[+ 29.11s] t+16.4s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 30.62s] t+17.9s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 31.40s] t+18.7s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 31.83s] t+19.1s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 31.95s] shot 04-running-14
-[+ 33.46s] t+20.8s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 34.97s] t+22.3s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 36.48s] t+23.8s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 37.99s] t+25.3s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 39.50s] t+26.8s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 41.02s] t+28.3s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 42.53s] t+29.8s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 44.04s] t+31.3s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 45.55s] t+32.9s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 47.06s] t+34.4s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 48.58s] t+35.9s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 50.09s] t+37.4s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 50.22s] shot 04-running-26
-[+ 51.74s] t+39.0s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 53.25s] t+40.6s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 54.76s] t+42.1s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 56.48s] shot 05-finished
-[+ 56.48s] --- summary ---
-[+ 56.48s] most step lines on screen at once: 3
-[+ 56.48s] samples during the run that showed any step: 5 of 11
-[+ 56.48s] final step lines: ["Used bash: AGENTS.md","Used str_replace_editor: wrote 13 bytes","Workspace file: sixcap.txt"]
-[+ 56.48s] --- agent API calls the front end made ---
-  12687 POST /tasks
-  15776 GET /tasks/{id} -> queued
-  15784 GET /events?after_seq=0 -> 0
-  18862 GET /tasks/{id} -> running
-  18869 GET /events?after_seq=0 -> 0
-  21967 GET /tasks/{id} -> running
-  21978 GET /events?after_seq=0 -> 1
-  25089 GET /tasks/{id} -> running
-  25097 GET /events?after_seq=1 -> 2
-  28200 GET /tasks/{id} -> running
-  28212 GET /events?after_seq=3 -> 2
-  31326 GET /tasks/{id} -> succeeded
-  31333 GET /events?after_seq=5 -> 1
+[+  0.60s] capture start, wire=new, label=after
+[+ 11.11s] signed in, url=http://127.0.0.1:3422/
+[+ 16.05s] shot 01-composer
+[+ 17.12s] composer switched to Work
+[+ 17.46s] shot 02-work-mode
+[+ 18.55s] shot 03-brief-typed
+[+ 19.78s] composer submitted the run
+[+ 20.55s] run t+0.8s transcript shows 0 step line(s): []
+[+ 22.07s] run t+2.3s transcript shows 0 step line(s): []
+[+ 23.60s] run t+3.8s transcript shows 0 step line(s): []
+[+ 25.14s] run t+5.4s transcript shows 0 step line(s): []
+[+ 26.65s] run t+6.9s transcript shows 0 step line(s): []
+[+ 28.17s] run t+8.4s transcript shows 0 step line(s): []
+[+ 29.74s] run t+10.0s transcript shows 0 step line(s): []
+[+ 31.25s] run t+11.5s transcript shows 1 step line(s): ["Used bash: AGENTS.md"]
+[+ 31.57s] shot 04-running-8
+[+ 33.12s] run t+13.3s transcript shows 2 step line(s): ["Used bash: AGENTS.md","Using str_replace_editor: write sixcap.txt"]
+[+ 34.63s] run t+14.9s transcript shows 2 step line(s): ["Used bash: AGENTS.md","Using str_replace_editor: write sixcap.txt"]
+[+ 36.16s] run t+16.4s transcript shows 2 step line(s): ["Used bash: AGENTS.md","Using str_replace_editor: write sixcap.txt"]
+[+ 37.74s] run t+18.0s transcript shows 4 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt","sixcap.txt now holds HIVE-COWORK-OK"]
+[+ 39.28s] run t+19.5s transcript shows 4 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt","sixcap.txt now holds HIVE-COWORK-OK"]
+[+ 40.80s] run t+21.0s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 41.07s] shot 04-running-14
+[+ 42.60s] run t+22.8s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 44.12s] run t+24.3s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 45.66s] run t+25.9s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 47.21s] run t+27.4s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 48.78s] run t+29.0s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 50.31s] run t+30.5s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 51.87s] run t+32.1s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 53.39s] run t+33.6s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 54.92s] run t+35.1s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 56.45s] run t+36.7s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 57.97s] run t+38.2s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 59.49s] run t+39.7s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 59.88s] shot 04-running-26
+[+ 61.41s] run t+41.6s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 62.93s] run t+43.1s transcript shows 3 step line(s): ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 64.92s] shot 05-finished
+[+ 64.92s] --- summary ---
+[+ 64.93s] most step lines on screen at once: 4
+[+ 64.93s] samples during the run that showed any step: 4 of 11
+[+ 64.93s] final step lines: ["Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt"]
+[+ 64.93s] --- agent API calls the front end made ---
+  19776.887335 POST /tasks
+  23008.669799 GET /tasks/{id} -> queued
+  23037.836897 GET /events?after_seq=0 -> 0
+  26395.329446 GET /tasks/{id} -> running
+  26410.090286000002 GET /events?after_seq=0 -> 0
+  29738.804769000002 GET /tasks/{id} -> running
+  29826.612817 GET /events?after_seq=0 -> 2
+  32999.297885 GET /tasks/{id} -> running
+  33018.655131 GET /events?after_seq=2 -> 1
+  36195.756015 GET /tasks/{id} -> running
+  36216.193226 GET /events?after_seq=3 -> 3
+  39477.912104 GET /tasks/{id} -> succeeded
+  39521.983043 GET /events?after_seq=6 -> 0
