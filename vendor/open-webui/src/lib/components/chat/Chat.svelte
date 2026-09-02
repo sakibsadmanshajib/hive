@@ -2863,6 +2863,20 @@
 		// The project's own documents, resolved from the binding rather than
 		// from anything persisted on the chat: the prune above deletes a chat
 		// level attachment no message references (#1358).
+		//
+		// ponytail: a non empty `files` array makes the backend run
+		// `generate_queries` before retrieval, so a turn in a project bound
+		// conversation spends one extra task model completion, including while
+		// the project still holds no files. Retrieval over an empty collection
+		// is harmless (`sources` comes back empty and the injection is guarded),
+		// so the cost is the query generation call alone. Skipping it would mean
+		// knowing the project's file count on every turn, which is a fetch per
+		// turn to save a call, so it is accepted rather than optimised.
+		//
+		// Cowork turns never reach this line: `submitHandler` returns after
+		// `submitCoworkRun`, so a run started inside a project receives none of
+		// its documents. Work mode retrieval is issue #1312 and task 8 of the
+		// Projects unification spec, not this fix.
 		files = withProjectFiles(files, hiveProjectId);
 
 		scrollToBottom();
