@@ -46,6 +46,15 @@ or crash each other's containers (issue #1242, PR #1249). The script is a
 no-op on the canonical `hive` checkout (what the demo box and CI use), so it
 never changes that project name.
 
+Run it AFTER copying any `.env` into the worktree, never before. It always
+writes `COMPOSE_PROJECT_NAME` into `deploy/docker/.env`, but into the worktree
+root `.env` only if that file already exists, and the root one is what
+`--env-file ../../.env` actually reads. So running it first fails two ways: the
+root `.env` is absent and gets nothing, or a later `cp .../.env .env` overwrites
+what it wrote. Either way the worktree silently joins project `hive` and
+recreates the canonical checkout's containers, which is the exact collision the
+script exists to prevent.
+
 ### 2. Run
 
 ```bash
