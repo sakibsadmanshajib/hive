@@ -131,6 +131,35 @@ docker run -d --name owui1065 -p 13650:8080 \
 # a unique code in it, type a prompt, send, and read the intercepted body
 ```
 
+## The sandbox half, proven in CI on a real Apptainer launch
+
+Added after the frames above, because the limitation they were captured under
+turned out to be a limitation of this development box and not of CI.
+`.github/workflows/agent-visual-proof.yml` stands the real thing up per run,
+checked out from `refs/pull/1735/merge`, and a scenario was added to its
+harness and dispatched at this pull request. Run 33668985745, success:
+
+```
+[capture-live] amended the create with 1 attachment (66 bytes)
+[capture-live] create answered HTTP 201 in 90ms, status=queued
+[capture-live] the sandbox workspace holds service-record.txt carrying HIVE-1065-68985745
+[capture-live] row "proof-33668985745 attachment: read servi..." reached Running
+[capture-live] GET /v1/agent/tasks/{id}/files answered HTTP 200:
+  {"files":[{"name":".git","size":4096,"mtime":"2026-09-02T18:52:40Z"},
+            {"name":"service-record.txt","size":66,"mtime":"2026-09-02T18:52:29Z"}]}
+[capture-live] scenario attachment-reaches-the-sandbox: ok
+```
+
+The file was read off the launcher's own workspace directory and asserted to
+carry a string generated for that run and present nowhere else, and the
+working folder was read through the customer route the panel itself calls.
+Both halves of the issue's Cowork acceptance criterion, on a real launch.
+
+Two false negatives came first and are recorded in the pull request discussion
+because each looks exactly like the bug: an unauthenticated raw fetch reading
+as a missing file, and a correct empty listing one second after create, before
+the row leaves queued, reading as a missing file as well.
+
 ## What the demo box will show after merge
 
 The path the frames stop short of. A run submitted from Work mode with a file
