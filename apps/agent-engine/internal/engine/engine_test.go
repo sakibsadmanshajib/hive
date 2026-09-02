@@ -1123,6 +1123,29 @@ func TestSandboxEngine_Launch_RejectsPackNamesThatAreNotPackNames(t *testing.T) 
 	}
 }
 
+// The name check above is string handling and cannot see a symlink. This is
+// the second layer: the copy resolves through os.Root, so a pack directory
+// that is a link out of PacksDir fails to open at all rather than copying
+// whatever it points at into a directory the agent can read.
+func TestSandboxEngine_Launch_RefusesAPackSymlinkedOutOfThePacksDir(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "AGENTS.md"), []byte("not the pack"), 0o600); err != nil {
+		t.Fatalf("seed outside dir: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(e.cfg.PacksDir, "escaping-pack")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	task := testTask()
+	task.Pack = "escaping-pack"
+	if _, err := e.Launch(context.Background(), task); err == nil {
+		t.Fatal("Launch followed a pack symlink out of the packs directory")
+	}
+}
+
 // --- publishDeckArtifact (issue #312/#300 wiring) -------------------------
 
 // fakePublisher stands in for *artifactsclient.Client. Records every call so

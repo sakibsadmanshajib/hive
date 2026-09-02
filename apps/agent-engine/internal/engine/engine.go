@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -413,17 +414,34 @@ func New(cfg Config) *SandboxEngine {
 	}
 }
 
-// materializePack copies the pack at packDir into workingDir and returns the
-// top-level names it planted there. Those names are what the workspace
-// listing (events.go) filters back out: the panel's working folder is the
-// files the task produced, and the pack is scaffolding the task arrived with.
-func materializePack(packDir, workingDir string) ([]string, error) {
-	entries, err := os.ReadDir(packDir)
+// materializePack copies the named pack out of packsDir into workingDir and
+// returns the top-level names it planted there. Those names are what the
+// workspace listing (events.go) filters back out: the panel's working folder
+// is the files the task produced, and the pack is scaffolding the task
+// arrived with.
+//
+// pack reaches this process from control-plane, so the read is confined to
+// packsDir by os.Root rather than by string handling. That holds against a
+// name that tries to climb out (Launch rejects those too) and equally against
+// a symlink inside packsDir pointing somewhere else, which no amount of name
+// validation would catch.
+func materializePack(packsDir, pack, workingDir string) ([]string, error) {
+	root, err := os.OpenRoot(packsDir)
 	if err != nil {
-		return nil, fmt.Errorf("engine: read pack %s: %w", packDir, err)
+		return nil, fmt.Errorf("engine: open packs directory %s: %w", packsDir, err)
 	}
-	if err := os.CopyFS(workingDir, os.DirFS(packDir)); err != nil {
-		return nil, fmt.Errorf("engine: copy pack %s into the agent working directory: %w", packDir, err)
+	defer func() { _ = root.Close() }()
+
+	packFS, err := fs.Sub(root.FS(), pack)
+	if err != nil {
+		return nil, fmt.Errorf("engine: locate pack %s: %w", pack, err)
+	}
+	entries, err := fs.ReadDir(packFS, ".")
+	if err != nil {
+		return nil, fmt.Errorf("engine: read pack %s under %s: %w", pack, packsDir, err)
+	}
+	if err := os.CopyFS(workingDir, packFS); err != nil {
+		return nil, fmt.Errorf("engine: copy pack %s into the agent working directory: %w", pack, err)
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -536,8 +554,7 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 	// the workspace is per-task and thrown away with the session, and a copy
 	// is testable on any host, while a bind is only observable on a box with
 	// Apptainer. The read-only bind stays as the pristine reference copy.
-	packDir := filepath.Join(e.cfg.PacksDir, t.Pack)
-	packFiles, err := materializePack(packDir, workingDir)
+	packFiles, err := materializePack(e.cfg.PacksDir, t.Pack, workingDir)
 	if err != nil {
 		return "", err
 	}
@@ -560,7 +577,7 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		UserID:   t.UserID,
 		Pack: sandbox.Pack{
 			Name:       t.Pack,
-			ConfigDir:  packDir,
+			ConfigDir:  filepath.Join(e.cfg.PacksDir, t.Pack),
 			WorkingDir: workingDir,
 		},
 		SIFPath:          e.cfg.SIFPath,
