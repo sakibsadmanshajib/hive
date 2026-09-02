@@ -97,11 +97,15 @@ function BudgetUsageCell({ row }: { row: ApiKey }) {
   const percentText = formatPercent(ratio);
 
   return (
-    <div className="flex min-w-[11rem] max-w-[15rem] flex-col gap-1.5">
+    <div className="flex min-w-[12rem] max-w-[16rem] flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-3">
         {figures}
         <span className="flex items-center gap-1.5">
-          {reached ? <Badge tone="danger">Limit reached</Badge> : null}
+          {reached ? (
+            <Badge tone="danger" className="whitespace-nowrap">
+              Limit reached
+            </Badge>
+          ) : null}
           <span
             className={cn(
               "text-xs tabular-nums",
