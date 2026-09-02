@@ -43,6 +43,18 @@ const SCENARIO = "chat";
 // question, as 01-chat-send-stream.spec.ts.
 const PROMPT = "What colour is a banana? Reply with only the single colour word.";
 const REPLY_PATTERN = /yellow/i;
+// Which alias the captured turn is allowed to run on.
+//
+// This is a money guard, not a cosmetic one. The workflow runs on every pull
+// request touching a chat path, and the composer's model is whatever Open WebUI
+// resolved, which is not necessarily what the deployment asked for: on run
+// 33677630521 the run tenant could not see any free alias, Open WebUI silently
+// fell back to the first one it could, and the captured turn ran on a paid
+// model. Nothing failed, nothing said so, and the only evidence was a model
+// name in a screenshot. The owner's 2026-08-30 directive is that CI does not
+// spend on paid aliases, so this asserts the name rather than trusting the
+// configuration to have taken.
+const MODEL_PATTERN = new RegExp(process.env.PROOF_MODEL_PATTERN ?? "free", "i");
 
 if (!OUT_DIR) {
   console.error("::error::PROOF_OUT is not set, so there is nowhere to write the capture");
@@ -128,6 +140,17 @@ async function main() {
     // is invisible in a shot of an empty composer.
     const picker = page.getByRole("button", { name: /^select(ed)? .*model/i });
     if (await picker.isVisible().catch(() => false)) {
+      // What the composer will actually send to, read before anything is
+      // opened, because opening the picker changes what the control reads.
+      const selectedModel = (await picker.innerText()).replace(/\s+/g, " ").trim();
+      record(`model in the composer: ${selectedModel}`);
+      if (!MODEL_PATTERN.test(selectedModel)) {
+        throw new Error(
+          `the composer is set to "${selectedModel}", which does not match ${MODEL_PATTERN}. ` +
+            "Capturing a turn on an unexpected alias would spend on it once per pull request; " +
+            "check the run tenant's tenant_model_visibility grant and OWUI_DEFAULT_MODEL.",
+        );
+      }
       await picker.click();
       await page.getByRole("option").first().waitFor({ state: "visible", timeout: 15_000 });
       const models = await page.getByRole("option").allInnerTexts();
@@ -135,10 +158,12 @@ async function main() {
       shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "02-model-picker", note: NOTE }));
       await page.keyboard.press("Escape");
     } else {
-      // Not fatal, and said out loud rather than passed over: the turn below
-      // is the load-bearing capture, and a picker that did not open is a
-      // finding for whoever reads this log, not a reason to publish nothing.
-      record("::warning::the model picker control was not visible, so no picker shot was taken");
+      // Fatal, unlike the shot itself. Without the picker there is no way to
+      // read which alias the turn is about to be billed to, and sending one
+      // blind is the thing the guard above exists to prevent.
+      throw new Error(
+        "the model picker control was not visible, so the alias this turn would run on cannot be read",
+      );
     }
 
     await composer.fill(PROMPT);

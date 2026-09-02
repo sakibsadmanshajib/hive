@@ -489,6 +489,75 @@ jobs:
             echo "$dst=$val" >> "$GITHUB_ENV"
           done
 
+      - name: Grant the run tenant a free alias and a credit balance
+        # Both rows exist for the same reason: without them the capture is a
+        # photograph of the wrong thing, and neither absence announces itself.
+        #
+        # hive-free is visibility='restricted'
+        # (supabase/migrations/20260831_01_restrict_free_pool_aliases_visibility.sql),
+        # so a tenant with no explicit tenant_model_visibility row cannot see it
+        # in the picker or invoke it. Measured on run 33677630521: the picker
+        # listed seven aliases, none of them free, and the captured turn ran on
+        # Deepseek V4 Flash. That is a paid alias, on a job that runs on every
+        # chat pull request, which is exactly what the owner's 2026-08-30
+        # directive rules out. This is the same grant scripts/ci-seed-api-key.sh
+        # performs for the live-integration tenant, in the same shape, for the
+        # same reason; that migration says explicitly that granting the specific
+        # automated callers belongs at the layer provisioning each one.
+        #
+        # The credit balance is the second half. The reservation guard fails
+        # closed on a zero balance, and the chat surface renders "You're out of
+        # credits" over the composer, which was in run 33677630521's published
+        # screenshot. A proof image carrying a failure state the product does
+        # not really have is worse than no image: it is a picture of a defect
+        # that does not exist. Same synthetic $1000-equivalent grant the CI
+        # seeder uses, at the 1e9-per-USD unit.
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGDATABASE: hive_ci
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          psql --no-psqlrc -qX -v ON_ERROR_STOP=1 <<'SQL'
+          BEGIN;
+
+          INSERT INTO public.tenant_model_visibility (tenant_id, alias_id, visible)
+          SELECT t.id, a.alias_id, true
+          FROM public.tenants t
+          CROSS JOIN (VALUES ('hive-free')) AS a(alias_id)
+          WHERE t.slug = 'owui-e2e'
+          ON CONFLICT (tenant_id, alias_id) DO UPDATE
+            SET visible = true, updated_at = now();
+
+          INSERT INTO public.credit_ledger_entries
+            (account_id, entry_type, credits_delta, idempotency_key, metadata)
+          SELECT tba.account_id, 'grant', 1000000000000::bigint,
+                 'chat-proof-grant-' || tba.account_id::text,
+                 jsonb_build_object('source', '.github/workflows/chat-visual-proof.yml')
+          FROM public.tenant_billing_accounts tba
+          JOIN public.tenants t ON t.id = tba.tenant_id
+          WHERE t.slug = 'owui-e2e'
+          ON CONFLICT (idempotency_key) DO NOTHING;
+
+          COMMIT;
+          SQL
+          # Asserted, not assumed: both statements are silent when they match no
+          # row, and the failure would surface a quarter of an hour later as a
+          # picker with no free alias in it.
+          visible=$(psql --no-psqlrc -qtAX -c "SELECT count(*) FROM public.tenant_model_visibility v JOIN public.tenants t ON t.id = v.tenant_id WHERE t.slug = 'owui-e2e' AND v.alias_id = 'hive-free' AND v.visible")
+          credits=$(psql --no-psqlrc -qtAX -c "SELECT coalesce(sum(credits_delta), 0) FROM public.credit_ledger_entries e JOIN public.tenant_billing_accounts tba ON tba.account_id = e.account_id JOIN public.tenants t ON t.id = tba.tenant_id WHERE t.slug = 'owui-e2e'")
+          echo "hive-free visibility rows: $visible, credit balance: $credits"
+          if [ "$visible" != "1" ]; then
+            echo "::error::the run tenant holds no visible=true row for hive-free, so the picker will offer only paid aliases"
+            exit 1
+          fi
+          if [ "$credits" = "0" ]; then
+            echo "::error::the run tenant has a zero credit balance, so the capture would show the out-of-credits state"
+            exit 1
+          fi
+
       - name: Materialize .env.ci
         # One file, because nine compose invocations and the two in-container
         # helper scripts owui.setup.ts runs all have to resolve the same stack.
