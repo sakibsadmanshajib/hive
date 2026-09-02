@@ -111,6 +111,11 @@ const (
 	msgFetchFailed     = "The page could not be processed."
 	msgBodyTooLarge    = "The tool arguments are too large."
 	msgMethodNotAllwed = "Method not allowed."
+	// The money-path messages (issue #1695). None names an amount, a balance,
+	// a provider or an internal service.
+	msgInsufficientCredit   = "Your available credit does not cover this web tool call. Add credits and try again."
+	msgBillingNotConfigured = "This workspace is not set up for usage yet. Contact your administrator to complete workspace setup."
+	msgBillingUnavailable   = "This tool call could not be billed, so it was not run. Please retry."
 )
 
 // Fetcher is the web_fetch pipeline. It is nil in this slice: the pipeline is
@@ -136,15 +141,21 @@ type Deps struct {
 	Search Searcher
 	// Fetch is the web_fetch pipeline, nil until slice S2 wires it.
 	Fetch Fetcher
+	// Billing is the money path both tools settle through (issue #1695). It is
+	// REQUIRED: a handler built without it refuses every call rather than
+	// serving provider spend for free, which is what both tools did before it
+	// existed. See billing.go for the rules it enforces.
+	Billing *Billing
 	// Now is the clock the per-turn budget uses. Nil means time.Now.
 	Now func() time.Time
 }
 
 // Handler serves the two tool routes.
 type Handler struct {
-	search Searcher
-	fetch  Fetcher
-	budget *turnBudget
+	search  Searcher
+	fetch   Fetcher
+	billing *Billing
+	budget  *turnBudget
 }
 
 // NewHandler builds the handler.
@@ -154,9 +165,10 @@ func NewHandler(d Deps) *Handler {
 		now = time.Now
 	}
 	return &Handler{
-		search: d.Search,
-		fetch:  d.Fetch,
-		budget: &turnBudget{now: now, turns: make(map[string]turnCounts), tenants: make(map[uuid.UUID]tenantCounts)},
+		search:  d.Search,
+		fetch:   d.Fetch,
+		billing: d.Billing,
+		budget:  &turnBudget{now: now, turns: make(map[string]turnCounts), tenants: make(map[uuid.UUID]tenantCounts)},
 	}
 }
 
@@ -222,14 +234,28 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		count = MaxResultsCeiling
 	}
 
+	// The hold, taken before the backend is called and after every refusal
+	// that costs nothing (issue #1695). A call this deployment was never going
+	// to serve creates no reservation.
+	charge, ok := h.beginCharge(r.Context(), w, user, ToolWebSearch)
+	if !ok {
+		return
+	}
+
 	hits, dropped, err := h.search.Search(r.Context(), query, count)
 	if err != nil {
-		// Logged with the real cause, answered without it.
+		// Logged with the real cause, answered without it. Not charged: an
+		// errored search is not a delivered one.
+		charge.refund("search_failed")
 		log.Printf("webtools: web_search failed: %v", err)
 		writeEnvelope(w, http.StatusBadGateway, NewError(CodeSearchUnavailable, msgSearchDown, dropped))
 		return
 	}
 	if len(hits) == 0 {
+		// Charged. The query reached SearXNG and consumed exactly what SearXNG
+		// costs, which is one query; results are what it returns, not what it
+		// bills for. This is a delivered call that found nothing, not a failure.
+		charge.commit()
 		writeEnvelope(w, http.StatusOK, EmptySearchResult(query, dropped))
 		return
 	}
@@ -239,10 +265,12 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 		// The constructor refused what the backend produced. That is a bug
 		// in the backend adapter, and it is reported as a failure rather
 		// than papered over with a shorter list.
+		charge.refund("envelope_refused")
 		log.Printf("webtools: web_search envelope refused: %v", err)
 		writeEnvelope(w, http.StatusBadGateway, NewError(CodeSearchUnavailable, msgSearchDown, dropped+len(hits)))
 		return
 	}
+	charge.commit()
 	writeEnvelope(w, http.StatusOK, envelope)
 }
 
@@ -310,9 +338,18 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The hold, taken after the 501 above so a deployment with no pipeline
+	// wired does not reserve credits for a call it cannot make.
+	charge, ok := h.beginCharge(r.Context(), w, user, ToolWebFetch)
+	if !ok {
+		return
+	}
+
 	result, err := h.fetch.Fetch(r.Context(), admitted.String(), focus)
 	if err != nil {
-		// Logged with the real cause, answered without it.
+		// Logged with the real cause, answered without it. Not charged: a
+		// page that could not be read is not a delivered fetch.
+		charge.refund("fetch_failed")
 		log.Printf("webtools: web_fetch failed: %v", err)
 		code := fetchCode(err)
 		writeEnvelope(w, fetchStatus(code), NewError(code, fetchMessage(code, err), 0))
@@ -330,11 +367,13 @@ func (h *Handler) handleFetch(w http.ResponseWriter, r *http.Request) {
 	// pipeline is written in a later slice by someone who will reasonably
 	// assume the envelope cannot lie, so the check belongs on this side.
 	if result.Status != StatusOK || len(result.Parts) == 0 {
+		charge.refund("nonconforming_envelope")
 		log.Printf("webtools: web_fetch pipeline returned a non-conforming envelope (status=%q parts=%d)",
 			result.Status, len(result.Parts))
 		writeEnvelope(w, http.StatusBadGateway, NewError(CodeExtractEmpty, msgFetchFailed, result.Dropped))
 		return
 	}
+	charge.commit()
 	writeEnvelope(w, http.StatusOK, result)
 }
 

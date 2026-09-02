@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -302,5 +303,52 @@ func (c *RoutingClient) SelectRoute(ctx context.Context, input SelectRouteInput)
 		return SelectRouteResult{}, fmt.Errorf("routing: decode result: %w", err)
 	}
 
+	return result, nil
+}
+
+// AliasPriceResult is one alias's catalog price and the unit it is quoted in,
+// per million units, with no route selected.
+type AliasPriceResult struct {
+	AliasID   string             `json:"alias_id"`
+	Pricing   SelectRoutePricing `json:"pricing"`
+	PriceUnit string             `json:"price_unit"`
+}
+
+// AliasPrice calls GET /internal/routing/alias-price on the control-plane.
+//
+// It answers the price question alone, for a caller that must charge against
+// the catalog but has no route to select (issue #1695: web_search and
+// web_fetch are charged per call, and their aliases are internal price
+// carriers with no provider_routes row and no LiteLLM deployment behind them).
+//
+// No tenant is bound, unlike SelectRoute. There is nothing to entitle: the
+// answer is a catalog price, identical for every tenant, and the aliases it is
+// asked about are invisible to all of them. The caller decides whether that
+// price can be applied to what it meters, and refuses when it cannot (D-034);
+// every error here is such a refusal.
+func (c *RoutingClient) AliasPrice(ctx context.Context, aliasID string) (AliasPriceResult, error) {
+	endpoint := c.baseURL + "/internal/routing/alias-price?alias_id=" + url.QueryEscape(aliasID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return AliasPriceResult{}, fmt.Errorf("routing: build alias price request: %w", err)
+	}
+	cpauth.SetHeader(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return AliasPriceResult{}, fmt.Errorf("routing: alias price request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode != http.StatusOK {
+		return AliasPriceResult{}, fmt.Errorf("routing: alias price status %d: %s",
+			resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var result AliasPriceResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return AliasPriceResult{}, fmt.Errorf("routing: decode alias price: %w", err)
+	}
 	return result, nil
 }

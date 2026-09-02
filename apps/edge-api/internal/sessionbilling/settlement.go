@@ -156,6 +156,27 @@ func Reserve(ctx context.Context, in Input) (*Settlement, *Refusal) {
 	return reserve(ctx, in, true)
 }
 
+// ReserveCharge takes a hold for a unit of work whose whole charge the caller
+// has ALREADY derived from the catalog, in a unit this package does not meter.
+//
+// It is Reserve without the token-price gate, and only without that gate. Every
+// other rule Reserve enforces still applies: no billing account is a refusal,
+// the Enterprise posture takes no hold, the hold is taken before the work
+// happens, and the reservation reaches a terminal state exactly once.
+//
+// The gate is dropped because it would refuse every caller here, not because
+// pricing is optional. inference.CanPriceTokens answers "can this route price a
+// token-metered request", and a per-call web tool has no route and no tokens
+// (issue #1695). The fail-closed rule D-034 states is unchanged and simply moves
+// to the caller, which reads the alias's own catalog row, refuses a unit it does
+// not meter or a price that is not positive, and passes the derived figure in as
+// HoldFloor. A caller that skips that step charges a hold of zero, which the
+// control-plane records as a zero-credit reservation rather than silently
+// serving free.
+func ReserveCharge(ctx context.Context, in Input) (*Settlement, *Refusal) {
+	return reserve(ctx, in, false)
+}
+
 // ProbeInput is everything Probe needs to answer the solvency question for a
 // unit of work that is not an inference request.
 type ProbeInput struct {

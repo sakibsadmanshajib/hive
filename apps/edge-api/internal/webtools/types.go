@@ -68,6 +68,13 @@ const (
 	CodeEmbedUnavailable       = "embed_unavailable"
 	CodeReduceEmpty            = "reduce_empty"
 	CodeFetchFailed            = "fetch_failed"
+	// The money-path classes (issue #1695). Three, not one: "add credits",
+	// "this workspace was never set up for usage" and "the accounting seam is
+	// down" are different facts with different actions behind them, and the
+	// model is told which one happened rather than a single opaque failure.
+	CodeInsufficientCredit   = "insufficient_credit"
+	CodeBillingNotConfigured = "billing_not_configured"
+	CodeBillingUnavailable   = "billing_unavailable"
 )
 
 // ErrEmptyResult is what both success constructors return when handed nothing
