@@ -145,13 +145,23 @@ jobs:
           if [ -z "${PROVIDER_BALANCE_MIN_RUNWAY_DAYS:-}" ]; then
             unset PROVIDER_BALANCE_MIN_RUNWAY_DAYS
           fi
-          # Label-gated proof hook. Squeezing the threshold rather than faking a
-          # balance keeps the run honest: it reads the real account and measures
-          # it, only against a runway nothing could satisfy.
+          # Label-gated proof hooks, one per half of the alarm. Both halves need
+          # proving before merge, and the balance cannot be made to move on
+          # demand, so the thresholds move instead. Squeezing a threshold rather
+          # than faking a balance keeps the run honest: each of these reads the
+          # real account and measures the real number, only against a bar it
+          # certainly does or certainly does not clear.
+          #
+          # The shortfall case is checked first, so a pull request carrying both
+          # labels gets the louder of the two rather than a silent pass.
           case "${PR_LABELS:-}" in
             *'"provider-balance-test:simulate-low"'*)
               export PROVIDER_BALANCE_MIN_RUNWAY_DAYS=100000
               echo "simulating a shortfall: runway threshold raised to 100000 days" ;;
+            *'"provider-balance-test:simulate-healthy"'*)
+              export PROVIDER_BALANCE_MIN_RUNWAY_DAYS=0.001
+              export PROVIDER_BALANCE_MIN_USD=0
+              echo "simulating recovery: thresholds lowered under the real balance, to prove the tracking issue gets closed" ;;
           esac
           if node .github/ci/check-provider-balance.mjs > balance-check.txt 2>&1; then
             low=false
