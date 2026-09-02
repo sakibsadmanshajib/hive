@@ -4,7 +4,7 @@
  * Hive authored. Everything under src/lib/hive/ is ours, so a rebase against a
  * future upstream tag reads as a file list rather than an archaeology exercise.
  *
- * These four calls go to Open WebUI's own backend, not to edge-api, and that
+ * These three calls go to Open WebUI's own backend, not to edge-api, and that
  * is the whole reason the agent surface can be native here at all. The browser
  * has no credential edge-api accepts: it holds Open WebUI's session token,
  * which edge-api has never heard of, and the Supabase OAuth-server token it
@@ -15,8 +15,25 @@
  *
  * The wire shape below is edge-api's, unchanged, because the proxy returns its
  * JSON verbatim. Ported from apps/agent-console/lib/edge-api/tasks.ts,
- * including the two decisions in it that are easy to mistake for accidents and
- * are not: the `unknown` status and the two engine sentinels.
+ * including the decision in it that is easiest to mistake for an accident and
+ * is not: the `unknown` status.
+ *
+ * WHAT THIS MODULE STOPPED CARRYING, AND WHY (issue #1501)
+ * -------------------------------------------------------
+ * It used to serve two callers: the chat composer's Cowork mode, and the
+ * `/agents` page, which was a second agent destination with its own submit
+ * form, pack selector and task list. D-045 rules that the agent surface is a
+ * mode of the composer rather than a place you go, so that page is retired and
+ * everything only it used went with it rather than being left unreachable:
+ * `listTasks`, `cancelTask`, `canStartTask`, `describeTask` and its `TaskView`,
+ * `elapsed`, `IN_FLIGHT_STATUSES`, and the two engine sentinels with their
+ * `isEngineUnavailable` and `isEngineLaunchFailure` predicates.
+ *
+ * Two of those are worth naming so nobody restores them as scaffolding. A run
+ * IS a conversation now, so the conversation list is the task list and nothing
+ * needs `listTasks`. And the engine sentinels existed to give a deployment
+ * misconfiguration its own "Blocked" label in a status column that no longer
+ * exists; `describeRefusal` still carries the two refusals a person can act on.
  */
 
 // The base is a parameter with a production default rather than an import of
@@ -221,64 +238,6 @@ export const describeRefusal = (error: unknown): Refusal | null => {
 	return null;
 };
 
-/**
- * Whether the composer should accept a submission.
- *
- * `blocked` is in here, and that is the point: a refused surface that still
- * takes typing and still lights its send button invites a person to write a
- * task brief and press a key that cannot work. Refusing at the control, with
- * the reason on screen, is the honest shape.
- */
-export const canStartTask = (state: {
-	instructions: string;
-	submitting: boolean;
-	blocked: Refusal | null;
-}): boolean =>
-	state.instructions.trim().length > 0 && !state.submitting && state.blocked === null;
-
-export const listTasks = async (
-	token: string,
-	apiBase: string = DEFAULT_AGENT_API_BASE_URL
-): Promise<AgentTask[]> => {
-	const response = await fetch(`${apiBase}/tasks`, {
-		method: 'GET',
-		headers: headers(token)
-	});
-	if (!response.ok) {
-		await raise(response, 'Failed to load tasks');
-	}
-	const body = await readBody(response);
-	if (!isRecord(body)) {
-		throw new Error('Failed to parse tasks response');
-	}
-	/*
-	 * `tasks` absent is a payload we cannot read; `tasks: null` is a real empty
-	 * list, because edge-api answers `map[string]any{"tasks": tasks}` and Go
-	 * marshals a nil slice as null (apps/edge-api/internal/agenttask/handler.go).
-	 * Returning an empty list for the first case would tell the user they have
-	 * no tasks when the truth is that we could not read the answer, which is the
-	 * failure mode this whole surface exists to stop making.
-	 */
-	if (!('tasks' in body)) {
-		throw new Error('Failed to parse tasks response');
-	}
-	const rows = body['tasks'];
-	if (rows === null) {
-		return [];
-	}
-	if (!Array.isArray(rows)) {
-		throw new Error('Failed to parse tasks response');
-	}
-	const tasks: AgentTask[] = [];
-	for (const row of rows) {
-		const decoded = decodeTask(row);
-		if (decoded) {
-			tasks.push(decoded);
-		}
-	}
-	return tasks;
-};
-
 export const createTask = async (
 	token: string,
 	pack: TaskPack,
@@ -292,28 +251,6 @@ export const createTask = async (
 	});
 	if (!response.ok) {
 		await raise(response, 'Failed to create task');
-	}
-	const decoded = decodeTask(await readBody(response));
-	if (!decoded) {
-		throw new Error('Failed to parse task response');
-	}
-	return decoded;
-};
-
-export const cancelTask = async (
-	token: string,
-	id: string,
-	apiBase: string = DEFAULT_AGENT_API_BASE_URL
-): Promise<AgentTask> => {
-	const response = await fetch(
-		`${apiBase}/tasks/${encodeURIComponent(id)}/cancel`,
-		{
-			method: 'POST',
-			headers: headers(token)
-		}
-	);
-	if (!response.ok) {
-		await raise(response, 'Failed to cancel task');
 	}
 	const decoded = decodeTask(await readBody(response));
 	if (!decoded) {
@@ -471,9 +408,10 @@ export const getTaskEvents = async (
 	}
 	const body = await readBody(response);
 	if (!isRecord(body) || !('events' in body)) {
-		// Same distinction listTasks draws: a missing key is a payload we could
-		// not read, and reporting it as "no progress yet" would be the exact
-		// silent failure this surface exists to stop.
+		// A missing key is a payload we could not read, and reporting it as
+		// "no progress yet" would be the exact silent failure this surface
+		// exists to stop. (listTasks drew the same distinction until issue
+		// #1501 removed it with the /agents page, its only caller.)
 		throw new Error('Failed to parse task events response');
 	}
 	const rows = body['events'];
@@ -502,141 +440,3 @@ export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
 	'failed',
 	'cancelled'
 ]);
-
-// The states the server can move a task out of on its own, and therefore the
-// only reason to keep polling. Deliberately not the complement of
-// TERMINAL_STATUSES: `unknown` is neither finished nor known to be moving, so
-// it keeps its row but does not hold the poll timer open forever on a guess.
-export const IN_FLIGHT_STATUSES: ReadonlySet<TaskStatus> = new Set(['queued', 'running']);
-
-/*
- * Deployment-configuration sentinels.
- *
- * Both strings are consts in apps/control-plane/internal/agenttask/service.go
- * (`engineUnavailableMessage`, `engineLaunchFailedMessage`), persisted verbatim
- * into `error_message` when Engine.Launch fails. They are deliberately
- * provider-blind and generic, which also makes them stable enough to key
- * presentation off: a task carrying one of them did not fail because of
- * anything the user wrote, it never started at all.
- *
- * A drifted string degrades to the plain "failed" treatment, which is still
- * honest, so this is a soft dependency rather than a coupling that can break.
- */
-export const ENGINE_UNAVAILABLE_MESSAGE = 'agent engine is not available on this deployment';
-export const ENGINE_LAUNCH_FAILED_MESSAGE = 'agent engine could not start the task';
-
-export const isEngineUnavailable = (task: AgentTask): boolean =>
-	task.status === 'failed' && task.error_message === ENGINE_UNAVAILABLE_MESSAGE;
-
-export const isEngineLaunchFailure = (task: AgentTask): boolean =>
-	task.status === 'failed' && task.error_message === ENGINE_LAUNCH_FAILED_MESSAGE;
-
-export interface TaskView {
-	label: string;
-	detail: string;
-	/** Running is the only state whose dot is filled and live. */
-	live: boolean;
-	tone: 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
-}
-
-// A queued task only moves when something on the far side of the engine seam
-// picks it up. Past this threshold the row says plainly that it is not
-// progressing rather than implying imminent work.
-const STALE_QUEUE_AFTER_MS = 10 * 60 * 1000;
-
-/** Coarse elapsed label: "4m", "3h", "6d". */
-export const elapsed = (iso: string, nowMs: number): string => {
-	const then = Date.parse(iso);
-	if (Number.isNaN(then)) {
-		return '';
-	}
-	const minutes = Math.floor(Math.max(0, nowMs - then) / 60_000);
-	if (minutes < 1) return 'less than a minute';
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h`;
-	return `${Math.floor(hours / 24)}d`;
-};
-
-/**
- * Maps a wire task onto what a person should read.
- *
- * The two engine sentinels are the reason this function exists. Both are
- * deployment configuration, not user error and not really a task failure:
- * nothing ran, nothing was wrong with the request. They get their own
- * "Blocked" label in the warning register so they never sit next to a genuine
- * failure wearing the same red.
- */
-export const describeTask = (task: AgentTask, nowMs: number): TaskView => {
-	switch (task.status) {
-		case 'queued': {
-			const createdMs = Date.parse(task.created_at);
-			const stale = !Number.isNaN(createdMs) && nowMs - createdMs > STALE_QUEUE_AFTER_MS;
-			return {
-				label: 'Queued',
-				tone: 'neutral',
-				live: false,
-				detail: stale
-					? `Queued for ${elapsed(task.created_at, nowMs)} with nothing picking it up. Cancel it to clear it from the list.`
-					: 'Waiting for a sandbox to pick it up.'
-			};
-		}
-		case 'running':
-			return {
-				label: 'Running',
-				tone: 'accent',
-				live: true,
-				detail:
-					'Working now. There is no live transcript yet, so this view checks for a result every few seconds.'
-			};
-		case 'succeeded':
-			return {
-				label: 'Done',
-				tone: 'success',
-				live: false,
-				detail: task.result_summary_ref ? 'Finished. The result reference is below.' : 'Finished.'
-			};
-		case 'cancelled':
-			return {
-				label: 'Cancelled',
-				tone: 'neutral',
-				live: false,
-				detail: 'You stopped this task before it finished.'
-			};
-		case 'unknown':
-			return {
-				label: 'Unknown',
-				tone: 'neutral',
-				live: false,
-				detail:
-					'This task is in a state this page does not recognise, so there is nothing reliable to say about it yet. It is still recorded against your account. Reload to check it again.'
-			};
-		case 'failed':
-		default: {
-			if (isEngineUnavailable(task)) {
-				return {
-					label: 'Blocked',
-					tone: 'warning',
-					live: false,
-					detail:
-						'This deployment has no agent runtime configured, so the task was recorded but never started. Nothing was wrong with what you asked for.'
-				};
-			}
-			if (isEngineLaunchFailure(task)) {
-				return {
-					label: 'Blocked',
-					tone: 'warning',
-					live: false,
-					detail:
-						'The agent runtime refused to start this task, so nothing ran. Trying again may work; if it keeps happening it is a deployment problem, not your task.'
-				};
-			}
-			return {
-				label: 'Failed',
-				tone: 'danger',
-				live: false,
-				detail: task.error_message || 'The task stopped before producing a result.'
-			};
-		}
-	}
-};

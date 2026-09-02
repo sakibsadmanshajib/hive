@@ -2,18 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
 	AgentTaskError,
-	cancelTask,
 	createTask,
 	decodeTask,
-	describeTask,
-	canStartTask,
 	describeRefusal,
 	decodeEvent,
-	ENGINE_UNAVAILABLE_MESSAGE,
 	EVENT_PAGE_SIZE,
 	getTask,
-	getTaskEvents,
-	listTasks
+	getTaskEvents
 } from './agentTasks';
 
 const row = (over: Record<string, unknown> = {}) => ({
@@ -59,38 +54,16 @@ describe('decodeTask', () => {
 	});
 });
 
-describe('describeTask', () => {
-	const now = Date.parse('2026-08-17T10:05:00Z');
-
-	it('renders a task with no recorded goal without pretending it has one', () => {
-		// Three rows on the deployed list are in exactly this state. They must
-		// read as deliberate, not broken.
-		const decoded = decodeTask(row({ instructions: '' }));
-		expect(decoded?.instructions).toBe('');
-		expect(describeTask(decoded!, now).label).toBe('Running');
-	});
-
-	it('separates a deployment with no runtime from a task that really failed', () => {
-		const blocked = decodeTask(
-			row({ status: 'failed', error_message: ENGINE_UNAVAILABLE_MESSAGE })
-		)!;
-		const failed = decodeTask(row({ status: 'failed', error_message: 'its session was lost' }))!;
-
-		expect(describeTask(blocked, now).label).toBe('Blocked');
-		expect(describeTask(blocked, now).tone).toBe('warning');
-		expect(describeTask(failed, now).label).toBe('Failed');
-		// The #921 row. Its own sentence survives rather than being replaced by a
-		// generic one, because the sentence is the only evidence the user gets.
-		expect(describeTask(failed, now).detail).toBe('its session was lost');
-	});
-
-	it('says plainly when a queued task has been sitting there', () => {
-		const stale = decodeTask(row({ status: 'queued', created_at: '2026-08-17T09:00:00Z' }))!;
-		expect(describeTask(stale, now).detail).toContain('nothing picking it up');
-	});
-});
-
-describe('the four calls', () => {
+/*
+ * Issue #1501 retired the /agents page, and with it listTasks, cancelTask,
+ * canStartTask and describeTask. The tests that only exercised those went with
+ * them. The two below did NOT: id escaping and the two error vocabularies are
+ * behaviours of `raise` and of the shared URL building, which every surviving
+ * call still runs, so they are retargeted onto getTask rather than deleted.
+ * Deleting them would have quietly dropped real coverage under cover of a
+ * removal.
+ */
+describe('the calls the composer makes', () => {
 	let fetchMock: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
@@ -100,20 +73,6 @@ describe('the four calls', () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
-	});
-
-	it('lists through Open WebUI, never through edge-api directly', async () => {
-		// Load bearing. The browser has no credential edge-api accepts, so a call
-		// that went straight there would 401 for every signed-in user.
-		fetchMock.mockResolvedValue(jsonResponse({ tasks: [row()] }));
-
-		const tasks = await listTasks('owui-session-token');
-
-		expect(tasks).toHaveLength(1);
-		const [url, init] = fetchMock.mock.calls[0];
-		expect(url).toBe('/api/v1/hive/agent/tasks');
-		expect(init.method).toBe('GET');
-		expect(init.headers.authorization).toBe('Bearer owui-session-token');
 	});
 
 	it('sends the pack and the goal, and nothing else', async () => {
@@ -130,27 +89,30 @@ describe('the four calls', () => {
 		});
 	});
 
-	it('escapes the task id into the cancel path', async () => {
-		fetchMock.mockResolvedValue(jsonResponse(row({ status: 'cancelled' })));
+	it('escapes the task id into the path', async () => {
+		// Retargeted from cancelTask (#1501). The escaping is what stops a task
+		// id from walking out of its own path segment, and every by-id call
+		// still builds a URL this way.
+		fetchMock.mockResolvedValue(jsonResponse(row()));
 
-		await cancelTask('owui-session-token', 'a b/../c');
+		await getTask('owui-session-token', 'a b/../c');
 
-		expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/hive/agent/tasks/a%20b%2F..%2Fc/cancel');
+		expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/hive/agent/tasks/a%20b%2F..%2Fc');
 	});
 
 	it('surfaces the server sentence from either error vocabulary', async () => {
 		fetchMock.mockResolvedValue(
 			jsonResponse({ error: { message: 'Cowork is not enabled for this tenant.' } }, 403)
 		);
-		await expect(listTasks('t')).rejects.toThrow('Cowork is not enabled for this tenant.');
+		await expect(getTask('t', 'x')).rejects.toThrow('Cowork is not enabled for this tenant.');
 
 		fetchMock.mockResolvedValue(
 			jsonResponse({ detail: 'Your Hive sign-in could not be confirmed.' }, 401)
 		);
 		// The sentence, not only the type: extraction regressing to the generic
 		// fallback would still throw the right class with the wrong text.
-		await expect(listTasks('t')).rejects.toThrow('Your Hive sign-in could not be confirmed.');
-		await expect(listTasks('t')).rejects.toBeInstanceOf(AgentTaskError);
+		await expect(getTask('t', 'x')).rejects.toThrow('Your Hive sign-in could not be confirmed.');
+		await expect(getTask('t', 'x')).rejects.toBeInstanceOf(AgentTaskError);
 	});
 
 	it('separates a refusal from a failure worth retrying', () => {
@@ -172,38 +134,6 @@ describe('the four calls', () => {
 		expect(gated.message).toContain('administrator');
 	});
 
-	it('reads a null tasks array as an empty list, because Go marshals nil that way', async () => {
-		fetchMock.mockResolvedValue(jsonResponse({ tasks: null }));
-		await expect(listTasks('t')).resolves.toEqual([]);
-	});
-
-	it('refuses to report an unreadable payload as an empty list', async () => {
-		// Saying "no tasks" when the truth is "could not read the answer" is the
-		// exact failure this surface exists to stop making.
-		for (const body of [{}, { tasks: 'nope' }, { tasks: { a: 1 } }]) {
-			fetchMock.mockResolvedValue(jsonResponse(body));
-			await expect(listTasks('t')).rejects.toThrow('Failed to parse tasks response');
-		}
-	});
-});
-
-describe('canStartTask', () => {
-	const base = { instructions: 'do a thing', submitting: false, blocked: null };
-
-	it('refuses to submit into a surface that is refused', () => {
-		// The rough edge this closes: a tenant without the feature could type a
-		// brief and press send into a surface that could only answer no.
-		expect(canStartTask(base)).toBe(true);
-		expect(
-			canStartTask({ ...base, blocked: { kind: 'not-enabled', message: 'x' } })
-		).toBe(false);
-		expect(canStartTask({ ...base, blocked: { kind: 'signin', message: 'x' } })).toBe(false);
-	});
-
-	it('still refuses an empty brief and a submission already in flight', () => {
-		expect(canStartTask({ ...base, instructions: '   ' })).toBe(false);
-		expect(canStartTask({ ...base, submitting: true })).toBe(false);
-	});
 });
 
 const eventRow = (over: Record<string, unknown> = {}) => ({

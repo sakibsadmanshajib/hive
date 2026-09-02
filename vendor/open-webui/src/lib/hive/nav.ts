@@ -58,8 +58,21 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 	 * agent is doing nor steer it, because the surface that would carry both is
 	 * somewhere else.
 	 *
-	 * The '/agents' route itself survives, unlinked, so runs submitted before
-	 * this change are still reachable by URL. It gets no row.
+	 * The '/agents' route used to survive here, unlinked, so that runs
+	 * submitted before this change stayed reachable by URL. Issue #1501
+	 * retired it: an unlinked second destination is still a second
+	 * destination, and it carried its own submit form and pack selector, so
+	 * it was a second way to START a run rather than only a way to read old
+	 * ones. It now 404s through Caddyfile.owui's @removedSurfaces.
+	 *
+	 * That reachability argument was real rather than a fig leaf, and it is
+	 * why the route outlived #944: measured on the demo box, only 13 of 90
+	 * agent_tasks rows are referenced by a conversation, so 77 of them were
+	 * reachable through that page and nowhere else. Retiring it accepts that
+	 * loss on this box, where those rows are agent-generated test artifacts
+	 * that remain in the database. The general case is issue #1534 and is NOT
+	 * settled by this change: the same removal on a customer deployment
+	 * strands real work.
 	 */
 	/*
 	 * There is no Knowledge row (#1502), and the condition the previous comment
@@ -72,9 +85,17 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 	 * upload and delete. D-045 ruling 2 eliminates Knowledge rather than
 	 * renaming it.
 	 *
-	 * The '/knowledge' ROUTE survives, unlinked, exactly as '/agents' does
-	 * above: removing a row is not deleting a page, and what should become of
-	 * that page is issue #1505, not this change.
+	 * The '/knowledge' ROUTE survives, unlinked: removing a row is not
+	 * deleting a page, and what should become of that page is issue #1505,
+	 * not this change.
+	 *
+	 * This used to read "exactly as '/agents' does above". That comparison
+	 * died with issue #1501, which deleted the '/agents' page rather than
+	 * merely unlinking it, so the two are no longer the same case: '/agents'
+	 * carried its own submit form and was a second way to START a run, while
+	 * '/knowledge' is a read surface over rows Projects already owns. Only
+	 * the dead comparison is edited here; whether '/knowledge' should follow
+	 * is still #1505 and still not this change.
 	 */
 	{
 		/*
@@ -129,7 +150,8 @@ const normalizePath = (pathname: string): string => {
 		return '/';
 	}
 	// Trailing slashes arrive from typed URLs and from SvelteKit's own
-	// trailingSlash handling; '/agents/' and '/agents' are one destination.
+	// trailingSlash handling; '/knowledge/' and '/knowledge' are one
+	// destination. (The example here used to be '/agents', retired in #1501.)
 	const trimmed = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
 	return trimmed === '' ? '/' : trimmed;
 };

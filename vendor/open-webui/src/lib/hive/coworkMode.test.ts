@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -268,6 +268,34 @@ describe('the composer actually carries the mode', () => {
  * the source-level half of that; the count-greater-than-zero half is the
  * screenshot on the pull request.
  */
+/*
+ * Issue #1501. The agent surface is a mode of the composer and not a place you
+ * go (D-045), so the second destination is gone rather than unlinked.
+ *
+ * Only the component is asserted here, and the route file deliberately is NOT.
+ * scripts/test-owui-hive-frontend.sh mirrors lib/hive recursively but copies
+ * only a named handful of routes, so an absence assertion about
+ * routes/(app)/agents would pass in that scratch tree whether or not the file
+ * exists in the real one. That was written, run, and measured before being
+ * replaced: with the route file restored, the whole suite still reported 282
+ * passing. A guard that cannot go red is worse than no guard, because it reads
+ * as coverage.
+ *
+ * The route's absence is asserted in scripts/test_caddy_one_front_door.py
+ * instead, which runs against the real repository, alongside the
+ * @removedSurfaces rule that 404s the path in every deployment.
+ */
+describe('the /agents destination stays retired', () => {
+	it('has no task-list component left behind for it', () => {
+		// AgentTasks.svelte was mounted by that route and nothing else. Left in
+		// the tree it would be 847 lines of dead code that still compiles, which
+		// is how a retired surface quietly comes back. lib/hive IS mirrored
+		// recursively, so this one bites in both lanes; verified by restoring
+		// the file and watching exactly this test fail.
+		expect(existsSync(resolve(here, './AgentTasks.svelte'))).toBe(false);
+	});
+});
+
 describe('the cowork row offers the pack rather than stating it', () => {
 	const row = readComponent('./ComposerCoworkRow.svelte');
 
