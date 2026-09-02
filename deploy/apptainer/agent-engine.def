@@ -7,7 +7,14 @@ From: nikolaik/python-nodejs:python3.14-nodejs24-bookworm
 
 %files
     ../../vendor/openhands /opt/hive/vendor/openhands
-    ../../apps/agent-engine/packs /opt/hive/packs
+# The packs are deliberately NOT baked in. They used to be, at
+# /opt/hive/packs, and nothing in this image ever opened that path: the
+# vendored SDK loads AGENTS.md and .agents/skills from the conversation's own
+# working directory and from nowhere else, so a copy anywhere but there is
+# unread by construction (issue #1360). The launcher copies the pack into the
+# session working directory before launch, and that directory is what gets
+# bind-mounted as /workspace. Baking a second, always-stale copy back in would
+# only recreate the impression that this image carries the pack.
 
 %post
     set -eu
