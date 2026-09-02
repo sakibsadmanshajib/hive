@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
 )
@@ -65,14 +64,15 @@ func (e *SandboxEngine) finalFilesOf(sess *session) ([]controlclient.WorkspaceFi
 // folder shows what the task produced, and the pack is what it started with.
 // Shared by the live-session Files() path and reap's final-snapshot capture.
 //
-// Only an entry that still carries its planted timestamp is hidden. Filtering
-// on the name alone would let the sandboxed agent conceal a file simply by
-// calling it AGENTS.md, and the pack now carries untrusted document content
-// into the model's context, so "an instruction told it to write there" is a
-// reachable state rather than a hypothetical one.
+// Only an entry that is still byte for byte what the pack planted is hidden.
+// Filtering on the name alone would let the sandboxed agent conceal a file
+// simply by calling it AGENTS.md, and the pack now carries untrusted document
+// content into the model's context, so "an instruction told it to write there"
+// is a reachable state rather than a hypothetical one. A timestamp would not
+// have closed it either: the agent has a shell and can restore an mtime.
 //
 // ponytail: no recursion; add a walk when a panel needs nested paths.
-func listWorkspaceFiles(dir string, packFiles map[string]time.Time) ([]controlclient.WorkspaceFile, error) {
+func listWorkspaceFiles(dir string, packFiles map[string]packEntry) ([]controlclient.WorkspaceFile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -82,13 +82,25 @@ func listWorkspaceFiles(dir string, packFiles map[string]time.Time) ([]controlcl
 		}
 		return nil, fmt.Errorf("engine: list workspace: %w", err)
 	}
+	// Opened once per listing, and only when there is something to compare
+	// against: re-deriving a planted entry's identity reads the file, and
+	// every read on this path goes through a root rather than a joined path.
+	var root *os.Root
+	if len(packFiles) > 0 {
+		root, err = os.OpenRoot(dir)
+		if err != nil {
+			return nil, fmt.Errorf("engine: open workspace: %w", err)
+		}
+		defer func() { _ = root.Close() }()
+	}
+
 	out := make([]controlclient.WorkspaceFile, 0, len(entries))
 	for _, entry := range entries {
 		info, infoErr := entry.Info()
 		if infoErr != nil {
 			continue // raced a deletion mid-listing; skip, never fail the batch
 		}
-		if planted, ok := packFiles[entry.Name()]; ok && info.ModTime().Equal(planted) {
+		if planted, ok := packFiles[entry.Name()]; ok && matchesPlanted(root, entry.Name(), info, planted) {
 			continue
 		}
 		out = append(out, controlclient.WorkspaceFile{

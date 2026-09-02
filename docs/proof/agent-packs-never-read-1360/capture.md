@@ -77,7 +77,7 @@ is task framing and default tooling emphasis only.
   - `.agents/skills/deck-generation/SKILL.md` — self-contained HTML slide deck
     generation, published through the artifacts API.
   - `.agents/skills/code-canvas/SKILL.md` — self-contained HTML/JS code
-    preview, left in the workspace as a file; there is no host side publish
+    preview, left in the workspace as a file; there is no host-side publish
     step for it yet, so never promise the user a URL for one.
 - When the task's instructions open with a `Skill: <name>` line, read that
   skill's `.agents/skills/<name>/SKILL.md` and follow it, before deciding on

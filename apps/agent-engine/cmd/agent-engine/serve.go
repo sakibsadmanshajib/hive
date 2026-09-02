@@ -143,8 +143,11 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 	// typo, a moved checkout, or a unit whose REPO_DIR drifted would otherwise
 	// leave a launcher that boots healthy and fails every task. Refusing to
 	// start is the honest signal for a process that cannot serve one.
-	if _, err := os.Stat(packsDir); err != nil {
-		return fmt.Errorf("agent-engine: HIVE_AGENT_ENGINE_PACKS_DIR %s is not readable, every task would fail closed: %w", packsDir, err)
+	// os.ReadDir rather than os.Stat: a stat is satisfied by a regular file
+	// and says nothing about whether the directory can be read, and both of
+	// those launch exactly the same way, which is not at all.
+	if _, err := os.ReadDir(packsDir); err != nil {
+		return fmt.Errorf("agent-engine: HIVE_AGENT_ENGINE_PACKS_DIR %s is not a readable directory, every task would fail closed: %w", packsDir, err)
 	}
 
 	llmAPIKey := os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY")

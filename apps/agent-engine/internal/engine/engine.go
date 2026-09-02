@@ -33,6 +33,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -346,10 +348,10 @@ type session struct {
 	bearerJWT string
 
 	// packFiles are the top-level entries materializePack planted in
-	// workingDir at launch, with the timestamp each was planted with. The
-	// workspace listing hides an entry that still matches: pack scaffolding
-	// is not output of this task, but an entry the task rewrote is.
-	packFiles map[string]time.Time
+	// workingDir at launch, identified by content. The workspace listing
+	// hides an entry that still matches: pack scaffolding is not output of
+	// this task, but an entry the task rewrote is.
+	packFiles map[string]packEntry
 
 	// finishMu serializes finishTerminal for this one session: two Status
 	// calls can each independently observe the same terminal execution
@@ -416,12 +418,14 @@ func New(cfg Config) *SandboxEngine {
 }
 
 // materializePack copies the named pack out of packsDir into workingDir and
-// returns the top-level entries it planted there, each with the modification
-// time it was planted with. The workspace listing (events.go) filters those
-// back out so the panel's working folder shows what the task produced rather
-// than the scaffolding it started with, and it compares the timestamp too, so
-// an entry the task rewrote reappears instead of staying hidden under a name
-// the pack happened to use.
+// returns the top-level entries it planted there, each identified by content
+// rather than by name. The workspace listing (events.go) filters those back
+// out so the panel's working folder shows what the task produced rather than
+// the scaffolding it started with, and it re-derives the identity when it
+// lists, so an entry the task rewrote reappears instead of staying hidden
+// under a name the pack happened to use. Content rather than a timestamp
+// because the sandboxed agent has a shell: it can restore an mtime, and it
+// cannot restore a digest while also smuggling anything into the file.
 //
 // Two different confinements, because they cover two different things and
 // conflating them is how the next reader builds something unsafe on top:
@@ -438,7 +442,7 @@ func New(cfg Config) *SandboxEngine {
 // Refusing is right rather than merely safe here. No shipped pack contains a
 // symlink, packs are repo authored, and a pack that grows one is either a
 // mistake or something that wants reviewing, not copying.
-func materializePack(packsDir, pack, workingDir string) (map[string]time.Time, error) {
+func materializePack(packsDir, pack, workingDir string) (map[string]packEntry, error) {
 	root, err := os.OpenRoot(packsDir)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open packs directory %s: %w", packsDir, err)
@@ -468,11 +472,6 @@ func materializePack(packsDir, pack, workingDir string) (map[string]time.Time, e
 		return nil, fmt.Errorf("engine: copy pack %s into the agent working directory: %w", pack, err)
 	}
 
-	// Stamped from the destination, not the source: os.CopyFS writes fresh
-	// files rather than preserving the pack's timestamps, so the source mtime
-	// would never match what the listing later reads and every planted entry
-	// would show up again immediately.
-	//
 	// Read back through a second os.Root, on the workspace this time. A
 	// directory entry name cannot contain a separator, so a plain join would
 	// be safe in fact, but this stays symmetrical with the read above and
@@ -484,15 +483,75 @@ func materializePack(packsDir, pack, workingDir string) (map[string]time.Time, e
 	}
 	defer func() { _ = workRoot.Close() }()
 
-	planted := make(map[string]time.Time, len(entries))
+	planted := make(map[string]packEntry, len(entries))
 	for _, entry := range entries {
-		info, err := workRoot.Lstat(entry.Name())
+		p, err := describePlanted(workRoot, entry.Name())
 		if err != nil {
-			return nil, fmt.Errorf("engine: stat planted pack entry %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("engine: read back planted pack entry %s: %w", entry.Name(), err)
 		}
-		planted[entry.Name()] = info.ModTime()
+		planted[entry.Name()] = p
 	}
 	return planted, nil
+}
+
+// packEntry identifies one top-level entry the pack planted in the workspace,
+// closely enough that the listing can tell the pack's own file apart from one
+// the task rewrote under the same name. A directory carries no digest: this
+// listing is top level only, so a planted directory's contents were never
+// listed and hiding the entry conceals nothing that was ever visible.
+type packEntry struct {
+	isDir  bool
+	size   int64
+	digest string
+}
+
+// describePlanted reads one just-planted entry back out of the workspace.
+func describePlanted(root *os.Root, name string) (packEntry, error) {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return packEntry{}, err
+	}
+	if info.IsDir() {
+		return packEntry{isDir: true}, nil
+	}
+	digest, err := digestIn(root, name)
+	if err != nil {
+		return packEntry{}, err
+	}
+	return packEntry{size: info.Size(), digest: digest}, nil
+}
+
+// digestIn hashes one file inside root. Confined to root for the same reason
+// every other access on this path is.
+func digestIn(root *os.Root, name string) (string, error) {
+	f, err := root.Open(name)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// matchesPlanted reports whether the entry now at name inside root is still
+// byte for byte what materializePack planted. The size check comes first so a
+// task that replaced a small pack file with a large one is answered without
+// hashing it.
+func matchesPlanted(root *os.Root, name string, info os.FileInfo, p packEntry) bool {
+	if info.IsDir() != p.isDir {
+		return false
+	}
+	if p.isDir {
+		return true
+	}
+	if info.Size() != p.size {
+		return false
+	}
+	digest, err := digestIn(root, name)
+	return err == nil && digest == p.digest
 }
 
 // freePort asks the OS for an ephemeral TCP port and immediately releases

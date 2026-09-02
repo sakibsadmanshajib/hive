@@ -417,20 +417,53 @@ func TestServe_MissingRequiredEnvVar(t *testing.T) {
 // issue #1360 made a launch fail closed on it, so it refuses to boot rather
 // than reporting healthy and failing every task with a warn line nobody reads.
 func TestServe_RefusesToStartWhenThePacksDirIsNotReadable(t *testing.T) {
-	dir := t.TempDir()
-	for _, v := range requiredServeEnvVars {
-		t.Setenv(v, "dummy-value")
+	// Each case is a packs path that cannot serve a single task. A missing
+	// one is the typo or the drifted checkout; a regular file and an
+	// unreadable directory both satisfy a plain stat and neither can be
+	// listed, which is what a launch actually does to it.
+	cases := map[string]func(t *testing.T, dir string) string{
+		"missing": func(_ *testing.T, dir string) string {
+			return filepath.Join(dir, "packs-that-are-not-there")
+		},
+		"regular file": func(t *testing.T, dir string) string {
+			path := filepath.Join(dir, "packs-is-a-file")
+			if err := os.WriteFile(path, []byte("not a directory"), 0o600); err != nil {
+				t.Fatalf("write file: %v", err)
+			}
+			return path
+		},
+		"unreadable directory": func(t *testing.T, dir string) string {
+			path := filepath.Join(dir, "packs-unreadable")
+			if err := os.Mkdir(path, 0o000); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			// Restored so the test framework can clean the tree up.
+			t.Cleanup(func() { _ = os.Chmod(path, 0o700) })
+			return path
+		},
 	}
-	t.Setenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT", filepath.Join(dir, "workspace"))
-	t.Setenv("HIVE_AGENT_ENGINE_RUN_DIR", filepath.Join(dir, "run"))
-	t.Setenv("HIVE_AGENT_ENGINE_PACKS_DIR", filepath.Join(dir, "packs-that-are-not-there"))
 
-	err := serve(filepath.Join(dir, "s.sock"), "http://127.0.0.1:1", "tok")
-	if err == nil {
-		t.Fatal("expected serve() to refuse to start with an unreadable packs directory")
-	}
-	if !strings.Contains(err.Error(), "HIVE_AGENT_ENGINE_PACKS_DIR") {
-		t.Fatalf("expected the error to name the variable, got: %v", err)
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			if name == "unreadable directory" && os.Geteuid() == 0 {
+				t.Skip("root reads a 0000 directory regardless of its mode")
+			}
+			dir := t.TempDir()
+			for _, v := range requiredServeEnvVars {
+				t.Setenv(v, "dummy-value")
+			}
+			t.Setenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT", filepath.Join(dir, "workspace"))
+			t.Setenv("HIVE_AGENT_ENGINE_RUN_DIR", filepath.Join(dir, "run"))
+			t.Setenv("HIVE_AGENT_ENGINE_PACKS_DIR", setup(t, dir))
+
+			err := serve(filepath.Join(dir, "s.sock"), "http://127.0.0.1:1", "tok")
+			if err == nil {
+				t.Fatal("expected serve() to refuse to start with an unusable packs directory")
+			}
+			if !strings.Contains(err.Error(), "HIVE_AGENT_ENGINE_PACKS_DIR") {
+				t.Fatalf("expected the error to name the variable, got: %v", err)
+			}
+		})
 	}
 }
 

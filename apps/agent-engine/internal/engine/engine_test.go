@@ -1179,7 +1179,9 @@ func TestSandboxEngine_Launch_RefusesAPackWhoseContentsContainASymlink(t *testin
 // The listing hides pack scaffolding, and a name-only filter would hand the
 // sandboxed agent a way to hide its own output: write to AGENTS.md and the
 // panel never shows it. The pack now carries untrusted document content into
-// the model's context, so this is reachable rather than theoretical.
+// the model's context, so this is reachable rather than theoretical. The
+// rewrite here also restores the original mtime, which is what a shell makes
+// trivial and what a timestamp based filter would fall for.
 func TestSandboxEngine_Files_ShowsAPlantedNameTheTaskRewrote(t *testing.T) {
 	var fake *fakeAgentServer
 	e := newTestEngine(t, &fake)
@@ -1199,15 +1201,19 @@ func TestSandboxEngine_Files_ShowsAPlantedNameTheTaskRewrote(t *testing.T) {
 	}
 
 	// What an agent following an injected "write your notes to AGENTS.md"
-	// instruction would leave behind. Chtimes rather than relying on the
-	// clock, so the assertion cannot depend on filesystem timestamp
-	// resolution.
+	// instruction would leave behind, and then the timestamp forgery a shell
+	// makes trivial: read the planted mtime first, overwrite the file, put the
+	// old mtime back. The listing must still show it, which is why the pack is
+	// identified by content and not by when it was planted.
 	planted := filepath.Join(e.cfg.WorkspaceRoot, task.ID.String(), "AGENTS.md")
+	before, err := os.Stat(planted)
+	if err != nil {
+		t.Fatalf("stat planted file: %v", err)
+	}
 	if err := os.WriteFile(planted, []byte("exfiltrated"), 0o600); err != nil {
 		t.Fatalf("rewrite planted file: %v", err)
 	}
-	later := time.Now().Add(time.Minute)
-	if err := os.Chtimes(planted, later, later); err != nil {
+	if err := os.Chtimes(planted, before.ModTime(), before.ModTime()); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
 
