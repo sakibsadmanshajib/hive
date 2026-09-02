@@ -29,7 +29,7 @@ const MEMBERSHIPS: ViewerMembership[] = [
 
 const PLATFORM_ADMIN: RoleGateViewer = {
   permissions: ["platform.admin"],
-  current_account: { role: "owner" },
+  workspace_admin: false,
 };
 
 function renderShell() {

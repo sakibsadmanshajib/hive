@@ -73,11 +73,12 @@ test.describe("workspace admin panels", () => {
     ).toBeVisible();
 
     await expect(page.getByText("Admin access required")).toHaveCount(0);
-    // "Managed by your administrator" is the title of the 403 EmptyState as
-    // well as the read-only row label, so the bare string passes on a fully
-    // denied page too. Scope it to a gate row: the wall renders no list item.
+    // The read-only row label. It used to read "Managed by your administrator",
+    // which was also the title of the 403 EmptyState, so the bare string passed
+    // on a fully denied page too; issue #1660 renamed the row label, and this
+    // stays scoped to a list item anyway since the wall renders none.
     await expect(
-      page.locator("li", { hasText: "Managed by your administrator" }).first()
+      page.locator("li", { hasText: "Managed by the platform" }).first()
     ).toBeVisible();
 
     const toggles = page.getByRole("switch");
@@ -105,8 +106,8 @@ test.describe("workspace admin panels", () => {
     ).toBeVisible();
 
     // Only manageable gates render a switch; unmanageable ones render the
-    // "Managed by your administrator" label instead, so any switch on the page
-    // is one this viewer is allowed to write.
+    // "Managed by the platform" label instead, so any switch on the page is
+    // one this viewer is allowed to write.
     const toggle = page.getByRole("switch").first();
     await expect(toggle).toBeVisible();
 

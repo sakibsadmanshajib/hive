@@ -24,11 +24,12 @@ import (
 
 // Service encapsulates all accounts business logic.
 type Service struct {
-	repo    Repository
-	policy  authz.Policy
-	roleSvc *platform.RoleService // optional — see WithRoleService
-	billing *pgxpool.Pool         // optional — see WithBillingPool
-	mailer  InvitationMailer      // optional — see WithInvitationMailer
+	repo          Repository
+	policy        authz.Policy
+	roleSvc       *platform.RoleService       // optional — see WithRoleService
+	tenantRoleSvc *platform.TenantRoleService // optional — see WithTenantRoleService
+	billing       *pgxpool.Pool               // optional — see WithBillingPool
+	mailer        InvitationMailer            // optional — see WithInvitationMailer
 }
 
 // NewService returns a new accounts Service.
@@ -46,6 +47,21 @@ func NewService(repo Repository) *Service {
 func (s *Service) WithRoleService(roleSvc *platform.RoleService) *Service {
 	cloned := *s
 	cloned.roleSvc = roleSvc
+	return &cloned
+}
+
+// WithTenantRoleService returns a copy of the Service wired with the tenant
+// role service so EnsureViewerContext can report ViewerContext.WorkspaceAdmin
+// from public.tenant_users, the table platform.WorkspaceAdminGate gates on.
+//
+// Optional, and a missing one is reported as not-an-administrator rather than
+// skipped: without it the viewer response says nobody administers a workspace,
+// which leaves the console denying a surface the control-plane would have
+// allowed. The opposite default would restore issue #1660, where the console
+// admitted a caller the control-plane refuses.
+func (s *Service) WithTenantRoleService(tenantRoleSvc *platform.TenantRoleService) *Service {
+	cloned := *s
+	cloned.tenantRoleSvc = tenantRoleSvc
 	return &cloned
 }
 
@@ -165,6 +181,20 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 		permissions = []string{}
 	}
 
+	// Workspace administration is a tenant-scoped decision, so it is resolved
+	// here the way platform.WorkspaceAdminGate resolves it on every request it
+	// guards: the platform-admin overlay first, then an ACTIVE OWNER row in
+	// public.tenant_users on the tenant this caller has selected. Nothing here
+	// consults account_memberships, which is the conflation issue #1660 fixes.
+	workspaceAdmin := isAdmin
+	if !workspaceAdmin && s.tenantRoleSvc != nil && viewer.TenantID != uuid.Nil {
+		isTenantOwner, err := s.tenantRoleSvc.IsTenantOwner(ctx, viewer.UserID, viewer.TenantID)
+		if err != nil {
+			return ViewerContext{}, fmt.Errorf("accounts: tenant owner lookup: %w", err)
+		}
+		workspaceAdmin = isTenantOwner
+	}
+
 	return ViewerContext{
 		User: ViewerUser{
 			ID:            viewer.UserID,
@@ -177,8 +207,9 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 			AccountType: currentAcct.AccountType,
 			Role:        chosen.Role,
 		},
-		Memberships: summaries,
-		Permissions: permissions,
+		Memberships:    summaries,
+		Permissions:    permissions,
+		WorkspaceAdmin: workspaceAdmin,
 	}, nil
 }
 

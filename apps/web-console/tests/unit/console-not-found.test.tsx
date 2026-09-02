@@ -39,14 +39,16 @@ const VIEWER: Viewer = {
     },
   ],
   permissions: ["analytics.view"],
+  workspace_admin: false,
 };
 
 // A viewer who holds neither the platform-admin permission nor workspace
-// ownership, which is what both role gates refuse.
+// administration authority, which is what both role gates refuse.
 const PLAIN_MEMBER: Viewer = {
   ...VIEWER,
   current_account: { ...VIEWER.current_account, role: "member" },
   permissions: ["analytics.view"],
+  workspace_admin: false,
 };
 
 vi.mock("next/headers", () => ({

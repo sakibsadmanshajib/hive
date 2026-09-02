@@ -241,8 +241,8 @@ export function MarketplaceManager({
 
       {entries.length === 0 && !canCurate ? (
         <p className="text-sm text-[var(--color-ink-3)]">
-          No connectors have been published for this workspace yet. Ask your
-          administrator if you need one added.
+          No connectors have been published for this workspace yet. Publishing
+          to the catalog is a platform operation.
         </p>
       ) : null}
 

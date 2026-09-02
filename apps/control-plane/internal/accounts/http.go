@@ -38,6 +38,18 @@ func (h *Handler) WithRoleService(roleSvc *platform.RoleService) *Handler {
 	return &cloned
 }
 
+// WithTenantRoleService returns a copy of the handler whose underlying Service
+// is wired with the tenant role service, so GET /api/v1/viewer can report
+// workspace_admin from public.tenant_users: the table
+// platform.WorkspaceAdminGate gates the workspace-administration surfaces on,
+// as opposed to the account_memberships role the response already carries
+// (issue #1660).
+func (h *Handler) WithTenantRoleService(tenantRoleSvc *platform.TenantRoleService) *Handler {
+	cloned := *h
+	cloned.svc = h.svc.WithTenantRoleService(tenantRoleSvc)
+	return &cloned
+}
+
 // ServeHTTP dispatches requests to the appropriate sub-handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
@@ -543,6 +555,12 @@ func viewerContextResponse(vc ViewerContext) map[string]interface{} {
 			"role":         vc.CurrentAccount.Role,
 		},
 		"memberships": memberships,
+		// workspace_admin is the tenant-scoped administration signal (issue
+		// #1660). current_account.role above answers the billing-account
+		// question and the two deliberately disagree for a personal tenant's
+		// sole owner, so a client deciding whether to offer feature gates or
+		// marketplace reads this one.
+		"workspace_admin": vc.WorkspaceAdmin,
 		"permissions": func() []string {
 			if vc.Permissions == nil {
 				return []string{}

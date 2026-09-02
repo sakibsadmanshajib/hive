@@ -177,8 +177,12 @@ export function FeatureGateManager({ gates: initialGates }: FeatureGateManagerPr
                         }}
                       />
                     ) : (
+                      // An unmanageable gate is platform-admin only (issue
+                      // #758), so the label names the platform rather than
+                      // telling the reader to ask "your administrator", who on
+                      // a single-member workspace does not exist (issue #1660).
                       <span className="text-2xs text-[var(--color-ink-3)]">
-                        Managed by your administrator
+                        Managed by the platform
                       </span>
                     )}
                   </div>

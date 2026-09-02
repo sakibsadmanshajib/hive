@@ -18,7 +18,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import ProvidersPage from "../app/console/providers/page";
 import FeatureGatesPage from "../app/console/feature-gates/page";
 import MarketplacePage from "../app/console/marketplace/page";
-import type { Viewer } from "@/lib/control-plane/client";
+import { ControlPlaneError, type Viewer } from "@/lib/control-plane/client";
 
 // Hoisted: ProvidersPage/FeatureGatesPage/MarketplacePage are imported
 // statically above, so evaluating those imports (and the next/navigation +
@@ -81,7 +81,11 @@ vi.mock("@/lib/control-plane/client", () => ({
 // Full Viewer fixture, typed against the real interface so a drift between
 // this fixture and control-plane/client.ts's Viewer shape is a compile
 // error, not a silent gap. No casts.
-function viewerPayload(role: string, permissions: string[]): Viewer {
+function viewerPayload(
+  role: string,
+  permissions: string[],
+  workspaceAdmin = false,
+): Viewer {
   return {
     user: {
       id: "u1",
@@ -97,6 +101,7 @@ function viewerPayload(role: string, permissions: string[]): Viewer {
     },
     memberships: [],
     permissions,
+    workspace_admin: workspaceAdmin,
   };
 }
 
@@ -153,13 +158,13 @@ describe("server-side role gating of operator surfaces", () => {
     });
   });
 
-  it("renders feature gates and marketplace for a workspace owner", async () => {
+  it("renders feature gates and marketplace for a tenant workspace administrator", async () => {
     mockGetViewer.mockResolvedValue(
-      viewerPayload("owner", [
-        "members.invite",
-        "members.manage",
-        "workspace.settings",
-      ]),
+      viewerPayload(
+        "owner",
+        ["members.invite", "members.manage", "workspace.settings"],
+        true,
+      ),
     );
     const fgPage = PAGES["feature-gates"];
     const mktPage = PAGES.marketplace;
@@ -218,6 +223,61 @@ describe("server-side role gating of operator surfaces", () => {
     await Promise.resolve(PAGES.marketplace());
     expect(mockNotFound).not.toHaveBeenCalled();
     expect(mockGetMarketplaceEntries).toHaveBeenCalledTimes(1);
+  });
+
+  // Issue #1660. A personal tenant's sole owner is 'owner' in
+  // account_memberships and 'MEMBER' in tenant_users, deliberately
+  // (signup.insertPersonalMembership). Gating on the account role admitted
+  // them to a page whose data fetch the control-plane then answered 403,
+  // leaving them on an empty state that told them to ask an administrator who
+  // does not exist. The gate now reads the same tenant-scoped signal the
+  // backend does, so the page refuses before any fetch, exactly as it does for
+  // any other caller without workspace-administration authority.
+  it("404s feature gates and marketplace for a personal-tenant sole owner", async () => {
+    mockGetViewer.mockResolvedValue(
+      viewerPayload("owner", ["members.invite", "workspace.settings"], false),
+    );
+
+    for (const surface of ["feature-gates", "marketplace"] as const) {
+      await expect(Promise.resolve(PAGES[surface]())).rejects.toMatchObject({
+        digest: "NEXT_HTTP_ERROR_FALLBACK;404",
+      });
+    }
+    expect(mockGetFeatureGates).not.toHaveBeenCalled();
+    expect(mockGetMarketplaceEntries).not.toHaveBeenCalled();
+    expect(screen.queryByText(/administrator/i)).toBeNull();
+  });
+
+  // The other half of the same rule: a caller the control-plane genuinely
+  // refuses still gets told where the authority sits. This is the residual
+  // 403 path (a workspace administrator whose tenant membership changed
+  // between the viewer read and the data fetch), and its copy is correct
+  // there because somebody else really does hold the permission.
+  it("keeps the administrator-referral empty state for a caller the control-plane refuses", async () => {
+    mockGetViewer.mockResolvedValue(
+      viewerPayload("owner", ["workspace.settings"], true),
+    );
+    const denied = new ControlPlaneError(
+      403,
+      "workspace owner permission required",
+    );
+    mockGetFeatureGates.mockRejectedValue(denied);
+    mockGetMarketplaceEntries.mockRejectedValue(denied);
+
+    render(await PAGES["feature-gates"]());
+    expect(
+      screen.getByText(
+        "Ask your workspace owner or administrator if you need a capability turned on.",
+      ),
+    ).toBeTruthy();
+
+    cleanup();
+    render(await PAGES.marketplace());
+    expect(
+      screen.getByText(
+        "Ask your workspace owner or administrator if you need a connector enabled.",
+      ),
+    ).toBeTruthy();
   });
 });
 
