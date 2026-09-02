@@ -14,7 +14,7 @@
 	import { goto } from '$app/navigation';
 
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import { WEBUI_NAME } from '$lib/stores';
+	import { WEBUI_NAME, config, models, settings } from '$lib/stores';
 	import { uploadFile } from '$lib/apis/files';
 	import { getChatList } from '$lib/apis/chats';
 
@@ -24,6 +24,7 @@
 		addFileToProject,
 		bindChatToProject,
 		createBoundChat,
+		seedChatModels,
 		deleteProject,
 		getProject,
 		removeFileFromProject,
@@ -183,7 +184,25 @@
 		busy = true;
 		error = '';
 		try {
-			const chat = await createBoundChat(token, id);
+			// Born with a model, like any other new conversation: loadChat reads
+			// the models off the blob and has no default of its own, so a chat
+			// created without them opens with none selected and cannot be sent.
+			let sessionModels: unknown = null;
+			try {
+				sessionModels = JSON.parse(sessionStorage.selectedModels ?? 'null');
+			} catch {
+				sessionModels = null;
+			}
+			const chat = await createBoundChat(
+				token,
+				id,
+				seedChatModels(
+					($models ?? []).map((model) => model.id),
+					sessionModels,
+					$settings?.models,
+					$config?.default_models
+				)
+			);
 			await goto(`/c/${chat.id}`);
 		} catch (err) {
 			error =

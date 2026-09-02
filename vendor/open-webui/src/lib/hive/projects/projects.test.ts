@@ -11,6 +11,7 @@ import {
 	bindChatToProject,
 	createBoundChat,
 	createProject,
+	seedChatModels,
 	deleteProject,
 	getProject,
 	listProjects,
@@ -186,9 +187,35 @@ describe('projects data layer', () => {
 			return json({ id: 'c-new' });
 		}) as unknown as typeof fetch;
 
-		const chat = await createBoundChat('tok', 'k1', '/api/v1', fetchImpl);
+		const chat = await createBoundChat('tok', 'k1', ['m1'], '/api/v1', fetchImpl);
 		expect(chat.id).toBe('c-new');
-		expect((body.chat as Record<string, unknown>)[PROJECT_CHAT_KEY]).toBe('k1');
+		const blob = body.chat as Record<string, unknown>;
+		expect(blob[PROJECT_CHAT_KEY]).toBe('k1');
+		// An empty but well formed conversation, not the marker alone: a blob
+		// with no history makes loadChat call convertMessagesToHistory(undefined),
+		// which throws before the page renders, so the conversation this button
+		// creates could not be opened at all.
+		expect(blob.history).toEqual({ messages: {}, currentId: null });
+		expect(blob.messages).toEqual([]);
+		// And born with a model, because loadChat has no default to fall back on.
+		expect(blob.models).toEqual(['m1']);
+	});
+
+	it('picks the models a new conversation is born with the way a new chat does', () => {
+		const available = ['a', 'b', 'c'];
+		// Whatever the composer last used wins.
+		expect(seedChatModels(available, ['b'], ['a'], 'c')).toEqual(['b']);
+		// Then the person's own setting.
+		expect(seedChatModels(available, null, ['a'], 'c')).toEqual(['a']);
+		// Then the deployment default, comma separated as config carries it.
+		expect(seedChatModels(available, null, null, ' c , missing ')).toEqual(['c']);
+		// A stale name the person can no longer see is skipped, not seeded.
+		expect(seedChatModels(available, ['retired'], ['b'], 'c')).toEqual(['b']);
+		// Last resort is the first model they can see, so the conversation is
+		// never born unusable.
+		expect(seedChatModels(available, null, null, null)).toEqual(['a']);
+		// And with nothing at all to offer, an empty list rather than a throw.
+		expect(seedChatModels([], null, null, null)).toEqual([]);
 	});
 
 	it('resolves bound conversations by scanning the chat list and reading blobs', async () => {
