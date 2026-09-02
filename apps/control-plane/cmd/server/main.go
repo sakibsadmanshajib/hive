@@ -484,6 +484,15 @@ func main() {
 					mailCfg.Host, mailCfg.FromAddress,
 					accounts.InviteCapPerInviter, accounts.InviteCapPerTenant,
 					relayCaps.PerHour, relayCaps.PerDay)
+				// Every ceiling that spends this relay account, added up once
+				// and checked against what the account allows. Individually
+				// reasonable caps that sum past the allowance is how a shared
+				// relay dies, and until this line nothing anywhere added them.
+				budget := mailer.BudgetFromEnv(relayCaps)
+				log.Println(budget.Summary())
+				for _, warning := range budget.Warnings() {
+					log.Println(warning)
+				}
 			} else {
 				log.Println("WARN invitation mailer disabled: no public console origin configured " +
 					"(set WEB_CONSOLE_PUBLIC_URL or CONSOLE_APP_URL); invitations are issued with a copyable link instead")
