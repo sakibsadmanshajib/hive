@@ -414,19 +414,73 @@ func main() {
 		// requestIsLoopback is false because there is no request in scope at
 		// boot, which also means a loopback-only configuration is refused
 		// rather than baked into a link that is mailed to a stranger.
-		if mailCfg := mailer.ConfigFromEnv(); mailCfg.Configured() {
+		//
+		// The send cap (issue #1745) is a precondition for wiring the mailer at
+		// all, not a decoration on it. Invitations are the one path that mails
+		// an address the caller types, so without a counter to enforce the cap
+		// against, this deployment would be an open relay for anyone holding an
+		// account. No Redis, no mail: invitations still issue, and the console
+		// hands the inviting user the link, exactly as it does on a deployment
+		// with no relay configured.
+		if mailCfg := mailer.ConfigFromEnv(); mailCfg.Configured() && redisClient != nil {
 			if consoleURL := payments.ResolveConsoleBaseURL(false); consoleURL != "" {
-				accountsSvc = accountsSvc.WithInvitationMailer(
-					accounts.NewInvitationMailer(mailer.NewSMTPSender(mailCfg), consoleURL),
+				inviteLimit := func(limit int, window time.Duration, subject string) accounts.InvitationLimit {
+					return accounts.InvitationLimit{
+						Allow: signupguard.NewRateLimiter(
+							signupguard.NewRedisIncrementer(redisClient),
+							signupguard.RateLimitConfig{
+								Limit:     limit,
+								Window:    window,
+								Namespace: "invite",
+								Subject:   subject,
+							},
+						).Allow,
+						Window: window,
+					}
+				}
+				// The transport-wide ceiling, below the per-caller caps and
+				// counted across every future caller of this sender.
+				relayCeiling := signupguard.NewRateLimiter(
+					signupguard.NewRedisIncrementer(redisClient),
+					signupguard.RateLimitConfig{
+						Limit:     mailer.RelayCapPerWindow,
+						Window:    mailer.RelayCapWindow,
+						Namespace: "mail",
+						Subject:   "relay",
+					},
 				)
-				log.Printf("invitation mailer ready (relay %s, sender %s)", mailCfg.Host, mailCfg.FromAddress)
+				accountsSvc = accountsSvc.
+					WithInvitationMailer(accounts.NewInvitationMailer(
+						mailer.NewThrottledSender(mailer.NewSMTPSender(mailCfg), relayCeiling.Allow),
+						consoleURL,
+					)).
+					WithInvitationLimits(accounts.InvitationLimits{
+						Inviter:        inviteLimit(accounts.InviteCapPerInviter, accounts.InviteCapPerInviterWindow, "user"),
+						Tenant:         inviteLimit(accounts.InviteCapPerTenant, accounts.InviteCapPerTenantWindow, "account"),
+						RecipientBurst: inviteLimit(accounts.InviteCapPerRecipientBurst, accounts.InviteCapPerRecipientBurstWindow, "recipient"),
+						RecipientDaily: inviteLimit(accounts.InviteCapPerRecipientDaily, accounts.InviteCapPerRecipientDailyWindow, "recipient-day"),
+						// auditLogger is assigned further down this function, so
+						// the adapter is built per call rather than captured
+						// here, where it would still be nil.
+						Audit: func(auditCtx context.Context, action string, detail map[string]string) {
+							if fn := signupGuardAudit(auditLogger); fn != nil {
+								fn(auditCtx, action, detail)
+							}
+						},
+					})
+				log.Printf("invitation mailer ready (relay %s, sender %s, cap %d/inviter/hour, %d/workspace/day, %d/relay/hour)",
+					mailCfg.Host, mailCfg.FromAddress,
+					accounts.InviteCapPerInviter, accounts.InviteCapPerTenant, mailer.RelayCapPerWindow)
 			} else {
 				log.Println("WARN invitation mailer disabled: no public console origin configured " +
 					"(set WEB_CONSOLE_PUBLIC_URL or CONSOLE_APP_URL); invitations are issued with a copyable link instead")
 			}
-		} else {
+		} else if !mailCfg.Configured() {
 			log.Println("WARN invitation mailer disabled: set HIVE_SMTP_HOST and HIVE_MAIL_FROM to send " +
 				"invitation email; invitations are issued with a copyable link instead")
+		} else {
+			log.Println("WARN invitation mailer disabled: no Redis, so the invitation send cap (issue #1745) " +
+				"cannot be enforced and an uncapped relay is not offered; invitations are issued with a copyable link instead")
 		}
 
 		accountsHandler = accounts.NewHandler(accountsSvc)
