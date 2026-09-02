@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
 )
@@ -40,7 +41,7 @@ func (e *SandboxEngine) Files(_ context.Context, sessionRef string) ([]controlcl
 	if cached, reaped := e.finalFilesOf(sess); reaped {
 		return cached, nil
 	}
-	return listWorkspaceFiles(sess.workingDir)
+	return listWorkspaceFiles(sess.workingDir, sess.packFiles)
 }
 
 // finalEventsOf and finalFilesOf return sess's reap-time snapshot plus
@@ -59,11 +60,13 @@ func (e *SandboxEngine) finalFilesOf(sess *session) ([]controlclient.WorkspaceFi
 	return sess.finalFiles, sess.reaped
 }
 
-// listWorkspaceFiles lists dir's top level (name/size/mtime only). Shared by
-// the live-session Files() path and reap's final-snapshot capture.
+// listWorkspaceFiles lists dir's top level (name/size/mtime only), minus the
+// pack entries planted there at launch (issue #1360): the panel's working
+// folder shows what the task produced, and the pack is what it started with.
+// Shared by the live-session Files() path and reap's final-snapshot capture.
 //
 // ponytail: no recursion; add a walk when a panel needs nested paths.
-func listWorkspaceFiles(dir string) ([]controlclient.WorkspaceFile, error) {
+func listWorkspaceFiles(dir string, packFiles []string) ([]controlclient.WorkspaceFile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -75,6 +78,9 @@ func listWorkspaceFiles(dir string) ([]controlclient.WorkspaceFile, error) {
 	}
 	out := make([]controlclient.WorkspaceFile, 0, len(entries))
 	for _, entry := range entries {
+		if slices.Contains(packFiles, entry.Name()) {
+			continue
+		}
 		info, infoErr := entry.Info()
 		if infoErr != nil {
 			continue // raced a deletion mid-listing; skip, never fail the batch

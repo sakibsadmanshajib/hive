@@ -1,3 +1,8 @@
+---
+name: code-canvas
+description: Write a self-contained HTML page, widget, or visualization and publish it as a live preview artifact.
+---
+
 # Code-canvas skill
 
 Claude-Artifacts-style code plus preview canvas. No dedicated Go package:
@@ -30,7 +35,7 @@ code to a repository (that is the coding-pack's job, not this skill's).
 
 No new task-lifecycle field is introduced by this skill. Prefix the task's
 instructions with `Skill: code-canvas` to hint it explicitly (see
-`skills/doc-layout/AGENTS.md` for the same `Skill:` tag convention); absent
+`.agents/skills/doc-layout/SKILL.md` for the same `Skill:` tag convention); absent
 the tag, the agent recognizes canvas-style requests from their content. As
 with `deck-generation`, the panel renders the returned `URL` in a
 `sandbox="allow-scripts"` iframe with no `allow-same-origin`.

@@ -1,3 +1,8 @@
+---
+name: doc-layout
+description: Read, summarize, or extract fields from a scanned contract, PDF, or photographed form through the doc-layout vision route.
+---
+
 # Doc-layout skill
 
 Contract and PDF page understanding via a serverless vision route. No new
@@ -40,7 +45,7 @@ No new task-lifecycle field is introduced by this skill. The panel starts a
 knowledge-work-pack task the same way as any other; to hint this specific
 skill, prefix the task's instructions with a `Skill: doc-layout` line (the
 pack's top-level AGENTS.md tells the agent to check for a `Skill:` tag and
-load the matching `skills/<name>/AGENTS.md` before improvising). Absent that
+load the matching `.agents/skills/<name>/SKILL.md` before improvising). Absent that
 tag, the agent still recognizes doc-understanding tasks from their content
 per "When to use" above.
 

@@ -13,12 +13,16 @@ is task framing and default tooling emphasis only.
   mounted `/workspace` directory. Three skills ship with this pack
   (blueprint Wave 3, Step 3.2, issue #300); check whether the task at hand
   matches one before improvising a from-scratch approach:
-  - `skills/doc-layout/AGENTS.md` — contract/PDF page understanding via the
+  - `.agents/skills/doc-layout/SKILL.md` — contract/PDF page understanding via the
     `route-doc-vlm` vision route.
-  - `skills/deck-generation/AGENTS.md` — self-contained HTML slide deck
+  - `.agents/skills/deck-generation/SKILL.md` — self-contained HTML slide deck
     generation, published through the artifacts API.
-  - `skills/code-canvas/AGENTS.md` — self-contained HTML/JS code preview,
+  - `.agents/skills/code-canvas/SKILL.md` — self-contained HTML/JS code preview,
     published through the artifacts API.
+- When the task's instructions open with a `Skill: <name>` line, read that
+  skill's `.agents/skills/<name>/SKILL.md` and follow it, before deciding on
+  any other approach. Absent the tag, pick a skill from its description
+  above when the task matches one.
 - Run arbitrary shell commands where a knowledge-work task needs them:
   document conversion tools, template renderers, arbitrary build/test
   commands are not excluded by pack type.

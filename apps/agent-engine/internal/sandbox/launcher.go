@@ -104,8 +104,14 @@ func ControlSocketPath(cfg LaunchConfig) string {
 // (blueprint Step 2.2); Pack only selects which pack config directory is
 // bind-mounted, it never changes the security posture.
 type Pack struct {
-	Name       string
-	ConfigDir  string // host path to the pack's AGENTS.md config, bind-mounted read-only
+	Name string
+	// ConfigDir is the host path of the pack's config, bind-mounted
+	// read-only at /opt/hive/pack as a pristine reference copy. It is NOT
+	// how the pack reaches the agent: the vendored OpenHands SDK only ever
+	// loads AGENTS.md and .agents/skills/ from the conversation's working
+	// directory, so engine.Launch copies the pack into WorkingDir (issue
+	// #1360). Nothing inside the sandbox opens /opt/hive/pack today.
+	ConfigDir  string
 	WorkingDir string // host path bind-mounted read-write as the agent's /workspace
 }
 

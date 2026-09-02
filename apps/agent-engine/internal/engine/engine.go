@@ -242,8 +242,8 @@ const (
 	// bound (how many files, how large) implicit in whatever the task
 	// happened to leave behind. A single well-known path is a hard, visible
 	// rule instead: nothing here is "the deck" unless the deck-generation
-	// skill (apps/agent-engine/packs/knowledge-work-pack/skills/deck-
-	// generation/AGENTS.md) wrote exactly this file.
+	// skill (apps/agent-engine/packs/knowledge-work-pack/.agents/skills/
+	// deck-generation/SKILL.md) wrote exactly this file.
 	deckManifestRelPath = ".hive/deck.json"
 
 	// maxDeckManifestBytes bounds the manifest read below. This is a JSON
@@ -344,6 +344,11 @@ type session struct {
 	pack      string
 	bearerJWT string
 
+	// packFiles are the top-level entries materializePack planted in
+	// workingDir at launch. The workspace listing hides them: they are pack
+	// scaffolding, not output of this task.
+	packFiles []string
+
 	// finishMu serializes finishTerminal for this one session: two Status
 	// calls can each independently observe the same terminal execution
 	// status from the agent-server (asking does not change it), and without
@@ -408,6 +413,25 @@ func New(cfg Config) *SandboxEngine {
 	}
 }
 
+// materializePack copies the pack at packDir into workingDir and returns the
+// top-level names it planted there. Those names are what the workspace
+// listing (events.go) filters back out: the panel's working folder is the
+// files the task produced, and the pack is scaffolding the task arrived with.
+func materializePack(packDir, workingDir string) ([]string, error) {
+	entries, err := os.ReadDir(packDir)
+	if err != nil {
+		return nil, fmt.Errorf("engine: read pack %s: %w", packDir, err)
+	}
+	if err := os.CopyFS(workingDir, os.DirFS(packDir)); err != nil {
+		return nil, fmt.Errorf("engine: copy pack %s into the agent working directory: %w", packDir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names, nil
+}
+
 // freePort asks the OS for an ephemeral TCP port and immediately releases
 // it, for use as the agent-server's --port. Racy in theory (another process
 // could grab it first) but standard practice for this and acceptable here:
@@ -430,6 +454,13 @@ func freePort() (int, error) {
 func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, err error) {
 	if t.Pack == "" {
 		return "", fmt.Errorf("engine: Task.Pack is required")
+	}
+	// Task.Pack names a directory under Config.PacksDir and arrives from
+	// control-plane over the launcher socket. Control-plane validates it
+	// (agenttask.ErrInvalidPack), but this process is the one that turns it
+	// into a path, so it refuses anything that is not a single path element.
+	if t.Pack != filepath.Base(t.Pack) || t.Pack == "." || t.Pack == ".." {
+		return "", fmt.Errorf("engine: Task.Pack %q is not a pack name", t.Pack)
 	}
 
 	release, err := e.q.Acquire(t.TenantID, t.UserID)
@@ -489,6 +520,28 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		}
 	}
 
+	// Issue #1360: the pack has to be IN the working directory, because that
+	// is the only place the sandboxed agent looks for it. The vendored
+	// OpenHands SDK loads AGENTS.md and .agents/skills/ from the
+	// conversation's own working directory
+	// (vendor/openhands/openhands-sdk/openhands/sdk/skills/skill.py,
+	// load_project_skills), and reads neither the read-only bind at
+	// /opt/hive/pack nor the copy baked into the SIF at /opt/hive/packs. So
+	// for as long as this directory was created empty and left that way,
+	// every task ran with no pack instructions and no pack skills, and the
+	// two mounts made the wiring look complete.
+	//
+	// Copied rather than bind-mounted at the paths the loader reads: the
+	// mount points would have to exist inside the workspace first anyway,
+	// the workspace is per-task and thrown away with the session, and a copy
+	// is testable on any host, while a bind is only observable on a box with
+	// Apptainer. The read-only bind stays as the pristine reference copy.
+	packDir := filepath.Join(e.cfg.PacksDir, t.Pack)
+	packFiles, err := materializePack(packDir, workingDir)
+	if err != nil {
+		return "", err
+	}
+
 	egressSocketPath := filepath.Join(sessionDir, "e.sock")
 	proxyListener, err := net.Listen("unix", egressSocketPath)
 	if err != nil {
@@ -507,7 +560,7 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		UserID:   t.UserID,
 		Pack: sandbox.Pack{
 			Name:       t.Pack,
-			ConfigDir:  filepath.Join(e.cfg.PacksDir, t.Pack),
+			ConfigDir:  packDir,
 			WorkingDir: workingDir,
 		},
 		SIFPath:          e.cfg.SIFPath,
@@ -571,14 +624,17 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 				Stream: true,
 			},
 		}
-		if e.cfg.SystemMessageSuffix != "" {
-			// Only when configured. An explicit empty context would be sent
-			// on every launch and would displace the SDK's own
-			// default_factory=AgentContext, changing the agent on the
-			// strength of a variable nobody set.
-			settings.AgentContext = &controlclient.AgentContext{
-				SystemMessageSuffix: e.cfg.SystemMessageSuffix,
-			}
+		// Always sent, for LoadProjectSkills alone (issue #1360). The SDK's
+		// own default_factory=AgentContext leaves load_project_skills False,
+		// and that flag is the only thing that makes LocalConversation read
+		// the workspace for AGENTS.md and .agents/skills at all
+		// (conversation/impl/local_conversation.py), so without it the pack
+		// copied into the working directory above is never opened. The
+		// suffix keeps its old behaviour: unset stays absent from the JSON,
+		// so an unconfigured deployment still gets the preset prompt.
+		settings.AgentContext = &controlclient.AgentContext{
+			SystemMessageSuffix: e.cfg.SystemMessageSuffix,
+			LoadProjectSkills:   true,
 		}
 		if e.cfg.BrowserTools {
 			// An explicit Tools list replaces the default set wholesale
@@ -620,6 +676,7 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		workingDir:     workingDir,
 		release:        release,
 		pack:           t.Pack,
+		packFiles:      packFiles,
 		bearerJWT:      t.BearerJWT,
 	}
 	e.mu.Lock()
@@ -921,7 +978,7 @@ func (e *SandboxEngine) reap(ctx context.Context, sess *session, outcome *termin
 	if err != nil {
 		log.Printf("engine: reap: capture final events for %s: %v", sess.conversationID, err)
 	}
-	files, err := listWorkspaceFiles(sess.workingDir)
+	files, err := listWorkspaceFiles(sess.workingDir, sess.packFiles)
 	if err != nil {
 		log.Printf("engine: reap: capture final files for %s: %v", sess.conversationID, err)
 	}

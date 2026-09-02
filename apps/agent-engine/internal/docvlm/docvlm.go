@@ -4,7 +4,7 @@
 // understanding. It only builds and validates the request; the agent's own
 // shell/HTTP tool inside the sandbox issues the actual call against Hive's
 // OpenAI-compatible chat completions endpoint (see
-// apps/agent-engine/packs/knowledge-work-pack/skills/doc-layout/AGENTS.md for
+// apps/agent-engine/packs/knowledge-work-pack/.agents/skills/doc-layout/SKILL.md for
 // the exact invocation and the response JSON shape the model is asked for).
 package docvlm
 
