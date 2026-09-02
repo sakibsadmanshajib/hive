@@ -65,7 +65,7 @@ export default async function WorkspaceInvoicesPage() {
       <PageHeader
         eyebrow="Workspace"
         title="Invoices"
-        description="Monthly invoices for this workspace. Consumption is metered in Hive credits; the amount charged is in Bangladeshi taka."
+        description="Monthly usage statements for this workspace. Consumption is metered in Hive credits and drawn from the balance already purchased, so no payment is due for a usage period."
       />
 
       <Card>
@@ -76,7 +76,7 @@ export default async function WorkspaceInvoicesPage() {
               ? "Could not load invoices right now. Please refresh in a moment, or contact support if the problem persists."
               : invoices.length === 0
               ? "No invoices generated yet. Invoices appear here on the first of each month."
-              : `${invoices.length} invoice${invoices.length === 1 ? "" : "s"} on file.`}
+              : `${invoices.length} statement${invoices.length === 1 ? "" : "s"} on file.`}
           </CardDescription>
         </CardHeader>
         {invoices.length > 0 ? (
@@ -85,8 +85,7 @@ export default async function WorkspaceInvoicesPage() {
               <thead>
                 <tr className="border-b border-[var(--color-border)] text-left text-xs uppercase text-[var(--color-ink-3)]">
                   <th className="px-3 py-2">Period</th>
-                  <th className="px-3 py-2">Hive credits</th>
-                  <th className="px-3 py-2">Charged</th>
+                  <th className="px-3 py-2">Hive credits used</th>
                   <th className="px-3 py-2">Models</th>
                   <th className="px-3 py-2">Download</th>
                 </tr>

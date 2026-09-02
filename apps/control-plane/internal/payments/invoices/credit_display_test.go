@@ -23,14 +23,19 @@ func doRequest(t *testing.T, h *Handler, method, target string, userID uuid.UUID
 }
 
 // =============================================================================
-// Issue #1681 — the invoice states Hive credits as its consumption unit.
+// Issue #1681 — the usage statement states Hive credits as its unit, and states
+// no money at all.
 //
-// Credits are what the ledger stores and what the rest of the console prints;
-// taka is what the customer pays. Both belong on the invoice, side by side, and
-// neither may be derived from the other by a wrong factor. The fixture below is
-// chosen so the two figures cannot be confused for one another: 524,653,338
-// credits at 100 BDT per USD is 5,247 paisa, and the ratio between them is
-// nowhere near the hundred that a paisa reading of the credit count would give.
+// Credits are what the ledger stores and what the rest of the console prints.
+// The taka figure stays on the row for audit, where issue #1682's repair leaves
+// it correct, and never reaches a customer: a usage period is a prepaid draw
+// down that raises no charge, and pricing the consumed credits at the internal
+// peg would disclose the internal value of a subscription's credit grant, which
+// is confidential (owner ruling, 2026-09-02).
+//
+// The fixture keeps both numbers so the tests can assert on the presence of one
+// and the absence of the other: 524,653,338 credits, stored alongside the 5,247
+// paisa they convert to at the 100 BDT per USD this package pins.
 // =============================================================================
 
 func creditFixtureInvoice() Invoice {
@@ -100,10 +105,14 @@ func TestGenerateInvoiceForPeriod_RecordsTheCreditQuantity(t *testing.T) {
 	}
 }
 
-// TestRender_PrintsCreditsAndTakaSeparately is acceptance criterion 3 of issue
-// #1681 in executable form: a fixture with a known credit count renders both
-// figures, and fails if either is the other divided by one hundred.
-func TestRender_PrintsCreditsAndTakaSeparately(t *testing.T) {
+// TestRender_StatesCreditsAndNoMoney is issue #1681's unit ruling plus the
+// owner's 2026-09-02 amendment, in one assertion.
+//
+// The quantity is stated in Hive credits. No money figure appears at all: a
+// usage period is a prepaid draw down that raises no charge, and converting the
+// quantity back into money at the internal peg would disclose the internal
+// value of a subscription's credit grant, which is confidential.
+func TestRender_StatesCreditsAndNoMoney(t *testing.T) {
 	t.Parallel()
 
 	text, err := renderInvoiceText(creditFixtureInvoice(), "Acme Workspace")
@@ -114,30 +123,61 @@ func TestRender_PrintsCreditsAndTakaSeparately(t *testing.T) {
 	if !strings.Contains(text, "524,653,338") {
 		t.Fatalf("rendered text does not state the credit quantity 524,653,338:\n%s", text)
 	}
-	if !strings.Contains(text, "BDT 52.47") {
-		t.Fatalf("rendered text does not state the charged amount BDT 52.47:\n%s", text)
-	}
-	// The defect: the credit count read as paisa. If that figure appears, some
-	// surface divided the quantity by one hundred and called the result taka.
-	if strings.Contains(text, "5,246,533.38") || strings.Contains(text, "BDT 5246533.38") {
-		t.Fatalf("rendered text prints the credit count as taka:\n%s", text)
-	}
-	// The inverse defect: the taka amount multiplied up and called credits.
-	// Case-insensitive on the label, because the column header is "Hive
-	// credits" with a lower-case c and an exact match on "Credits" would make
-	// this assertion unable to fail at all.
-	if strings.Contains(strings.ToLower(text), "credit") && strings.Contains(text, "524700") {
-		t.Fatalf("rendered text derives credits from the taka amount:\n%s", text)
-	}
 	if !strings.Contains(strings.ToLower(text), "credit") {
 		t.Fatalf("rendered text never names the credit unit:\n%s", text)
+	}
+	// The original defect: the credit count read as paisa.
+	if strings.Contains(text, "5,246,533.38") || strings.Contains(text, "5246533.38") {
+		t.Fatalf("rendered text prints the credit count as taka:\n%s", text)
+	}
+	// The amendment: no fiat figure of any kind, including the correct one.
+	for _, banned := range []string{"BDT", "Taka", "taka", "\u09f3", "52.47", "64.60"} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("usage statement carries the money marker %q; it raises no charge and must not price credits:\n%s", banned, text)
+		}
+	}
+	if !strings.Contains(strings.ToLower(text), "no payment is due") {
+		t.Fatalf("usage statement does not say that no payment is due:\n%s", text)
+	}
+}
+
+// TestRender_RefusesAFiatMarkerFromAnyFutureEdit is the guard behind the rule,
+// not a restatement of it. It drives the renderer's own tripwire directly, so a
+// later change that reintroduces a money column fails here rather than shipping
+// a priced credit quantity to a subscriber.
+func TestRender_RefusesAFiatMarkerFromAnyFutureEdit(t *testing.T) {
+	t.Parallel()
+
+	for _, sample := range []string{"Total BDT 64.60", "Charged: 64.60 Taka", "\u09f364.60", "12 paisa"} {
+		if err := assertNoFiatAmount(sample); err == nil {
+			t.Fatalf("assertNoFiatAmount accepted %q", sample)
+		}
+	}
+	if err := assertNoFiatAmount("Total  524,653,338 Hive credits"); err != nil {
+		t.Fatalf("assertNoFiatAmount rejected a credits-only line: %v", err)
+	}
+}
+
+// TestSanitize_KeepsAFiatNamedWorkspaceRenderable stops the guard above from
+// failing an account for its own name. A workspace called "Taka Labs" must
+// still get a statement.
+func TestSanitize_KeepsAFiatNamedWorkspaceRenderable(t *testing.T) {
+	t.Parallel()
+
+	inv := creditFixtureInvoice()
+	text, err := renderInvoiceText(inv, "Taka Labs BDT Division")
+	if err != nil {
+		t.Fatalf("render refused a workspace named after a currency: %v", err)
+	}
+	if !strings.Contains(text, "524,653,338") {
+		t.Fatalf("credit quantity missing after sanitising the workspace name:\n%s", text)
 	}
 }
 
 // TestRender_OmitsAnUnknownCreditQuantity covers the rows generated between the
-// #1648 fix and this change: their taka is correct and their credit count was
-// never recorded. The PDF says so rather than printing a zero, which would
-// assert a month of no consumption against a real charge.
+// #1648 fix and this change: they never recorded a credit count. The statement
+// says so rather than printing a zero, which would assert a month of no
+// consumption for a period that had some.
 func TestRender_OmitsAnUnknownCreditQuantity(t *testing.T) {
 	t.Parallel()
 
@@ -152,15 +192,21 @@ func TestRender_OmitsAnUnknownCreditQuantity(t *testing.T) {
 	if strings.Contains(text, "\n0\n") {
 		t.Fatalf("unknown credit quantity rendered as a measured zero:\n%s", text)
 	}
-	if !strings.Contains(text, "BDT 52.47") {
-		t.Fatalf("charged amount disappeared with the credit quantity:\n%s", text)
+	if !strings.Contains(text, "--") {
+		t.Fatalf("unknown credit quantity is not rendered as an absence:\n%s", text)
+	}
+	// The statement still identifies itself and still says nothing is owed,
+	// so a row with no recorded quantity is not silently an empty page.
+	if !strings.Contains(strings.ToLower(text), "no payment is due") {
+		t.Fatalf("draw-down note disappeared with the credit quantity:\n%s", text)
 	}
 }
 
-// TestInvoiceWire_CarriesCreditsAndTaka keeps the console's two figures
-// independent on the wire. The console cannot label a quantity it was never
-// sent, and a single number would leave it inventing the other one.
-func TestInvoiceWire_CarriesCreditsAndTaka(t *testing.T) {
+// TestInvoiceWire_CarriesCreditsAndNoMoney pins the customer wire. The console
+// is sent the quantity and nothing it could price, so no client, and no
+// customer reading the API directly, can recover the internal value of a
+// credit grant from a usage statement.
+func TestInvoiceWire_CarriesCreditsAndNoMoney(t *testing.T) {
 	t.Parallel()
 
 	repo := newFakeRepo()
@@ -187,19 +233,14 @@ func TestInvoiceWire_CarriesCreditsAndTaka(t *testing.T) {
 	}
 	var payload struct {
 		Invoice struct {
-			TotalBDTSubunits string  `json:"total_bdt_subunits"`
-			TotalCredits     *string `json:"total_credits"`
-			LineItems        []struct {
-				BDTSubunits string  `json:"bdt_subunits"`
-				Credits     *string `json:"credits"`
+			TotalCredits *string `json:"total_credits"`
+			LineItems    []struct {
+				Credits *string `json:"credits"`
 			} `json:"line_items"`
 		} `json:"invoice"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
-	}
-	if payload.Invoice.TotalBDTSubunits != "5247" {
-		t.Fatalf("total_bdt_subunits = %q, want %q", payload.Invoice.TotalBDTSubunits, "5247")
 	}
 	if payload.Invoice.TotalCredits == nil || *payload.Invoice.TotalCredits != "524653338" {
 		t.Fatalf("total_credits = %v, want \"524653338\"", payload.Invoice.TotalCredits)
@@ -210,10 +251,15 @@ func TestInvoiceWire_CarriesCreditsAndTaka(t *testing.T) {
 	if payload.Invoice.LineItems[0].Credits == nil || *payload.Invoice.LineItems[0].Credits != "524653338" {
 		t.Fatalf("line credits = %v, want \"524653338\"", payload.Invoice.LineItems[0].Credits)
 	}
-	// The wire must not carry a USD figure to a BD customer surface; the
-	// existing FX tripwire lint scans for these keys and this keeps the new
-	// fields inside that rule.
-	if strings.Contains(rec.Body.String(), "usd") {
-		t.Fatalf("invoice wire leaked a usd key: %s", rec.Body.String())
+	// No money on the wire at all: not the USD the FX tripwire lint already
+	// scans for, and not the taka figure that is still stored on the row.
+	// Concrete money markers only. A generic word like "rate" or "amount"
+	// matches "generated_at" and would fail on a body that carries no money at
+	// all, which is a check that cries wolf rather than one that guards.
+	body := strings.ToLower(rec.Body.String())
+	for _, banned := range []string{"usd", "bdt", "subunit", "paisa", "taka", "৳", "5247"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("invoice wire leaked %q: %s", banned, rec.Body.String())
+		}
 	}
 }

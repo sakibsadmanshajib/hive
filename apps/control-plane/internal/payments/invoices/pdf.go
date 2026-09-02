@@ -88,8 +88,8 @@ func renderInvoice(inv Invoice, workspaceName string) ([]byte, string, error) {
 
 	// ---------- Header ----------
 	pdf.SetFont("Helvetica", "B", 18)
-	pdf.CellFormat(0, 10, "HIVE  --  Tax Invoice", "", 1, "L", false, 0, "")
-	emit("HIVE  --  Tax Invoice")
+	pdf.CellFormat(0, 10, "HIVE  --  Usage Statement", "", 1, "L", false, 0, "")
+	emit("HIVE  --  Usage Statement")
 	pdf.SetFont("Helvetica", "", 11)
 	pdf.Ln(2)
 	t := fmt.Sprintf("Workspace: %s", sanitize(workspaceName))
@@ -108,41 +108,36 @@ func renderInvoice(inv Invoice, workspaceName string) ([]byte, string, error) {
 	pdf.CellFormat(0, 6, t, "", 1, "L", false, 0, "")
 	emit(t)
 
-	// ---------- VAT placeholder block ----------
-	pdf.Ln(4)
-	pdf.SetFont("Helvetica", "I", 10)
-	pdf.CellFormat(0, 5, "BIN: TBD (legal review)", "", 1, "L", false, 0, "")
-	emit("BIN: TBD (legal review)")
-	pdf.CellFormat(0, 5, "Mushok-9.4 reference: TBD (legal review)", "", 1, "L", false, 0, "")
-	emit("Mushok-9.4 reference: TBD (legal review)")
+	// The VAT placeholder block that used to sit here (BIN and a Mushok-9.4
+	// reference) is gone. Mushok-9.4 is a VAT return form, and printing a
+	// reference to one on a document that raises no charge asserts a taxable
+	// supply that this page does not describe: a usage period is a draw down
+	// against credits already bought and already taxed at purchase. Those
+	// fields belong on the purchase invoice, which this package does not yet
+	// produce; they are not lost, they are waiting for the right document.
 	pdf.Ln(4)
 
 	// ---------- Line items ----------
 	pdf.SetFont("Helvetica", "B", 11)
 	pdf.SetFillColor(230, 230, 230)
-	pdf.CellFormat(62, 8, "Model", "1", 0, "L", true, 0, "")
+	pdf.CellFormat(100, 8, "Model", "1", 0, "L", true, 0, "")
 	emit("Model")
-	pdf.CellFormat(26, 8, "Requests", "1", 0, "R", true, 0, "")
+	pdf.CellFormat(30, 8, "Requests", "1", 0, "R", true, 0, "")
 	emit("Requests")
-	pdf.CellFormat(52, 8, "Hive credits", "1", 0, "R", true, 0, "")
+	pdf.CellFormat(50, 8, "Hive credits", "1", 1, "R", true, 0, "")
 	emit("Hive credits")
-	pdf.CellFormat(40, 8, "Charged (BDT)", "1", 1, "R", true, 0, "")
-	emit("Charged (BDT)")
 
 	pdf.SetFont("Helvetica", "", 10)
 	for _, item := range inv.LineItems {
 		modelLabel := sanitize(item.ModelID)
-		amt := FormatBDT(item.BDTSubunits)
 		credits := FormatCredits(item.Credits)
 		reqCount := fmt.Sprintf("%d", item.RequestCount)
-		pdf.CellFormat(62, 7, modelLabel, "1", 0, "L", false, 0, "")
-		pdf.CellFormat(26, 7, reqCount, "1", 0, "R", false, 0, "")
-		pdf.CellFormat(52, 7, credits, "1", 0, "R", false, 0, "")
-		pdf.CellFormat(40, 7, amt, "1", 1, "R", false, 0, "")
+		pdf.CellFormat(100, 7, modelLabel, "1", 0, "L", false, 0, "")
+		pdf.CellFormat(30, 7, reqCount, "1", 0, "R", false, 0, "")
+		pdf.CellFormat(50, 7, credits, "1", 1, "R", false, 0, "")
 		emit(modelLabel)
 		emit(reqCount)
 		emit(credits)
-		emit(amt)
 	}
 	if len(inv.LineItems) == 0 {
 		pdf.SetFont("Helvetica", "I", 10)
@@ -152,30 +147,38 @@ func renderInvoice(inv Invoice, workspaceName string) ([]byte, string, error) {
 
 	// ---------- Total ----------
 	pdf.SetFont("Helvetica", "B", 11)
-	pdf.CellFormat(88, 9, "Total", "1", 0, "R", false, 0, "")
+	pdf.CellFormat(130, 9, "Total", "1", 0, "R", false, 0, "")
 	emit("Total")
 	totalCredits := FormatCredits(inv.TotalCredits)
-	pdf.CellFormat(52, 9, totalCredits, "1", 0, "R", false, 0, "")
+	pdf.CellFormat(50, 9, totalCredits, "1", 1, "R", false, 0, "")
 	emit(totalCredits)
-	totalLabel := FormatBDT(inv.TotalBDTSubunits)
-	pdf.CellFormat(40, 9, totalLabel, "1", 1, "R", false, 0, "")
-	emit(totalLabel)
 
-	// ---------- Unit note ----------
+	// ---------- Unit and draw-down note ----------
 	//
-	// Issue #1681: the two columns are different units and a customer holding
-	// this page has to be told which is which. Consumption is metered in Hive
-	// credits, the unit the ledger records and the console shows on every other
-	// billing page; the taka column is what is charged for it.
+	// Credits are the unit (issue #1681), and this document raises no charge
+	// (owner ruling, 2026-09-02). Hive credits are bought up front, so a month
+	// of consumption is a draw down against a balance the customer has already
+	// paid for; printing a fiat total here would read as a second bill for it.
+	//
+	// It would also disclose something the customer must not be shown. Credits
+	// are sold at a markup, and a subscription grants a credit quantity whose
+	// internal value is deliberately not published, so converting consumed
+	// credits back into money at the internal peg would publish exactly that
+	// figure. No customer-visible surface converts a credit quantity into
+	// money; assertNoFiatAmount below enforces it on this page.
 	pdf.Ln(3)
 	pdf.SetFont("Helvetica", "I", 9)
-	note := "Consumption is metered in Hive credits. The BDT column is the amount charged for it."
+	note := "Consumption is metered in Hive credits and drawn from the balance already purchased. " +
+		"No payment is due for this period."
 	pdf.MultiCell(180, 5, note, "", "L", false)
 	emit(note)
 
-	// ---------- Tripwire: assert no USD/FX strings reached the page ----------
+	// ---------- Tripwires ----------
 	text := textBuf.String()
 	if err := assertNoFXLeak([]byte(text)); err != nil {
+		return nil, "", err
+	}
+	if err := assertNoFiatAmount(text); err != nil {
 		return nil, "", err
 	}
 
@@ -261,6 +264,27 @@ var fxTripwireTokens = []string{
 	"exchange",
 }
 
+// fiatTripwireTokens lists the currency markers that must not appear on a usage
+// statement. Owner ruling, 2026-09-02: this document is a prepaid draw down and
+// raises no charge, and converting the credit quantity into money at the
+// internal peg would disclose the internal value of a subscription's credit
+// grant, which is confidential. A fiat figure belongs on a purchase invoice,
+// which is a different document this package does not yet produce.
+//
+// "$" and "usd" are already refused by assertNoFXLeak above; this adds the
+// local-currency markers that one deliberately allows.
+var fiatTripwireTokens = []string{"bdt", "taka", "\u09f3", "paisa"}
+
+func assertNoFiatAmount(text string) error {
+	lower := strings.ToLower(text)
+	for _, token := range fiatTripwireTokens {
+		if strings.Contains(lower, token) {
+			return fmt.Errorf("invoices: usage statement carries the fiat marker %q; a credit quantity must not be rendered as money on a customer surface", token)
+		}
+	}
+	return nil
+}
+
 func assertNoFXLeak(raw []byte) error {
 	lower := strings.ToLower(string(raw))
 	for _, token := range fxTripwireTokens {
@@ -279,7 +303,10 @@ func assertNoFXLeak(raw []byte) error {
 func sanitize(in string) string {
 	out := in
 	lower := strings.ToLower(out)
-	for _, token := range fxTripwireTokens {
+	// Both token sets, because a workspace legitimately named "Taka Labs" would
+	// otherwise trip assertNoFiatAmount and fail the render for that account
+	// alone, which is a fail-closed refusal for entirely the wrong reason.
+	for _, token := range append(append([]string{}, fxTripwireTokens...), fiatTripwireTokens...) {
 		if token == "$" {
 			out = strings.ReplaceAll(out, "$", "[symbol]")
 			lower = strings.ToLower(out)

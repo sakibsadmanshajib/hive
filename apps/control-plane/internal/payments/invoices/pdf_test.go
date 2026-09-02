@@ -18,7 +18,10 @@ import (
 // the guard is independent of the renderer's self-check.
 // =============================================================================
 
-func TestRender_ProducesPDFWithBDTOnly(t *testing.T) {
+// Renamed from TestRender_ProducesPDFWithBDTOnly: the document carries no BDT
+// at all now (owner ruling, 2026-09-02), so the old name described a property
+// that no longer exists and would have sent the next reader looking for it.
+func TestRender_ProducesAPDFWithNoFXLeak(t *testing.T) {
 	t.Parallel()
 
 	r := NewGofpdfRenderer()

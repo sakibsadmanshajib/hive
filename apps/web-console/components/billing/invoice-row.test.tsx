@@ -23,7 +23,6 @@ function recordFixture(overrides: Partial<InvoiceRecord> = {}): InvoiceRecord {
     workspace_id: "ws-1",
     period_start: "2026-07-01",
     period_end: "2026-07-31",
-    total_bdt_subunits: "11500",
     total_credits: "1150000000",
     line_items: [],
     generated_at: "2026-08-01T00:00:00Z",
@@ -44,20 +43,16 @@ describe("InvoiceRow", () => {
     expect(link.getAttribute("href")).toBe("/api/invoices/inv-4021/pdf");
   });
 
-  // Issue #1681, acceptance criterion 3. The fixture is the magnitude the owner
-  // saw live: 524,653,338 credits, charged as BDT 52.47. The two figures are
-  // deliberately far apart, so a row that derived either from the other by the
-  // wrong factor cannot pass.
-  it("renders the credit quantity and the charged amount as separate figures", () => {
+  // Issue #1681 plus the owner's 2026-09-02 amendment. The quantity is the one
+  // measured live, 524,653,338 credits. No money appears at all: a usage period
+  // is a prepaid draw down that raises no charge, and pricing the quantity at
+  // the internal peg would disclose the internal value of a subscription's
+  // credit grant.
+  it("renders the credit quantity and no money figure", () => {
     render(
       <table>
         <tbody>
-          <InvoiceRow
-            invoice={recordFixture({
-              total_credits: "524653338",
-              total_bdt_subunits: "5247",
-            })}
-          />
+          <InvoiceRow invoice={recordFixture({ total_credits: "524653338" })} />
         </tbody>
       </table>,
     );
@@ -65,31 +60,29 @@ describe("InvoiceRow", () => {
       ?.textContent ?? "";
 
     expect(text).toContain("524,653,338");
-    expect(text).toContain("৳52.47");
-    // The defect: the credit count divided by one hundred and printed as taka.
+    // The original defect: the credit count divided by one hundred as taka.
     expect(text).not.toContain("5,246,533.38");
-    // The inverse: the taka amount inflated and presented as the quantity.
-    expect(text).not.toContain("524,700");
+    // The amendment: no currency marker of any kind on this surface.
+    expect(text).not.toContain("৳");
+    expect(text).not.toContain("$");
+    expect(text).not.toMatch(/BDT|USD|taka/i);
   });
 
   it("renders an unrecorded credit quantity as absent, never as zero", () => {
     render(
       <table>
         <tbody>
-          <InvoiceRow
-            invoice={recordFixture({
-              total_credits: null,
-              total_bdt_subunits: "5247",
-            })}
-          />
+          <InvoiceRow invoice={recordFixture({ total_credits: null })} />
         </tbody>
       </table>,
     );
-    const text = screen.getByTestId("invoice-pdf-link").closest("tr")
-      ?.textContent ?? "";
-    expect(text).toContain("৳52.47");
-    expect(text).toContain("—");
-    expect(text).not.toMatch(/(^|\D)0 credits/);
+    // Assert on the credits cell, not the whole row: the row legitimately
+    // says "0 models" for an empty line-item list, and a row-wide check for a
+    // zero would fail on that instead of on the quantity it is guarding.
+    const cells = screen.getByTestId("invoice-pdf-link").closest("tr")
+      ?.querySelectorAll("td") ?? [];
+    const credits = cells[1]?.textContent?.trim() ?? "";
+    expect(credits).toBe("—");
   });
 
   it("renders the period range and model count", () => {
