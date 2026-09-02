@@ -136,7 +136,7 @@ const cancelFlushTimeout = 3 * time.Second
 // bearerJWT is the task's own user's bearer JWT (edge-api's handler is the
 // only caller with it; see Task.BearerJWT's doc comment). Threaded straight
 // through to the launch goroutine and never persisted by s.repo.Create.
-func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string, projectID uuid.UUID, bearerJWT string) (Task, error) {
+func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string, projectID uuid.UUID, attachments []Attachment, bearerJWT string) (Task, error) {
 	if !pack.Valid() {
 		return Task{}, ErrInvalidPack
 	}
@@ -146,6 +146,9 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 		return Task{}, err
 	}
 	t.BearerJWT = bearerJWT
+	// Threaded through to the launch goroutine and never persisted, for the
+	// same reason BearerJWT is not (issue #1065).
+	t.Attachments = attachments
 
 	// Nothing bounds how many of these goroutines can be in flight, and the
 	// launcher's quota does not: it gates the sandbox launch, which happens

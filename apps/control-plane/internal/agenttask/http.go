@@ -46,7 +46,11 @@ const internalPrefix = "/internal/agent-tasks/"
 // carries pack plus a free-text instructions/prompt field, which needs more
 // headroom than a bare pack name; other bodies on this handler (cancel) send
 // none at all.
-const maxBodyBytes = 64 << 10 // 64 KiB
+// Raised from 64 KiB for issue #1065: a create request now carries the
+// person's attached documents inline, capped at 256 KiB of text by edge-api,
+// and JSON escaping sits on top of that. Matches the launcher's own /launch
+// reader, which is the next hop.
+const maxBodyBytes = 1 << 20 // 1 MiB
 
 func (h *Handler) serveInternal(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, internalPrefix), "/")
@@ -128,6 +132,29 @@ type createRequest struct {
 	// same user's own already-validated JWT, never minting one. See
 	// Task.BearerJWT's doc comment.
 	BearerJWT string `json:"bearer_jwt"`
+	// Attachments are the person's own documents (issue #1065), already
+	// validated by edge-api's handler. Same posture as ProjectID: this is a
+	// service-to-service surface behind RequireInternalToken, so carrying
+	// them here widens no trust boundary, and this handler is not where the
+	// validation lives. The launcher validates the names again because it is
+	// the process that turns one into a path.
+	Attachments []attachmentWire `json:"attachments"`
+}
+
+type attachmentWire struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+func attachmentsFromWire(in []attachmentWire) []Attachment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Attachment, 0, len(in))
+	for _, a := range in {
+		out = append(out, Attachment{Name: a.Name, Content: a.Content})
+	}
+	return out
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request, tenantID, userID uuid.UUID) {
@@ -149,7 +176,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request, tenantID,
 		}
 		projectID = parsed
 	}
-	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack), req.Instructions, projectID, req.BearerJWT)
+	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack), req.Instructions, projectID, attachmentsFromWire(req.Attachments), req.BearerJWT)
 	if err != nil {
 		writeTaskError(w, err)
 		return

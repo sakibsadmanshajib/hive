@@ -2,6 +2,7 @@ package agentengine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log"
@@ -141,5 +142,85 @@ func TestRemoteTransportFailureDoesNotMapToEngineSessionGone(t *testing.T) {
 	}
 	if errors.Is(err, agenttask.ErrEngineSessionGone) {
 		t.Fatalf("a transport failure must not map to ErrEngineSessionGone: %v", err)
+	}
+}
+
+// Issue #1065, the seam this defect class keeps breaking at: the value is set
+// on the task and never crosses the wire. This reads the launch body the
+// launcher would have received, so a plumbing change that drops attachments
+// between control-plane and the daemon fails here rather than on the demo box.
+func TestRemoteLaunchCarriesAttachments(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "engine.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	bodies := make(chan []byte, 1)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies <- raw
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"session_ref":"s-1"}`)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	_, err = NewRemote(socketPath, "").Launch(context.Background(), agenttask.Task{
+		Attachments: []agenttask.Attachment{{Name: "inventory.txt", Content: "QAFILE7731"}},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	var body struct {
+		Attachments []struct {
+			Name    string `json:"name"`
+			Content string `json:"content"`
+		} `json:"attachments"`
+	}
+	raw := <-bodies
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode launch body: %v", err)
+	}
+	if len(body.Attachments) != 1 {
+		t.Fatalf("launch body carried %d attachments, want 1; body: %s", len(body.Attachments), raw)
+	}
+	if body.Attachments[0].Name != "inventory.txt" || body.Attachments[0].Content != "QAFILE7731" {
+		t.Fatalf("launch body carried %+v", body.Attachments[0])
+	}
+}
+
+// The common path has no attachments, and the body it sends should be exactly
+// what it always was: a launcher older than its control-plane must not start
+// seeing a key it does not know.
+func TestRemoteLaunchOmitsAttachmentsWhenThereAreNone(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "engine.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	bodies := make(chan []byte, 1)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies <- raw
+		_, _ = io.WriteString(w, `{"session_ref":"s-1"}`)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	if _, err := NewRemote(socketPath, "").Launch(context.Background(), agenttask.Task{}); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	var body map[string]any
+	raw := <-bodies
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decode launch body: %v", err)
+	}
+	if body["attachments"] != nil {
+		t.Fatalf("launch body carried attachments when the task had none: %s", raw)
 	}
 }

@@ -1,0 +1,150 @@
+package engine
+
+// Attachment materialization, issue #1065.
+//
+// The sandbox is the far side of a --network none profile with an egress proxy
+// in front of it: it holds no Hive credential and has no route to the object
+// storage a chat attachment lives in. So the only way a document the person
+// attached in the composer can reach the agent is for this process to write it
+// into the working directory before the conversation starts, which is the same
+// mechanism issue #1360 established for the pack.
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// maxAttachmentNameSuffixes bounds the collision rename below. Ten is well
+// past any real case (the surfaces upstream cap a run at five attachments) and
+// the point of a bound is that a hostile set of names cannot spin here.
+const maxAttachmentNameSuffixes = 10
+
+// materializeAttachments writes each attachment into workingDir and returns
+// the names they were actually written under, in order.
+//
+// Called after materializePack, deliberately: the pack is planted first and
+// every file here is created with O_EXCL, so a user supplied name can never
+// replace a pack file. A collision is renamed rather than refused, because the
+// person who attached "AGENTS.md" has no way of knowing what the pack put
+// there and a refusal would be unexplainable to them.
+//
+// Every write goes through an os.Root confined to workingDir. The name check
+// below is string handling and would already refuse a traversal, but the root
+// is what holds if workingDir ever contains a symlinked subdirectory: the
+// check cannot see one and the root refuses to cross it.
+func materializeAttachments(workingDir string, attachments []Attachment) ([]string, error) {
+	if len(attachments) == 0 {
+		return nil, nil
+	}
+	root, err := os.OpenRoot(workingDir)
+	if err != nil {
+		return nil, fmt.Errorf("engine: open agent working directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	written := make([]string, 0, len(attachments))
+	for _, a := range attachments {
+		name, err := attachmentFileName(a.Name)
+		if err != nil {
+			return nil, err
+		}
+		planted, err := writeAttachment(root, name, a.Content)
+		if err != nil {
+			return nil, err
+		}
+		written = append(written, planted)
+	}
+	return written, nil
+}
+
+// attachmentFileName reduces a client supplied name to a bare file name, or
+// refuses it. Refusing rather than sanitizing into something arbitrary: a name
+// that is not a file name is a caller that is either broken or probing, and
+// both deserve the same loud answer this package already gives an invalid pack
+// name.
+func attachmentFileName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" {
+		return "", fmt.Errorf("engine: attachment has no file name")
+	}
+	if strings.ContainsAny(name, "/\\\x00") {
+		return "", fmt.Errorf("engine: attachment name %q is a path, not a file name", raw)
+	}
+	if name == "." || name == ".." {
+		return "", fmt.Errorf("engine: attachment name %q is not a file name", raw)
+	}
+	if len(name) > 255 {
+		return "", fmt.Errorf("engine: attachment name is longer than 255 bytes")
+	}
+	if name != filepath.Base(name) {
+		return "", fmt.Errorf("engine: attachment name %q is not a file name", raw)
+	}
+	return name, nil
+}
+
+// writeAttachment creates name under root, moving to "stem-1.ext", "stem-2.ext"
+// and so on while the name is taken, and returns the name it used.
+func writeAttachment(root *os.Root, name, content string) (string, error) {
+	for attempt := 0; attempt <= maxAttachmentNameSuffixes; attempt++ {
+		candidate := name
+		if attempt > 0 {
+			candidate = suffixedName(name, attempt)
+		}
+		f, err := root.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("engine: write attachment %s into the agent working directory: %w", name, err)
+		}
+		_, writeErr := f.WriteString(content)
+		closeErr := f.Close()
+		if writeErr != nil {
+			return "", fmt.Errorf("engine: write attachment %s: %w", candidate, writeErr)
+		}
+		if closeErr != nil {
+			return "", fmt.Errorf("engine: close attachment %s: %w", candidate, closeErr)
+		}
+		return candidate, nil
+	}
+	return "", fmt.Errorf("engine: no free name for attachment %s in the agent working directory", name)
+}
+
+// suffixedName turns "report.txt" into "report-1.txt", keeping the extension
+// so the agent (and whatever it hands the file to) still sees the file type.
+func suffixedName(name string, n int) string {
+	ext := filepath.Ext(name)
+	return fmt.Sprintf("%s-%d%s", strings.TrimSuffix(name, ext), n, ext)
+}
+
+// withAttachmentNote appends the attached file names to the run's initial
+// message. A file nobody mentions is a file the agent has no reason to open,
+// and the working directory listing is not part of its prompt.
+//
+// Names only. The content is on disk precisely so it does not have to fit in a
+// prompt, and the whole point of writing it to the workspace is that the agent
+// reads what it needs when it needs it.
+//
+// The names are user supplied text reaching a model, which is the same
+// untrusted-input posture the pack's own document handling already carries;
+// they are capped at 255 bytes each and are file names rather than free text,
+// so this widens nothing that attaching the file itself did not.
+func withAttachmentNote(instructions string, names []string) string {
+	if len(names) == 0 {
+		return instructions
+	}
+	var b strings.Builder
+	b.WriteString(instructions)
+	if instructions != "" {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Attached files, already saved in your working directory:\n")
+	for _, name := range names {
+		b.WriteString("- ")
+		b.WriteString(name)
+		b.WriteString("\n")
+	}
+	return b.String()
+}

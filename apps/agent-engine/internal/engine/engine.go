@@ -101,6 +101,26 @@ type Task struct {
 	// launcher newer than its control-plane still runs. Never logged, never
 	// persisted, and it lives only as long as the session does.
 	LLMAPIKey string
+
+	// Attachments are the documents the person attached in the composer
+	// before starting this run (issue #1065). They are written into the
+	// session's working directory at launch, beside the pack, which is the
+	// only place the sandboxed agent can read anything from: it has no
+	// network route to Hive's own storage and no credential for it.
+	//
+	// Carried in memory from edge-api's create handler through control-plane
+	// and the /launch call, like BearerJWT, and never persisted: a task row
+	// is a control record, not a copy of the customer's documents.
+	Attachments []Attachment
+}
+
+// Attachment is one document travelling with a task, already extracted to
+// text by the surface the person uploaded it on. Name is a bare file name,
+// re-validated here (see materializeAttachments) because this process is the
+// one that turns it into a path.
+type Attachment struct {
+	Name    string
+	Content string
 }
 
 // Status mirrors apps/control-plane/internal/agenttask.Status's values
@@ -677,6 +697,16 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		return "", err
 	}
 
+	// Issue #1065: the person's own attachments, written after the pack so a
+	// name they chose can never replace a file the pack planted. Failing the
+	// launch on a bad name is deliberate: a run that silently starts without
+	// the document it was given is the defect this closes, wearing a
+	// different hat.
+	attachmentNames, err := materializeAttachments(workingDir, t.Attachments)
+	if err != nil {
+		return "", err
+	}
+
 	egressSocketPath := filepath.Join(sessionDir, "e.sock")
 	proxyListener, err := net.Listen("unix", egressSocketPath)
 	if err != nil {
@@ -787,10 +817,11 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		profileID := e.cfg.AgentProfileID
 		req.AgentProfileID = &profileID
 	}
-	if t.Instructions != "" {
+	initialMessage := withAttachmentNote(t.Instructions, attachmentNames)
+	if initialMessage != "" {
 		req.InitialMessage = &controlclient.SendMessageRequest{
 			Role:    "user",
-			Content: []controlclient.TextContent{controlclient.Text(t.Instructions)},
+			Content: []controlclient.TextContent{controlclient.Text(initialMessage)},
 		}
 	}
 	convo, err := client.StartConversation(ctx, req)

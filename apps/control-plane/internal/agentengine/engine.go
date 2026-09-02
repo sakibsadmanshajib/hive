@@ -37,6 +37,7 @@ func (e *Engine) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 		Instructions: t.Instructions,
 		BearerJWT:    t.BearerJWT,
 		LLMAPIKey:    t.LLMAPIKey,
+		Attachments:  sandboxAttachments(t.Attachments),
 	})
 }
 
@@ -80,4 +81,19 @@ func (e *Engine) Cancel(ctx context.Context, sessionRef string) error {
 		return fmt.Errorf("%w: %w", agenttask.ErrEngineSessionGone, err)
 	}
 	return err
+}
+
+// sandboxAttachments converts the task's attachments into the sandbox
+// engine's shape (issue #1065). Kept in step with Remote.Launch's wire body:
+// the two arms of buildAgentEngine have to hand the engine the same task, or
+// a deployment would quietly lose attachments depending on how it is wired.
+func sandboxAttachments(in []agenttask.Attachment) []engineapi.Attachment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]engineapi.Attachment, 0, len(in))
+	for _, a := range in {
+		out = append(out, engineapi.Attachment{Name: a.Name, Content: a.Content})
+	}
+	return out
 }

@@ -31,6 +31,8 @@ type fakeClient struct {
 	// get here" is itself the assertion.
 	createCalled  bool
 	lastProjectID uuid.UUID
+	// lastAttachments records what handleCreate forwarded (issue #1065).
+	lastAttachments []Attachment
 	eventsFn      func(taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
 	filesFn       func(taskID uuid.UUID) ([]WorkspaceFile, error)
 }
@@ -39,9 +41,10 @@ func newFakeClient() *fakeClient {
 	return &fakeClient{tasks: make(map[uuid.UUID]Task)}
 }
 
-func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack, instructions string, projectID uuid.UUID, bearerJWT string) (Task, error) {
+func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack, instructions string, projectID uuid.UUID, attachments []Attachment, bearerJWT string) (Task, error) {
 	f.createCalled = true
 	f.lastProjectID = projectID
+	f.lastAttachments = attachments
 	f.lastBearerJWT = bearerJWT
 	if f.createErr != nil {
 		return Task{}, f.createErr

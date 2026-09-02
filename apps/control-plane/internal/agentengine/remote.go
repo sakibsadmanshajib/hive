@@ -77,6 +77,11 @@ func (r *Remote) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 		// socket the internal token already authenticates, never a network
 		// interface, and is never logged on either side.
 		"llm_api_key": t.LLMAPIKey,
+		// The person's own attached documents (issue #1065). The launcher
+		// writes them into the sandbox's working directory before the
+		// conversation starts; nothing else can, because the sandbox holds no
+		// Hive credential and has no route to the storage they came from.
+		"attachments": launchAttachments(t.Attachments),
 	}, &out)
 	if err != nil {
 		return "", err
@@ -201,3 +206,16 @@ var (
 	_ agenttask.StatusChecker = (*Remote)(nil)
 	_                         = uuid.Nil
 )
+
+// launchAttachments renders the task's attachments in the launcher's wire
+// shape. nil for none, so an older launcher sees the same body it always did.
+func launchAttachments(in []agenttask.Attachment) []map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]map[string]string, 0, len(in))
+	for _, a := range in {
+		out = append(out, map[string]string{"name": a.Name, "content": a.Content})
+	}
+	return out
+}

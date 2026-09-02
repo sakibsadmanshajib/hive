@@ -83,6 +83,31 @@ type launchRequest struct {
 	// used to share. Empty keeps the configured key, so an older control-plane
 	// against a newer launcher behaves exactly as it did before. Never logged.
 	LLMAPIKey string `json:"llm_api_key"`
+	// Attachments are the documents the person attached in the composer
+	// before starting the run (issue #1065), already extracted to text by
+	// the surface they uploaded on. Written into the session's working
+	// directory at launch; see engine.Task.Attachments. Absent on an older
+	// control-plane, which is the pre-existing behaviour.
+	Attachments []launchAttachment `json:"attachments"`
+}
+
+type launchAttachment struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// engineAttachments converts the wire shape into the engine's. Names are
+// re-validated inside the engine, which is the process that turns one into a
+// path; nothing is trusted here.
+func engineAttachments(in []launchAttachment) []engineapi.Attachment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]engineapi.Attachment, 0, len(in))
+	for _, a := range in {
+		out = append(out, engineapi.Attachment{Name: a.Name, Content: a.Content})
+	}
+	return out
 }
 
 type launchResponse struct {
@@ -260,6 +285,7 @@ func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
 			Instructions: req.Instructions,
 			BearerJWT:    req.BearerJWT,
 			LLMAPIKey:    req.LLMAPIKey,
+			Attachments:  engineAttachments(req.Attachments),
 		})
 		if err != nil {
 			// Defence in depth, against BOTH credentials this launch carried.

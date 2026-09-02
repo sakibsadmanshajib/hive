@@ -56,13 +56,17 @@ func NewClient(controlPlaneURL string) *Client {
 // projectID is the project this run consults, already authorized by
 // handler.go's handleCreate. uuid.Nil means no project, and travels as an
 // omitted field so control-plane's decoder sees the same body it always did.
-func (c *Client) Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string, projectID uuid.UUID, bearerJWT string) (Task, error) {
+func (c *Client) Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string, projectID uuid.UUID, attachments []Attachment, bearerJWT string) (Task, error) {
 	payload := struct {
 		Pack         string `json:"pack"`
 		Instructions string `json:"instructions"`
 		ProjectID    string `json:"project_id,omitempty"`
-		BearerJWT    string `json:"bearer_jwt"`
-	}{Pack: pack, Instructions: instructions, BearerJWT: bearerJWT}
+		// Attachments are the person's own documents, already validated by
+		// the handler (issue #1065). Control-plane carries them straight to
+		// the launcher, which writes them into the sandbox working directory.
+		Attachments []Attachment `json:"attachments,omitempty"`
+		BearerJWT   string       `json:"bearer_jwt"`
+	}{Pack: pack, Instructions: instructions, Attachments: attachments, BearerJWT: bearerJWT}
 	if projectID != uuid.Nil {
 		payload.ProjectID = projectID.String()
 	}
