@@ -575,16 +575,16 @@ func (h *Handler) handleUpdateAccountRateLimits(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Pointer fields, so "absent" and "explicitly null" are both expressible:
-	// omitting a field leaves it as it was, sending null clears it to
-	// unlimited. json.Decoder gives us the first for free; the second needs
-	// the double pointer below, which is the smallest way to tell the two
-	// apart without a second request shape.
-	var body struct {
-		SessionLimit   **int64 `json:"session_limit"`
-		WeeklyLimit    **int64 `json:"weekly_limit"`
-		WeeklyAnchorAt *string `json:"weekly_anchor_at"`
-	}
+	// Decoded field by field, because "absent" and "explicitly null" have to
+	// mean different things here and a plain pointer cannot tell them apart.
+	//
+	// encoding/json sets a pointer field to nil for BOTH a missing key and a
+	// JSON null, whatever the depth: a **int64 does not buy the distinction,
+	// it only hides the fact that it was never there. The first version of
+	// this handler used one, and its test passed only because the value it
+	// tried to clear happened to be unset already. Omitting a field leaves it
+	// alone; sending null clears it to unlimited.
+	var body map[string]json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
@@ -597,14 +597,37 @@ func (h *Handler) handleUpdateAccountRateLimits(w http.ResponseWriter, r *http.R
 	}
 
 	input := AccountRateLimitsInput{SessionLimit: current.SessionLimit, WeeklyLimit: current.WeeklyLimit}
-	if body.SessionLimit != nil {
-		input.SessionLimit = *body.SessionLimit
+	for _, field := range []struct {
+		name   string
+		target **int64
+	}{
+		{"session_limit", &input.SessionLimit},
+		{"weekly_limit", &input.WeeklyLimit},
+	} {
+		raw, present := body[field.name]
+		if !present {
+			continue
+		}
+		if string(raw) == "null" {
+			*field.target = nil
+			continue
+		}
+		var value int64
+		if err := json.Unmarshal(raw, &value); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": field.name + " must be a whole number of credits, or null for no limit",
+			})
+			return
+		}
+		*field.target = &value
 	}
-	if body.WeeklyLimit != nil {
-		input.WeeklyLimit = *body.WeeklyLimit
-	}
-	if body.WeeklyAnchorAt != nil {
-		anchor, err := time.Parse(time.RFC3339, *body.WeeklyAnchorAt)
+	if raw, present := body["weekly_anchor_at"]; present && string(raw) != "null" {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "weekly_anchor_at must be RFC3339"})
+			return
+		}
+		anchor, err := time.Parse(time.RFC3339, text)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "weekly_anchor_at must be RFC3339"})
 			return

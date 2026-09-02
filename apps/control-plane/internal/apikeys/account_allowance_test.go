@@ -105,13 +105,39 @@ func TestZeroIsNotAConfigurableLimit(t *testing.T) {
 		t.Fatalf("a zero limit was accepted: %d %s", rr.Code, rr.Body.String())
 	}
 
-	// Null is how a limit is removed, and it is accepted.
+	// Set one, so the clearing assertion below is about clearing rather than
+	// about a value that was never there. The first version of this test
+	// cleared an already-unset limit and passed over a handler that could not
+	// tell an omitted field from an explicit null at all.
+	rr = doRequest(t, h, http.MethodPut, accountRateLimitsPath, map[string]interface{}{
+		"session_limit": 900_000,
+		"weekly_limit":  800_000,
+	})
+	if rr.Code != http.StatusOK || decodeBody(t, rr)["session_configured"] != true {
+		t.Fatalf("seeding a limit failed: %d %s", rr.Code, rr.Body.String())
+	}
+
+	// An omitted field leaves its limit alone.
+	rr = doRequest(t, h, http.MethodPut, accountRateLimitsPath, map[string]interface{}{"weekly_limit": 700_000})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("partial update failed: %d %s", rr.Code, rr.Body.String())
+	}
+	body := decodeBody(t, rr)
+	if body["session_limit"] == nil || body["session_limit"].(float64) != 900_000 {
+		t.Fatalf("an omitted field cleared its limit: %#v", body["session_limit"])
+	}
+
+	// Null is how a limit is removed, and it has to be told apart from absent.
 	rr = doRequest(t, h, http.MethodPut, accountRateLimitsPath, map[string]interface{}{"session_limit": nil})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("clearing a limit failed: %d %s", rr.Code, rr.Body.String())
 	}
-	if decodeBody(t, rr)["session_configured"] != false {
-		t.Fatal("a cleared limit is still reported as configured")
+	body = decodeBody(t, rr)
+	if body["session_configured"] != false {
+		t.Fatalf("a cleared limit is still reported as configured: %#v", body)
+	}
+	if body["weekly_configured"] != true {
+		t.Fatalf("clearing one window cleared the other: %#v", body)
 	}
 }
 
