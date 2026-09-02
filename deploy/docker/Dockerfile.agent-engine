@@ -8,6 +8,7 @@ COPY apps/control-plane/go.mod apps/control-plane/go.sum* ./apps/control-plane/
 COPY packages/storage/go.mod packages/storage/go.sum* ./packages/storage/
 COPY packages/audit-canonical/go.mod packages/audit-canonical/go.sum* ./packages/audit-canonical/
 COPY packages/budgetkeys/go.mod packages/budgetkeys/go.sum* ./packages/budgetkeys/
+COPY packages/ratewindows/go.mod packages/ratewindows/go.sum* ./packages/ratewindows/
 COPY packages/embedmodel/go.mod packages/embedmodel/go.sum* ./packages/embedmodel/
 COPY packages/dbtest/go.mod packages/dbtest/go.sum* ./packages/dbtest/
 COPY packages/sanitize/go.mod packages/sanitize/go.sum* ./packages/sanitize/

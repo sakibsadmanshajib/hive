@@ -515,7 +515,12 @@ func main() {
 
 		apikeysRepo := apikeys.NewPgxRepository(pool)
 		apikeysSvc = apikeys.NewService(apikeysRepo, apikeys.NewRedisSnapshotCache(redisClient))
-		apikeysHandler = apikeys.NewHandler(apikeysSvc, accountsSvc).WithResolveHealth(resolveHealth)
+		apikeysHandler = apikeys.NewHandler(apikeysSvc, accountsSvc).
+			WithResolveHealth(resolveHealth).
+			// Reads back the window counters edge-api's limiter writes, over
+			// the same Redis. Nil client leaves the consumption endpoint
+			// answering 503 rather than reporting zero usage (issue #1725).
+			WithUsageWindows(apikeys.NewUsageWindowReader(redisClient))
 
 		// Built here rather than beside the rest of the budgets wiring below
 		// because the accounting service takes the spend counter at

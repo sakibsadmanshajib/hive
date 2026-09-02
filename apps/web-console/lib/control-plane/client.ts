@@ -3336,3 +3336,77 @@ export async function getInvoicePdfUrl(invoiceId: string): Promise<string | null
   }
   return url;
 }
+
+/**
+ * One usage window as the customer may see it.
+ *
+ * There is no allowance figure here on purpose. The allowance is a credit
+ * score, credits convert to dollars by the constant this console publishes,
+ * and the internal credit value of a subscription is confidential (D-068), so
+ * a window reaches a customer as a percentage and a reset time or not at all
+ * (D-070).
+ */
+export interface UsageWindow {
+  window: string;
+  /** False means no limit is configured on this window, so it is unlimited. */
+  configured: boolean;
+  used_percent: number;
+  resets_at: string | null;
+  window_seconds: number;
+  /** True for the weekly window, which restores in full at its anchor. */
+  anchored: boolean;
+}
+
+/** Both windows for the current account. */
+export interface UsageWindows {
+  windows: UsageWindow[];
+  read_at: string | null;
+}
+
+function decodeUsageWindow(input: JsonValue): UsageWindow | null {
+  if (!isJsonObject(input)) return null;
+  const name = readStringField(input, "window");
+  const usedPercent = readNumberField(input, "used_percent");
+  const windowSeconds = readNumberField(input, "window_seconds");
+  if (name === null || usedPercent === null || windowSeconds === null) {
+    return null;
+  }
+  return {
+    window: name,
+    configured: readBooleanField(input, "configured") ?? false,
+    used_percent: usedPercent,
+    resets_at: readStringField(input, "resets_at"),
+    window_seconds: windowSeconds,
+    anchored: readBooleanField(input, "anchored") ?? false,
+  };
+}
+
+/**
+ * The account's session and weekly consumption, or null when the deployment
+ * cannot answer.
+ *
+ * Null is rendered as "unavailable", never as zero usage. A consumption bar
+ * that reads empty because its backing store is unreachable tells the customer
+ * they have used nothing, which is the opposite of the truth and the exact
+ * failure this endpoint exists to end (issue #1725).
+ */
+export async function getUsageWindows(): Promise<UsageWindows | null> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/usage-windows`,
+    { headers, cache: "no-store" },
+  );
+  if (!response.ok) {
+    return null;
+  }
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    return null;
+  }
+  const windows: UsageWindow[] = [];
+  for (const item of readArrayField(payload, "windows") ?? []) {
+    const decoded = decodeUsageWindow(item);
+    if (decoded) windows.push(decoded);
+  }
+  return { windows, read_at: readStringField(payload, "read_at") };
+}

@@ -411,7 +411,9 @@ func (r *pgxRepository) GetLifetimeSpend(ctx context.Context, apiKeyID uuid.UUID
 
 func (r *pgxRepository) GetKeyRatePolicy(ctx context.Context, apiKeyID uuid.UUID) (RatePolicy, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT requests_per_minute, tokens_per_minute, rolling_five_hour_limit, weekly_limit, free_token_weight_tenths, tier_overrides
+		SELECT requests_per_minute, tokens_per_minute,
+		       COALESCE(rolling_five_hour_limit, 0), COALESCE(weekly_limit, 0),
+		       free_token_weight_tenths, tier_overrides
 		FROM public.api_key_rate_policies
 		WHERE api_key_id = $1
 	`, apiKeyID)
@@ -517,15 +519,100 @@ func (r *pgxRepository) UpdateLimits(ctx context.Context, accountID, keyID uuid.
 
 func (r *pgxRepository) GetAccountRatePolicy(ctx context.Context, accountID uuid.UUID) (RatePolicy, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT requests_per_minute, tokens_per_minute, rolling_five_hour_limit, weekly_limit, free_token_weight_tenths
+		SELECT requests_per_minute, tokens_per_minute,
+		       COALESCE(rolling_five_hour_limit, 0), COALESCE(weekly_limit, 0),
+		       free_token_weight_tenths, weekly_anchor_at
 		FROM public.account_rate_policies
 		WHERE account_id = $1
 	`, accountID)
-	policy, err := scanRatePolicy(row)
+	policy, err := scanAccountRatePolicy(row)
 	if err == ErrNotFound {
 		return defaultRatePolicy(), nil
 	}
 	return policy, err
+}
+
+// AccountRateLimitsRepository is the account-scope window configuration, split
+// out as its own interface rather than added to Repository.
+//
+// Repository is implemented by several test doubles that have nothing to do
+// with rate limits; widening it would have meant editing all of them to add two
+// methods they never call. Callers type-assert for this instead and fail with a
+// clear error when it is absent, which is also the honest behaviour for a
+// deployment wired with a repository that genuinely cannot store a window.
+type AccountRateLimitsRepository interface {
+	GetAccountRateLimits(ctx context.Context, accountID uuid.UUID) (AccountRateLimits, error)
+	UpsertAccountRateLimits(ctx context.Context, accountID uuid.UUID, input AccountRateLimitsInput) (AccountRateLimits, error)
+}
+
+func (r *pgxRepository) GetAccountRateLimits(ctx context.Context, accountID uuid.UUID) (AccountRateLimits, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT rolling_five_hour_limit, weekly_limit, weekly_anchor_at, updated_at
+		FROM public.account_rate_policies
+		WHERE account_id = $1
+	`, accountID)
+
+	out := AccountRateLimits{AccountID: accountID}
+	var updatedAt time.Time
+	err := row.Scan(&out.SessionLimit, &out.WeeklyLimit, &out.WeeklyAnchorAt, &updatedAt)
+	if err == pgx.ErrNoRows {
+		// No row is a real state and not an error: the account has no window
+		// configured. It is reported as such rather than as a pair of zeros,
+		// which is the conflation issue #1725 exists to end.
+		return AccountRateLimits{AccountID: accountID}, nil
+	}
+	if err != nil {
+		return AccountRateLimits{}, err
+	}
+	out.UpdatedAt = &updatedAt
+	return out, nil
+}
+
+// UpsertAccountRateLimits writes the two windows. This is the writer those
+// columns have never had: they were declared in March 2026 and no code path
+// could reach them, so every account fell through to zero and nothing was ever
+// enforced anywhere.
+func (r *pgxRepository) UpsertAccountRateLimits(ctx context.Context, accountID uuid.UUID, input AccountRateLimitsInput) (AccountRateLimits, error) {
+	if err := validateWindowLimit(input.SessionLimit); err != nil {
+		return AccountRateLimits{}, err
+	}
+	if err := validateWindowLimit(input.WeeklyLimit); err != nil {
+		return AccountRateLimits{}, err
+	}
+
+	anchor := input.WeeklyAnchorAt
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO public.account_rate_policies
+			(account_id, rolling_five_hour_limit, weekly_limit, weekly_anchor_at, updated_at)
+		VALUES ($1, $2, $3, COALESCE($4, now()), now())
+		ON CONFLICT (account_id) DO UPDATE
+		SET rolling_five_hour_limit = EXCLUDED.rolling_five_hour_limit,
+		    weekly_limit            = EXCLUDED.weekly_limit,
+		    weekly_anchor_at        = COALESCE($4, public.account_rate_policies.weekly_anchor_at),
+		    updated_at              = now()
+	`, accountID, input.SessionLimit, input.WeeklyLimit, anchor)
+	if err != nil {
+		return AccountRateLimits{}, err
+	}
+	return r.GetAccountRateLimits(ctx, accountID)
+}
+
+// validateWindowLimit refuses a stored zero.
+//
+// A zero allowance is not expressible on purpose. The column means "unset" when
+// it is absent, and an operator typing 0 to mean "allow nothing" would
+// otherwise have configured the exact opposite: no limit at all. Refusing it
+// here is what keeps that one column from carrying two meanings again, and it
+// is enforced a second time by a CHECK constraint, because an application-only
+// rule is one direct SQL statement away from being untrue.
+func validateWindowLimit(limit *int64) error {
+	if limit == nil {
+		return nil
+	}
+	if *limit <= 0 || *limit > WindowLimitMax {
+		return ErrLimitsOutOfRange
+	}
+	return nil
 }
 
 // GetTenantIDByAccountID resolves an account to the tenant it bills, via
@@ -673,6 +760,36 @@ func scanPolicy(row scannable) (KeyPolicy, error) {
 	p.AllowedAliases = parseStringSlice(allowedAliases)
 	p.DeniedAliases = parseStringSlice(deniedAliases)
 	return p, nil
+}
+
+// scanAccountRatePolicy reads the account projection, which carries the weekly
+// anchor the key projection does not have.
+//
+// COALESCE, not a nullable scan target: the two window columns are NULL when
+// unconfigured, and the edge wire contract keeps zero meaning unset. See the
+// comment on the edge's RatePolicy for why that is not merely convenience --
+// a new edge-api reads snapshots an older control-plane cached, so a zero on
+// this wire has to keep meaning exactly what it has always meant.
+func scanAccountRatePolicy(row scannable) (RatePolicy, error) {
+	var (
+		policy RatePolicy
+		anchor time.Time
+	)
+	if err := row.Scan(
+		&policy.RateLimitRPM,
+		&policy.RateLimitTPM,
+		&policy.RollingFiveHourLimit,
+		&policy.WeeklyLimit,
+		&policy.FreeTokenWeightTenths,
+		&anchor,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return RatePolicy{}, ErrNotFound
+		}
+		return RatePolicy{}, err
+	}
+	policy.WeeklyAnchorAt = &anchor
+	return policy, nil
 }
 
 func scanRatePolicy(row scannable) (RatePolicy, error) {

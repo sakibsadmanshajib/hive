@@ -313,6 +313,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		protectedAPIKeys := cfg.AuthMiddleware.Require(cfg.APIKeysHandler)
 		mux.Handle("/api/v1/accounts/current/api-keys", protectedAPIKeys)
 		mux.Handle("/api/v1/accounts/current/api-keys/", protectedAPIKeys)
+		// Account-scope usage windows: the administrator's configuration
+		// route and the customer's consumption read (issue #1725).
+		mux.Handle("/api/v1/accounts/current/rate-limits", protectedAPIKeys)
+		mux.Handle("/api/v1/accounts/current/usage-windows", protectedAPIKeys)
 		// Internal service-to-service route — guarded by the shared-secret token.
 		mux.Handle("/internal/apikeys/resolve", internal(cfg.APIKeysHandler))
 	}
