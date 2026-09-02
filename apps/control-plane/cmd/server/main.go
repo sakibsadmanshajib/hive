@@ -1287,6 +1287,32 @@ func main() {
 		// live engine surface, and its per-task failures degrade to missed
 		// events, never wrong ones.
 		if agentEngineStatus != nil {
+			// The event syncer is built first because the poller takes its
+			// flush as a dependency (issues #1622, #1504): the poller is where
+			// every task's terminal status is published, the chat transcript
+			// stops following a run the instant it reads one, so the run's
+			// last steps have to be recorded on this side of that transition
+			// rather than on whichever side two independent loop schedules
+			// happened to put them.
+			var flushTaskEvents func(context.Context, agenttask.Task)
+			if agentEngineEvents != nil {
+				// Its own interval, deliberately faster than the status
+				// poller's and deliberately not derived from it: a status is
+				// a fact about a run that is either over or not, while a step
+				// is something a person is watching for, and a step that
+				// surfaces fifteen seconds after the agent took it reads as a
+				// hang.
+				syncer := agenttask.NewEventSyncer(agentTaskRepo, agentEngineEvents, agenttask.PollerConfig{
+					Interval: parseDurationEnv("HIVE_AGENT_TASK_EVENT_INTERVAL",
+						agenttask.DefaultEventSyncInterval),
+					Logger: slog.Default(),
+				})
+				syncer.Start(runCtx)
+				defer syncer.Stop()
+				log.Println("agent task event syncer started")
+				flushTaskEvents = syncer.FlushTask
+			}
+
 			interval := parseDurationEnv("HIVE_AGENT_TASK_POLL_INTERVAL", 15*time.Second)
 			poller := agenttask.NewPoller(agentTaskRepo, agentEngineStatus, agenttask.PollerConfig{
 				Interval: interval,
@@ -1294,22 +1320,13 @@ func main() {
 				// The poller is where nearly every task reaches a terminal
 				// state, so it is where the per-task credential normally ends.
 				Credentials: agentTaskCreds,
+				FlushEvents: flushTaskEvents,
 			})
 			// Bound to runCtx so it stops cleanly on shutdown, same as the
 			// other background workers below (spend-alert cron, WAL drainer).
 			poller.Start(runCtx)
 			defer poller.Stop()
 			log.Println("agent task status poller started")
-
-			if agentEngineEvents != nil {
-				syncer := agenttask.NewEventSyncer(agentTaskRepo, agentEngineEvents, agenttask.PollerConfig{
-					Interval: interval,
-					Logger:   slog.Default(),
-				})
-				syncer.Start(runCtx)
-				defer syncer.Stop()
-				log.Println("agent task event syncer started")
-			}
 		}
 
 		// Scheduled agent tasks ("routines"): the CRUD surface plus the
