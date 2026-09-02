@@ -2778,7 +2778,12 @@ export async function getBudgetThreshold(): Promise<BudgetThreshold | null> {
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to fetch budget threshold"));
+    // ControlPlaneError, not a bare Error: billing.view is owner-only in
+    // authz.Policy, so a member's answer here is a 403, and a caller that
+    // cannot see the status has to render that refusal as an outage. The
+    // message is unchanged; throwControlPlaneError builds it from the same
+    // body field and the same fallback (issue #494).
+    await throwControlPlaneError(response, "Failed to fetch budget threshold");
   }
 
   const payload = parseJsonValue(await readResponseText(response));

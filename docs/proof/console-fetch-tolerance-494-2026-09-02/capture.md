@@ -200,3 +200,101 @@ This pair is what makes 06 a real distinction rather than a renamed error
 state: the two causes now render different pages, and the 404 wording is
 unchanged. 403 deliberately renders identically to 404, so the page still
 cannot be used to probe for intent ids belonging to other accounts.
+
+---
+
+# Review round four, same day
+
+Captures 08 to 13 cover the blocking item from round three: the budget page
+told a member "We could not reach the budget service" about a service that was
+answering correctly, and withheld the read-only form that
+`tests/e2e/console-budgets.spec.ts` pins. Round four also fixes the same
+collapse at two more sites found by sweeping the reads this PR converted
+against `authz.Policy`.
+
+The frames come in pairs, one surface at a time. Each pair puts a refusal and
+an outage in front of the same page on the same running server, because the
+whole claim is that those two are no longer the same render.
+
+| capture | viewer role | endpoint answer | surface |
+| --- | --- | --- | --- |
+| 08 | member | `403` | `/console/billing/budget` |
+| 09 | member | `403` | `/console/billing` |
+| 10 | member | `403` | `/console/api-keys/{id}/limits` |
+| 11 | owner | `503` | `/console/billing/budget` |
+| 12 | owner | `503` | `/console/billing` |
+| 13 | owner | `503` | `/console/api-keys/{id}/limits` |
+
+Same harness as the rounds above: the repo's own `web-console` service built
+with `--build`, running `next build` then `next start`, with a fixture server
+standing in for the GoTrue and control-plane origins. The fixture gained four
+knobs for this round, `VIEWER_ROLE`, `WS_BUDGET_STATUS`, `THRESHOLD_STATUS`
+and `LIMITS_STATUS`, so a refusal can be served separately from an outage on
+each read. The server is not rebuilt between 08 to 10 and 11 to 13; only the
+fixture is restarted, by the same `/proc` scan documented in round one.
+
+URLs carry no credentials, so nothing is redacted. The fixture session is a
+fabricated token for a fabricated account (`proof@hive-demo.invalid`,
+"Northwind Analytics"); no real user, workspace or balance appears.
+
+## 08 member, budget caps refused
+
+This is the frame the blocker is about. The form renders, disabled, with the
+read-only notice, which is exactly what a member is supposed to see and what
+the spec asserts. Before this round the page rendered an EmptyState instead
+and `#budget-soft-cap` did not exist, which is why `console-budgets.spec.ts:77`
+failed three times out of three.
+
+```text
+#budget-soft-cap present                              -> true
+#budget-soft-cap disabled                             -> true
+body contains "Only the workspace owner can edit budget caps."  -> true
+body contains "We could not reach the budget service" -> false
+body contains "Could not load your budget"            -> false
+browser console messages                              -> none
+```
+
+## 09 member, alert threshold refused
+
+Found by the sweep. `getBudgetThreshold` is read through `billing.view`, which
+`authz.Policy` grants to owners only, so every member on the billing overview
+read the outage line.
+
+```text
+body contains "You cannot view the alert threshold"   -> true
+body contains "We could not reach the budget service" -> false
+```
+
+Fixing the page was not enough on its own. `getBudgetThreshold` threw a bare
+`Error`, so the 403 never reached the caller with its status attached and the
+page's refusal branch could not fire. It now throws `ControlPlaneError` like
+the rest of the module. The message it carries is unchanged:
+`throwControlPlaneError` builds it from the same body field and the same
+fallback string that `readResponseError` used.
+
+## 10 member, key rate limits refused
+
+Also found by the sweep. `getApiKeyLimits` is read through `api_keys.read`,
+also owner-only, and that page is deliberately written to serve members
+read-only, so a refusal is its ordinary answer rather than an edge case.
+
+```text
+body contains "You cannot view these rate limits"  -> true
+body contains "We could not reach the key service" -> false
+```
+
+## 11, 12 and 13 controls, the same three surfaces during a real outage
+
+Same server, fixture answering 503, viewer restored to owner. All three
+surfaces return to the unreadable wording, and the budget form is withheld
+again.
+
+```text
+11: "Could not load your budget"            -> true, #budget-soft-cap present -> false
+12: "Could not load your alert threshold"   -> true
+13: "Could not load these rate limits"      -> true
+```
+
+This is what makes 08 to 10 evidence rather than a renamed error state. The
+two causes now render different pages, the outage wording is unchanged, and
+the read-only form appears only when the refusal is what actually happened.
