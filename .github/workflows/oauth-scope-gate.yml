@@ -23,7 +23,7 @@ name: OAuth scope gate
 #
 # Not a required status check, for the same reason, and it is worth being
 # precise about what that costs rather than talking it away.
-# .github/branch-protection-main.json lists seven required contexts and this
+# .github/branch-protection-main.json lists ten required contexts and this
 # is not one of them, `strict` is false and `required_pull_request_reviews` is
 # null, so GitHub will merge a pull request with this run red. Since this
 # repository merges autonomously through the merge API, nothing sits between a

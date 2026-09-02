@@ -28,8 +28,11 @@ TRIAGED = {
 }
 
 
-def pull(body, labels=("priority:high", "internal"), author="sakibsadmanshajib", files=()):
-    return {"body": body, "labels": list(labels), "author": author, "files": list(files)}
+REPO = "sakibsadmanshajib/hive"
+
+
+def pull(body, labels=("priority:high", "internal"), author="sakibsadmanshajib", files=(), repo=REPO):
+    return {"body": body, "labels": list(labels), "author": author, "files": list(files), "repo": repo}
 
 
 # --- the link parser -------------------------------------------------------
@@ -39,6 +42,14 @@ assert check.links("Fixes #12\nResolves #13") == {12: True, 13: True}
 assert check.links("Refs #99") == {99: False}
 assert check.links("Part of #99") == {99: False}
 assert check.links("Closes https://github.com/sakibsadmanshajib/hive/issues/7") == {7: True}
+# A full URL only counts for the repository being validated. Without this, a
+# pull request here could satisfy the gate by pointing at another repository's
+# issue #7 while this repository's #7 is what actually gets read and approved.
+assert check.links("Closes https://github.com/sakibsadmanshajib/hive/issues/7", REPO) == {7: True}
+assert check.links("Closes https://github.com/SakibSadmanShajib/Hive/issues/7", REPO) == {7: True}
+assert check.links("Closes https://github.com/someone-else/repo/issues/7", REPO) == {}
+# A bare #N is always this repository's, so the binding leaves it alone.
+assert check.links("Closes #7", REPO) == {7: True}
 # Cited both ways in one body: the closing reading wins, because it is stricter.
 assert check.links("Refs #5. Closes #5.") == {5: True}
 # A bare number in prose is not a link. This is the assertion that keeps the
@@ -52,6 +63,21 @@ assert check.links("") == {}
 
 problems = check.verdict(pull("Refactors the reaper. No issue for this one."), {})
 assert problems and "links no issue" in problems[0], problems
+
+# A link to another repository's issue is rejected, and says so rather than
+# reporting the vaguer "links no issue".
+foreign = check.verdict(
+    pull("Closes https://github.com/someone-else/repo/issues/1"),
+    {1: dict(TRIAGED)},
+)
+assert any("another repository" in line for line in foreign), foreign
+
+# The same shape pointed here passes, so the rejection above is about the
+# repository and not about the URL form.
+assert check.verdict(
+    pull(f"Closes https://github.com/{REPO}/issues/1234"), {1234: TRIAGED}
+) == []
+
 
 # --- an untriaged issue is rejected ----------------------------------------
 
@@ -126,6 +152,15 @@ assert check.exempt("sakibsadmanshajib", [".wolf/buglog.jsonl"])
 # way to attach any diff to an exempt path.
 assert check.exempt("sakibsadmanshajib", [".wolf/buglog.jsonl", "apps/edge-api/main.go"]) is None
 assert check.exempt("sakibsadmanshajib", ["docs/README.md"]) is None
+# The carve out is Dependabot, not bots in general. A different app, or a
+# human account named to look like one, is not exempt: otherwise anything
+# installed on the repository inherits the bypass.
+assert check.exempt("renovate[bot]", ["package-lock.json"]) is None
+assert check.exempt("app/renovate", []) is None
+assert check.exempt("github-actions[bot]", ["docs/README.md"]) is None
+assert check.exempt("not-dependabot[bot]", []) is None
+assert check.exempt("dependabot-lookalike", []) is None
+assert check.exempt("app/dependabot-impostor", []) is None
 assert check.exempt("sakibsadmanshajib", []) is None
 
 print("scripts/check-pr-tracking.py self-checks passed")

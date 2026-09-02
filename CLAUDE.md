@@ -8,7 +8,7 @@ Project use OpenWolf for context mgmt. Read + follow `.claude/rules/openwolf.md`
 
 The main agent is bound by `.claude/rules/orchestrator.md`. Read it at session start. It defines persona, delegation rules, communication protocol, agent fleet rules, and context hygiene for the CTO orchestrator role.
 
-Tracking discipline is bound by `.claude/rules/tracking-discipline.md`: an issue exists before a fix does, every issue carries one priority label and one area label, and the orchestrator re-triages at the start of each session. It is enforced by the `PR is attached to a triaged issue` required check, so a pull request that ignores it does not merge.
+Tracking discipline is bound by `.claude/rules/tracking-discipline.md`: an issue exists before a fix does, every issue carries exactly one priority label and at least one area label, and the orchestrator re-triages at the start of each session. It is enforced by the `PR is attached to a triaged issue` required check, so a pull request that ignores it does not merge.
 
 This repo also carries project-level skills under `.claude/skills/`, routed only here since the global skill router cannot enumerate every project's local skills. List that directory and check the front matter `description` of anything that looks relevant before reaching for a global equivalent. The list is deliberately not enumerated here: the enumeration that used to sit in this paragraph went stale in both directions, naming four skills that had been dead for months while omitting six that existed.
 

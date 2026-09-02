@@ -12,7 +12,8 @@ check.
 
 What it enforces, per pull request:
 
-  * the body links an issue with Closes/Fixes/Resolves #N or Refs/Part of #N;
+  * the body links an issue in this repository with Closes/Fixes/Resolves #N
+    or Refs/Part of #N, either bare or as a full github.com URL;
   * every linked issue carries exactly one of the four priority labels;
   * every linked issue carries at least one area label;
   * a priority:critical or priority:high issue carries a milestone, because an
@@ -20,9 +21,9 @@ What it enforces, per pull request:
   * the pull request wears the priority and area labels of every issue it
     closes, so the board reads the same from either side.
 
-Two carve outs, both printed in the run log rather than silent. Dependabot
-cannot file an issue, and a gate that blocks dependency updates gets switched
-off. A pull request whose whole diff is .wolf/buglog.jsonl is the buglog only
+Two carve outs, both printed in the run log rather than silent. Dependabot,
+and only Dependabot, cannot file an issue, and a gate that blocks dependency
+updates gets switched off. A pull request whose whole diff is .wolf/buglog.jsonl is the buglog only
 pull request that .claude/rules/openwolf.md mandates, recording a fix that
 already had an issue of its own.
 
@@ -58,6 +59,15 @@ PRIORITY_LABELS = (
 RETIRED_PRIORITY = re.compile(r"^priority:P[0-3]$", re.IGNORECASE)
 AREA_LABELS = ("demo-surface", "money-path", "internal")
 NEEDS_MILESTONE = ("priority:critical", "priority:high")
+# The carve out is Dependabot, not bots in general: matching every `*[bot]` or
+# `app/*` author would hand the bypass to any other app installed on the
+# repository, and to a human pull request opened through one. GitHub reports
+# the author as `dependabot[bot]` on the REST API and `app/dependabot` in some
+# `gh` output shapes, so both spellings are named, with the retired preview app
+# alongside them.
+DEPENDABOT_AUTHORS = frozenset(
+    {"dependabot[bot]", "app/dependabot", "dependabot", "dependabot-preview[bot]", "app/dependabot-preview"}
+)
 BUGLOG_PATH = ".wolf/buglog.jsonl"
 
 # Closing verbs bind the pull request to the whole issue; reference verbs claim
@@ -70,19 +80,29 @@ REFERENCE_VERBS = ("refs", "ref", "references", "part of", "re")
 _VERBS = "|".join(sorted((*CLOSING_VERBS, *REFERENCE_VERBS), key=len, reverse=True))
 LINK_RE = re.compile(
     rf"\b(?P<verb>{_VERBS})\b\s*:?\s*"
-    r"(?:#|https://github\.com/[\w.-]+/[\w.-]+/issues/)(?P<number>\d+)",
+    r"(?:#|https://github\.com/(?P<repo>[\w.-]+/[\w.-]+)/issues/)(?P<number>\d+)",
     re.IGNORECASE,
 )
 
 
-def links(body: str) -> dict[int, bool]:
+def links(body: str, repo: str | None = None) -> dict[int, bool]:
     """Issue number to "this pull request closes it".
 
     A number cited both ways in one body counts as closing, which is the
     stricter reading and so the safe one.
+
+    A link written as a full URL only counts when it points at `repo`. The
+    number in `https://github.com/someone-else/thing/issues/7` says nothing
+    about this repository's #7, and without this the gate would validate the
+    local issue that happens to share the number and pass. Called with no
+    `repo` the parse is repository blind, which is how the caller distinguishes
+    "linked nothing" from "linked somewhere else".
     """
     found: dict[int, bool] = {}
     for match in LINK_RE.finditer(body or ""):
+        target = match.group("repo")
+        if target and repo and target.lower() != repo.lower():
+            continue
         number = int(match.group("number"))
         closing = match.group("verb").lower() in CLOSING_VERBS
         found[number] = found.get(number, False) or closing
@@ -99,8 +119,8 @@ def areas(labels: list[str]) -> list[str]:
 
 def exempt(author: str, files: list[str]) -> str | None:
     """The reason this pull request is exempt, or None."""
-    if author.endswith("[bot]") or author.startswith("app/") or author == "dependabot":
-        return f"author {author} is a bot and cannot file an issue first"
+    if author.lower() in DEPENDABOT_AUTHORS:
+        return f"author {author} is Dependabot and cannot file an issue first"
     if files and set(files) == {BUGLOG_PATH}:
         return f"the whole diff is {BUGLOG_PATH}, the buglog only pull request openwolf.md mandates"
     return None
@@ -109,8 +129,15 @@ def exempt(author: str, files: list[str]) -> str | None:
 def verdict(pull: dict, issues: dict[int, dict]) -> list[str]:
     """Every reason to reject, as printable lines. Empty means tracked."""
     problems: list[str] = []
-    referenced = links(pull.get("body") or "")
+    repo = pull.get("repo")
+    referenced = links(pull.get("body") or "", repo)
     if not referenced:
+        if repo and links(pull.get("body") or ""):
+            return [
+                f"the body links an issue in another repository, and none in {repo}. "
+                "This gate can only confirm that an issue here is triaged. See "
+                ".claude/rules/tracking-discipline.md"
+            ]
         return [
             "the body links no issue. Add `Closes #N`, or `Refs #N` when this "
             "delivers only part of the issue. See .claude/rules/tracking-discipline.md"
@@ -161,6 +188,7 @@ def gh_json(args: list[str]) -> dict:
 def fetch(repo: str, number: int) -> tuple[dict, dict[int, dict]]:
     raw = gh_json(["api", f"repos/{repo}/pulls/{number}"])
     pull = {
+        "repo": repo,
         "author": (raw.get("user") or {}).get("login", ""),
         "body": raw.get("body") or "",
         "labels": [label["name"] for label in raw.get("labels") or []],
@@ -172,7 +200,7 @@ def fetch(repo: str, number: int) -> tuple[dict, dict[int, dict]]:
         pull["files"] = [entry["filename"] for entry in gh_json(["api", f"repos/{repo}/pulls/{number}/files"])]
 
     issues: dict[int, dict] = {}
-    for target in links(pull["body"]):
+    for target in links(pull["body"], repo):
         try:
             item = gh_json(["api", f"repos/{repo}/issues/{target}"])
         except RuntimeError:
