@@ -309,6 +309,32 @@ RUN python3 /tmp/apply_web_search_embed_failure_1609_patch.py \
     && ! grep -q 'error saving docs' /app/backend/open_webui/routers/retrieval.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/retrieval.py').read_text())"
 
+# issue #1696: the embedding spend this container produces was billed to the
+# shared shim account instead of to the customer who caused it. RAG_OPENAI_API_KEY
+# is OWUI_SHIM_KEY (docker-compose.yml), so every web search index, every
+# document ingest and every retrieval query reached Hive's own metered gateway
+# as one platform principal. The customer's usage showed nothing they did, one
+# account absorbed every tenant's embedding spend at once, and the per-tenant
+# budget never saw the request it was meant to cap.
+#
+# The carrier is the one this deployment already has: edge-api reads a per-user
+# token off X-Hive-Upstream-Auth and honours it only under the shim key
+# (apps/edge-api/internal/auth/owui_unwrap.go), which is the same mechanism
+# hive_agent_proxy.py uses for the agent-task endpoints. The splice attaches it
+# in agenerate_openai_batch_embeddings, the single function every embedding on
+# this deployment leaves through, and raises rather than falling back to the
+# shim when no signed-in user resolves.
+#
+# The Go half ships with this: /v1/embeddings is now in requiresPerUserAuth, so
+# a shim-key embedding with no carrier is refused instead of mis-billed. The two
+# halves are useless apart, which scripts/test_owui_embed_attribution.py asserts.
+COPY deploy/docker/owui-patches/hive_embed_attribution.py /app/backend/open_webui/utils/hive_embed_attribution.py
+COPY deploy/docker/owui-patches/apply_embed_attribution_1696_patch.py /tmp/apply_embed_attribution_1696_patch.py
+RUN python3 /tmp/apply_embed_attribution_1696_patch.py \
+    && test "$(grep -c '# hive (#1696)' /app/backend/open_webui/retrieval/utils.py)" -eq 1 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/retrieval/utils.py').read_text())" \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_embed_attribution.py').read_text())"
+
 # The other half of #1609 patches nothing: the batching and the semaphore are
 # upstream's own, in get_embedding_function, and the fix is only that
 # RAG_EMBEDDING_BATCH_SIZE and RAG_EMBEDDING_CONCURRENT_REQUESTS stop sitting

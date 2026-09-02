@@ -1564,10 +1564,18 @@ services:
       # id. "text-embedding-3-small" is not in the catalog and every document
       # upload failed alias resolution: the value this line carried between
       # 2026-05-18 and 2026-07-26 was still persisted on the demo box long after
-      # this default was corrected, which is issue #722. OWUI's own embedding
-      # calls carry no request body metadata, so they cannot be unwrapped to a
-      # per-user JWT: OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for
-      # this path to authenticate at all (see scripts/seed-owui-e2e-user.py).
+      # this default was corrected, which is issue #722. OWUI_SHIM_KEY must be a
+      # real minted "hk_" Hive API key for this path to authenticate at all (see
+      # scripts/seed-owui-e2e-user.py).
+      #
+      # It is no longer what the embedding is BILLED to, which is issue #1696.
+      # OWUI's embedding calls carry no request body metadata, so the per-user
+      # token cannot be unwrapped from the body the way a chat completion's is;
+      # deploy/docker/owui-patches/hive_embed_attribution.py puts it on the
+      # X-Hive-Upstream-Auth header instead, which edge-api honours only when
+      # Authorization is exactly this key. So the shim key still authenticates
+      # the container, and the signed-in user is who pays. A call that cannot
+      # resolve a user is refused at both ends rather than charged here.
       RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
       # Chat upload limits (#1405, #1428). Both are persistent config, so both
       # are reconciled by owui-patches/hive_rag_env_config.py for the same

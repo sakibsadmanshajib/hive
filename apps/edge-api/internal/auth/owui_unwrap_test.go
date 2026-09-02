@@ -186,16 +186,21 @@ func TestOWUIUnwrap_DisabledWhenShimKeyEmpty(t *testing.T) {
 }
 
 // TestOWUIUnwrap_ShimKeyWithoutMetadata_FallsThrough documents that on the
-// paths where the shim key is itself the intended credential (OWUI's own
-// document-RAG embedding calls and its text-to-speech calls, neither of
-// which the hive_jwt_forward pipeline decorates) a missing __metadata is
-// expected and the shim key must survive to the API-key path.
+// paths where the shim key is itself the intended credential a missing
+// __metadata is expected and the shim key must survive to the API-key path.
+//
+// The list is now audio alone. /v1/embeddings used to be here too, and that is
+// exactly what issue #1696 records: OWUI's Python retrieval path spends real,
+// metered credits on this gateway, and letting the shim key survive there put
+// every tenant's search, ingest and query embeddings on one platform account.
+// Text-to-speech and speech-to-text still do, which is named in
+// requiresPerUserAuth rather than left to be rediscovered.
 func TestOWUIUnwrap_ShimKeyWithoutMetadata_FallsThrough(t *testing.T) {
-	for _, path := range []string{"/v1/embeddings", "/v1/audio/speech"} {
+	for _, path := range []string{"/v1/audio/speech", "/v1/audio/transcriptions"} {
 		t.Run(path, func(t *testing.T) {
 			mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 			next, captured := newCaptureHandler()
-			req := wrapPath(t, path, map[string]any{"model": "hive-embedding-default"}, "Bearer "+testShimKey)
+			req := wrapPath(t, path, map[string]any{"model": "hive-tts"}, "Bearer "+testShimKey)
 			rr := httptest.NewRecorder()
 			mw(next).ServeHTTP(rr, req)
 
@@ -212,10 +217,28 @@ func TestOWUIUnwrap_ShimKeyWithoutMetadata_FallsThrough(t *testing.T) {
 func TestOWUIUnwrap_InvalidJSON_FallsThrough(t *testing.T) {
 	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 	next, captured := newCaptureHandler()
-	req := wrapPath(t, "/v1/embeddings", []byte("not json"), "Bearer "+testShimKey)
+	req := wrapPath(t, "/v1/audio/speech", []byte("not json"), "Bearer "+testShimKey)
 	mw(next).ServeHTTP(httptest.NewRecorder(), req)
 	if captured.authorization != "Bearer "+testShimKey {
 		t.Fatalf("non-json must fall through, got %q", captured.authorization)
+	}
+}
+
+// TestOWUIUnwrap_InvalidJSONOnEmbeddings_StillRejects closes the same way
+// around the #1696 refusal that TestOWUIUnwrap_ChatCompletionsWithNonJSONBody_StillRejects
+// closes on the chat path: a body the unwrap cannot parse carries no token, so
+// forwarding it would put the spend back on the shim account.
+func TestOWUIUnwrap_InvalidJSONOnEmbeddings_StillRejects(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCaptureHandler()
+	req := wrapPath(t, "/v1/embeddings", []byte("not json"), "Bearer "+testShimKey)
+	rr := httptest.NewRecorder()
+	mw(next).ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if captured.authorization != "" {
+		t.Fatalf("request must not reach the handler, got authorization %q", captured.authorization)
 	}
 }
 
@@ -444,5 +467,82 @@ func TestOWUIUnwrap_StripsMalformedMetadata(t *testing.T) {
 	mw(next).ServeHTTP(httptest.NewRecorder(), req)
 	if bytes.Contains(captured.body, []byte("__metadata")) {
 		t.Fatalf("malformed __metadata must still be stripped: %s", captured.body)
+	}
+}
+
+// TestOWUIUnwrap_EmbeddingsWithoutUserToken_Rejects is the fail-closed half of
+// issue #1696. Open WebUI's Python retrieval path (web search indexing,
+// document ingest, retrieval queries) posts to /v1/embeddings with
+// RAG_OPENAI_API_KEY, which is OWUI_SHIM_KEY. Every one of those calls used to
+// be authorized, held and charged against whichever account owns that key, so
+// one platform account absorbed the embedding spend of every tenant at once
+// and no customer's own usage showed the search they ran.
+//
+// The rule this asserts is not "charge someone else instead". It is that a
+// call which cannot say who it belongs to is refused before it reaches the
+// handler, so no request can quietly fall back to billing the platform.
+func TestOWUIUnwrap_EmbeddingsWithoutUserToken_Rejects(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCaptureHandler()
+	req := wrapPath(t, "/v1/embeddings",
+		map[string]any{"model": "hive-embedding-default", "input": []string{"hello"}},
+		"Bearer "+testShimKey)
+	rr := httptest.NewRecorder()
+	mw(next).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if captured.authorization != "" {
+		t.Fatalf("request must not reach the handler, got authorization %q", captured.authorization)
+	}
+	if strings.Contains(strings.ToLower(rr.Body.String()), "incorrect api key") {
+		t.Fatalf("must not report the generic invalid-key reason, got %s", rr.Body.String())
+	}
+}
+
+// TestOWUIUnwrap_EmbeddingsWithUserToken_RewritesToTheUser is the other half:
+// the decorated call is rewritten onto the signed-in user's own credential, so
+// everything downstream (route selection, the credit hold, the charge, the
+// usage row) binds to that user rather than to the shim principal.
+func TestOWUIUnwrap_EmbeddingsWithUserToken_RewritesToTheUser(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCaptureHandler()
+	req := wrapPath(t, "/v1/embeddings",
+		map[string]any{"model": "hive-embedding-default", "input": []string{"hello"}},
+		"Bearer "+testShimKey)
+	req.Header.Set(auth.UpstreamAuthHeader, "Bearer searching-user-jwt")
+	rr := httptest.NewRecorder()
+	mw(next).ServeHTTP(rr, req)
+
+	if captured.authorization != "Bearer searching-user-jwt" {
+		t.Fatalf("expected the searching user's token on Authorization, got %q", captured.authorization)
+	}
+	if strings.Contains(captured.authorization, testShimKey) {
+		t.Fatalf("the shim key must not survive onto the forwarded request")
+	}
+	if !captured.unwrapped {
+		t.Fatalf("expected IsOWUIUnwrapped(ctx) true so the tenant fallback applies")
+	}
+}
+
+// TestOWUIUnwrap_EmbeddingsWithARealAPIKey_PassesThrough keeps the blast
+// radius of the change above where it belongs. requiresPerUserAuth is only
+// ever consulted under the shim key, so a paying customer calling
+// /v1/embeddings with their own hk_ key is untouched by #1696.
+func TestOWUIUnwrap_EmbeddingsWithARealAPIKey_PassesThrough(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCaptureHandler()
+	req := wrapPath(t, "/v1/embeddings",
+		map[string]any{"model": "hive-embedding-default", "input": []string{"hello"}},
+		"Bearer hk_customer_key")
+	rr := httptest.NewRecorder()
+	mw(next).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected pass-through, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if captured.authorization != "Bearer hk_customer_key" {
+		t.Fatalf("expected the customer's own key untouched, got %q", captured.authorization)
 	}
 }
