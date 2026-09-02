@@ -27,6 +27,8 @@ type (
 	Config = engine.Config
 	// SandboxEngine is engine.SandboxEngine.
 	SandboxEngine = engine.SandboxEngine
+	// Attachment is engine.Attachment.
+	Attachment = engine.Attachment
 )
 
 const (

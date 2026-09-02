@@ -1,0 +1,13 @@
+landed on http://127.0.0.1:13650/
+composer mode is now cowork (Work)
+attached service-record.txt through the composer file input
+old blanket refusal toast present: false
+frame 01: Work mode, file chip in the composer, no refusal
+intercepted POST /api/v1/hive/agent/tasks (258 bytes of body)
+frame 02: the run turn, with the attachment rendered on the user message
+request carried 1 attachment(s)
+  name=service-record.txt bytes=85
+  content carries the unique code BRACKEN-1065-QX: true
+  content: "Hive demo box service record.\n\nRack asset tag: BRACKEN-1065-QX\nLocation: lab shelf 2\n"
+request pack: knowledge-work-pack
+request instructions: "Read the attached service record and state the rack asset tag."

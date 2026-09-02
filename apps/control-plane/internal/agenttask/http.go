@@ -46,7 +46,14 @@ const internalPrefix = "/internal/agent-tasks/"
 // carries pack plus a free-text instructions/prompt field, which needs more
 // headroom than a bare pack name; other bodies on this handler (cancel) send
 // none at all.
-const maxBodyBytes = 64 << 10 // 64 KiB
+// Raised from 64 KiB for issue #1065: a create request now carries the
+// person's attached documents inline, capped at 256 KiB of text by edge-api.
+// JSON escaping sits on top of that and decides the real number: a control
+// character encodes as \uXXXX, so the worst case is six times the content cap.
+// This is edge-api's own maxCreateBodyBytes and the launcher's /launch reader,
+// and the three have to agree or a request that one hop accepts is malformed
+// JSON at the next.
+const maxBodyBytes = 2 << 20 // 2 MiB, 8x the 256 KiB attachment content cap
 
 func (h *Handler) serveInternal(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, internalPrefix), "/")
@@ -128,6 +135,38 @@ type createRequest struct {
 	// same user's own already-validated JWT, never minting one. See
 	// Task.BearerJWT's doc comment.
 	BearerJWT string `json:"bearer_jwt"`
+	// Attachments are the person's own documents (issue #1065), already
+	// validated by edge-api's handler. Same posture as ProjectID: this is a
+	// service-to-service surface behind RequireInternalToken, so carrying
+	// them here widens no trust boundary, and this handler is not where the
+	// validation lives.
+	//
+	// Precisely what is and is not re-checked downstream, because "validated
+	// at every hop" is true of one field and not of the others. The NAME is
+	// checked again by the launcher, which is the process that turns one into
+	// a path. The COUNT and the 256 KiB total are enforced in the browser and
+	// in edge-api's validateAttachments and nowhere after that, so past
+	// edge-api the only bound left is maxBodyBytes below. Deliberate rather
+	// than an omission: a second copy of the quantity policy here would be
+	// the two disagreeing copies this package already refuses to keep for
+	// packs, and this surface is not customer reachable.
+	Attachments []attachmentWire `json:"attachments"`
+}
+
+type attachmentWire struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+func attachmentsFromWire(in []attachmentWire) []Attachment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Attachment, 0, len(in))
+	for _, a := range in {
+		out = append(out, Attachment{Name: a.Name, Content: a.Content})
+	}
+	return out
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request, tenantID, userID uuid.UUID) {
@@ -149,7 +188,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request, tenantID,
 		}
 		projectID = parsed
 	}
-	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack), req.Instructions, projectID, req.BearerJWT)
+	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack), req.Instructions, projectID, attachmentsFromWire(req.Attachments), req.BearerJWT)
 	if err != nil {
 		writeTaskError(w, err)
 		return

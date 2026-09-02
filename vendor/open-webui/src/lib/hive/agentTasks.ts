@@ -19,6 +19,8 @@
  * are not: the `unknown` status and the two engine sentinels.
  */
 
+import type { CoworkAttachment } from './coworkAttachments';
+
 // The base is a parameter with a production default rather than an import of
 // `$lib/constants`, and that is load-bearing rather than stylistic.
 // `$lib/constants` reaches `$app/environment` for `browser` and `dev`, which
@@ -296,12 +298,26 @@ export const createTask = async (
 	token: string,
 	pack: TaskPack | null,
 	instructions: string,
+	attachments: CoworkAttachment[] = [],
 	apiBase: string = DEFAULT_AGENT_API_BASE_URL
 ): Promise<AgentTask> => {
+	// Both keys are omitted rather than sent empty: `pack` when the mode is
+	// inferred rather than chosen (issue #1623), `attachments` when nothing is
+	// attached (issue #1065). On the common path the request is byte for byte
+	// what it always was.
+	const body: { pack?: TaskPack; instructions: string; attachments?: CoworkAttachment[] } = {
+		instructions
+	};
+	if (pack) {
+		body.pack = pack;
+	}
+	if (attachments.length > 0) {
+		body.attachments = attachments;
+	}
 	const response = await fetch(`${apiBase}/tasks`, {
 		method: 'POST',
 		headers: headers(token),
-		body: JSON.stringify(pack ? { pack, instructions } : { instructions })
+		body: JSON.stringify(body)
 	});
 	if (!response.ok) {
 		await raise(response, 'Failed to create task');

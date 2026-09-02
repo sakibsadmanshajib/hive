@@ -98,7 +98,7 @@
 	} from '$lib/apis';
 	import { getTools } from '$lib/apis/tools';
 	import { getSkills } from '$lib/apis/skills';
-	import { uploadFile } from '$lib/apis/files';
+	import { getFileById, uploadFile } from '$lib/apis/files';
 	import { createOpenAITextStream } from '$lib/apis/streaming';
 	import { getFunctions } from '$lib/apis/functions';
 	import { initiateOAuthRedirect } from '$lib/apis/configs';
@@ -128,6 +128,12 @@
 		settleRunSteps,
 		type RunStep
 	} from '$lib/hive/coworkMode';
+	import {
+		COWORK_ATTACHMENT_MAX_COUNT,
+		COWORK_ATTACHMENT_MAX_TOTAL_BYTES,
+		collectCoworkAttachments,
+		type CoworkAttachment
+	} from '$lib/hive/coworkAttachments';
 	import {
 		PROJECT_CHAT_KEY,
 		bindChatToProject,
@@ -2458,7 +2464,44 @@
 		}
 	};
 
-	const submitCoworkRun = async (userPrompt: string) => {
+	/**
+	 * The refusal copy for one gathered-attachment failure (#1065). Kept beside
+	 * the call site rather than inside coworkAttachments.ts so the module stays
+	 * free of the i18n store and testable on its own.
+	 */
+	const coworkAttachmentRefusal = (failure: { reason: string; name?: string }): string => {
+		switch (failure.reason) {
+			case 'too-many':
+				return $i18n.t('Work can take at most {{count}} attachments.', {
+					count: COWORK_ATTACHMENT_MAX_COUNT
+				});
+			case 'too-large':
+				return $i18n.t('Those attachments hold more than {{size}} KB of text.', {
+					size: COWORK_ATTACHMENT_MAX_TOTAL_BYTES / 1024
+				});
+			case 'empty':
+				return $i18n.t('{{name}} has no readable text yet. Wait for it to finish, or remove it.', {
+					name: failure.name ?? ''
+				});
+			default:
+				return $i18n.t('{{name}} cannot be given to Work. Remove it, or switch to Chat mode.', {
+					name: failure.name ?? ''
+				});
+		}
+	};
+
+	/**
+	 * True while submitHandler is reading the attachments for a run (#1065).
+	 * Component scoped rather than module scoped: two chat panes are two
+	 * independent composers, and a shared flag would make one block the other.
+	 */
+	let coworkGatherInFlight = false;
+
+	const submitCoworkRun = async (
+		userPrompt: string,
+		attachments: CoworkAttachment[] = [],
+		messageFiles: unknown[] = []
+	) => {
 		const userMessageId = uuidv4();
 		history.messages[userMessageId] = {
 			id: userMessageId,
@@ -2467,7 +2510,11 @@
 			role: 'user',
 			content: userPrompt,
 			timestamp: Math.floor(Date.now() / 1000),
-			models: selectedModels
+			models: selectedModels,
+			// The same chips a chat turn renders (#1065). Without this the file
+			// the person attached vanishes from the composer on send and appears
+			// nowhere else, which reads as the attachment having been dropped.
+			...(messageFiles.length > 0 ? { files: messageFiles } : {})
 		};
 		if (history.currentId !== null) {
 			history.messages[history.currentId].childrenIds.push(userMessageId);
@@ -2525,7 +2572,7 @@
 			// the kind of task off these same instructions. It is non-null only
 			// when the person corrected the last guess, and that correction is
 			// spent below.
-			task = await createTask(localStorage.token, $composerPack, userPrompt);
+			task = await createTask(localStorage.token, $composerPack, userPrompt, attachments);
 		} catch (error) {
 			const refusal = describeRefusal(error);
 			await applyCoworkRun(_chatId, runMessageId, {
@@ -2581,24 +2628,18 @@
 			return;
 		}
 
-		// hive (#944, thread 3): the run backend accepts only pack + instructions
-		// today, so an attachment has nowhere to go. Refusing clearly here beats
-		// the alternative of silently dropping the file from both the run and
-		// the transcript. A blank instructions field is refused for the same
-		// reason: cowork mode has no image-only submission to fall back to.
-		if ($composerMode === 'cowork') {
-			if (files.length > 0) {
-				toast.error(
-					$i18n.t(
-						'Attachments are not supported in Work mode yet. Remove the file, or switch to Chat mode to send it.'
-					)
-				);
-				return;
-			}
-			if (userPrompt.trim() === '') {
-				toast.error($i18n.t('Please enter instructions for Work'));
-				return;
-			}
+		// hive (#944, thread 3): a blank instructions field is refused because
+		// cowork mode has no image-only submission to fall back to.
+		//
+		// The blanket attachment refusal that used to sit here is gone (#1065):
+		// the run backend carries documents now, and the launcher writes them
+		// into the sandbox's working directory. What is still refused is an
+		// attachment the sandbox cannot resolve, which is checked in
+		// collectCoworkAttachments below rather than by type here, so the two
+		// halves of the rule cannot drift apart.
+		if ($composerMode === 'cowork' && userPrompt.trim() === '') {
+			toast.error($i18n.t('Please enter instructions for Work'));
+			return;
 		}
 
 		if (
@@ -2668,6 +2709,49 @@
 			}
 		}
 
+		// hive (#1065): the run's attachments are gathered BEFORE the composer is
+		// cleared, so a refusal leaves the person's prompt and their file chips
+		// exactly where they were. Gathering them after the clear would make
+		// every refusal cost them the message they had just written.
+		//
+		// That ordering is what makes the guard below necessary. This is the
+		// first await on the cowork path that sits before the clear, and it is
+		// up to five getFileById round trips long, with `files` and `prompt`
+		// still populated throughout. A second Enter in that window used to run
+		// the whole handler again: two createTask calls, two credit holds, two
+		// sandboxes, from one person pressing a key twice.
+		//
+		// The flag is released the moment the reads finish rather than held for
+		// the send, deliberately. Everything between the release and the clear
+		// is synchronous, so nothing can interleave there, and holding it any
+		// longer would block the message queue path below, which is a feature
+		// rather than a race.
+		let coworkAttachments: CoworkAttachment[] = [];
+		if ($composerMode === 'cowork') {
+			if (coworkGatherInFlight) {
+				return;
+			}
+			coworkGatherInFlight = true;
+			let gathered: Awaited<ReturnType<typeof collectCoworkAttachments>>;
+			try {
+				gathered = await collectCoworkAttachments(files, async (id) => {
+					// The authoritative copy of the text Open WebUI extracted at
+					// upload. Read here rather than trusted from the upload
+					// response, which returns the row before processing has
+					// filled it in.
+					const file = await getFileById(localStorage.token, id).catch(() => null);
+					return file?.data?.content ?? '';
+				});
+			} finally {
+				coworkGatherInFlight = false;
+			}
+			if (!gathered.ok) {
+				toast.error(coworkAttachmentRefusal(gathered));
+				return;
+			}
+			coworkAttachments = gathered.attachments;
+		}
+
 		// Clear input and submit
 		messageInput?.setText('');
 		prompt = '';
@@ -2679,7 +2763,7 @@
 		// this line (the model guard, the upload guards, the queue) applies to
 		// both modes and is deliberately not duplicated into the cowork path.
 		if ($composerMode === 'cowork') {
-			await submitCoworkRun(userPrompt);
+			await submitCoworkRun(userPrompt, coworkAttachments, _files);
 			return;
 		}
 

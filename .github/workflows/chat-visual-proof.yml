@@ -1,0 +1,1084 @@
+name: chat visual proof
+
+# Visual proof of the signed-in Hive chat surface, produced in CI on the pull
+# request, before it merges (orchestrator rule 8, owner directive). Issue #1738.
+#
+# WHY IT CANNOT BE CAPTURED ANYWHERE ELSE
+#
+# A signed-in session is not decoration on this surface, it is the only way the
+# surface works. deploy/docker/pipelines/hive_jwt_forward.py and
+# deploy/docker/owui-patches/hive_upstream_auth.py attach the signed-in user's
+# OAuth access token to every outgoing completion, and edge-api's OWUIUnwrap
+# middleware treats /v1/chat/completions as unconditionally requiring a per-user
+# token. With no OAuth session nothing is attached, the static shim key stands
+# alone, and edge-api answers 401 for every model. So there is no "photograph
+# the chat surface without signing in" shortcut, and a stand-in identity
+# provider would produce a page that cannot hold a conversation.
+#
+# Signing in needs GoTrue's OAuth 2.1 authorization server, a registered client
+# for Open WebUI, and the console's own /oauth/consent screen. Until this
+# workflow existed none of that could be stood up per run:
+# scripts/ci-supabase-stack.sh pinned a GoTrue with no OAuth server at all, and
+# owui-nightly.yml, the one job that boots Open WebUI, points at the hosted
+# Supabase project that was deleted during the move to the self-hosted data
+# plane, together with the OAuth client that lived in its dashboard. The only
+# stack that could render a signed-in chat was therefore the demo box, which
+# only runs already-merged code, and proof-before-merge was circular. This job
+# breaks the circle by standing the whole chain up on a disposable runner.
+#
+# WHICH RUNNER, AND WHY THIS ONE
+#
+# GitHub-hosted ubuntu-latest, not the self-hosted demo-box runner, for the same
+# two reasons agent-visual-proof.yml gives at length: the self-hosted runner
+# executes pull request code on the machine serving the live demo, and this job
+# seeds identities, mints an API key and registers an OAuth client, all of which
+# would reach into that box's own state. A hosted runner is disposable, so
+# neither question arises. Nothing here needs the privilege the agent proof job
+# needs, either: no sandbox is launched, so there is no unprivileged-userns
+# question to answer.
+#
+# ONE ORIGIN FOR SUPABASE, AND WHY IT IS THE BRIDGE ADDRESS
+#
+# Three things have to agree on a single Supabase origin and they do not share a
+# network namespace: the Playwright browser and the console process, on the
+# runner; Open WebUI's container, which fetches the discovery document and later
+# exchanges the code; and the browser again, which follows whatever
+# authorization_endpoint that document advertises. localhost satisfies the first
+# and is the container itself for the second. The docker bridge gateway address
+# satisfies all three, exactly as it does in agent-visual-proof.yml, so
+# --external-url pins the discovery document and the `iss` claim to it.
+#
+# HOW TO AIM IT AT A PULL REQUEST
+#
+#   gh workflow run "chat visual proof" -f pr=1730
+#
+# The checkout takes refs/pull/<pr>/merge, so the proof is of what would land,
+# and the images are posted on that pull request through
+# scripts/post-pr-visual-proof.sh. A capture that lives only in a workflow
+# artifact does not satisfy rule 8.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to prove and to post the captures on
+        required: true
+        type: string
+      sabotage:
+        description: >-
+          Sign out before capturing, to demonstrate that a run which cannot
+          reach a signed-in surface fails instead of passing with no proof
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    branches: [main]
+    # Deliberately the Hive-owned chat paths and not vendor/open-webui as a
+    # whole. That tree is a vendored fork of an upstream application and a
+    # routine sync touches thousands of files, none of which this job could
+    # attribute anything to; the Hive-owned patches, the image, the front and
+    # the fork's own Hive code are what change this surface's behaviour. A
+    # change anywhere else that wants proof asks for it by dispatch, which is
+    # the arm the top of this file documents.
+    paths:
+      - 'deploy/docker/owui-patches/**'
+      - 'deploy/docker/pipelines/**'
+      - 'deploy/docker/owui-static/**'
+      - 'deploy/docker/Caddyfile.owui'
+      - 'vendor/open-webui/src/lib/hive/**'
+      - 'apps/edge-api/internal/auth/owui_unwrap.go'
+      - 'apps/web-console/app/oauth/**'
+      - 'apps/web-console/components/oauth/**'
+      # The job stands its own Supabase and its own session up with these, so a
+      # change to any of them can break it. Without them here that break lands
+      # on main and only surfaces on the next unrelated pull request that
+      # happens to touch a chat path, which is the shape of outage
+      # agent-visual-proof.yml records having had.
+      - 'scripts/ci-supabase-stack.sh'
+      - 'scripts/ci-throwaway-db.sh'
+      - 'scripts/register-owui-oauth-client.py'
+      - 'scripts/seed-owui-e2e-user.py'
+      - 'apps/web-console/e2e/phase-19/owui/**'
+      - 'apps/web-console/e2e/phase-19/sign-in-with-hive.ts'
+    # NOT listed, on purpose, and this is a trade rather than an oversight:
+    # deploy/docker/Dockerfile.open-webui and this workflow file itself. Both
+    # are edited by Dependabot (the docker ecosystem covers /deploy/docker, the
+    # github-actions ecosystem covers /), and a Dependabot-raised pull request
+    # is served from the separate Dependabot secret store, where every
+    # `secrets.*` reference here resolves to the empty string. This job needs a
+    # real provider key to complete a real turn, so unlike ci.yml's browser jobs
+    # it cannot stub its way out; it would be permanently red on every image and
+    # action bump, and a check that is always red for an unrelated reason is a
+    # check nobody reads (issues #820, #821).
+    #
+    # The obvious alternative, keeping the paths and adding
+    # `github.actor != 'dependabot[bot]'` to the job condition, is what this
+    # replaced. tools/verify-spec-wiring.mjs refuses every negated atom by
+    # design and therefore could not prove the capture spec runs on a pull
+    # request at all, which would have demoted real coverage to a ledger entry
+    # saying the opposite of the truth. Closing the exposure at the trigger
+    # keeps the condition provable and the ledger honest.
+    #
+    # A bump to either path that genuinely wants proof asks for it by dispatch,
+    # which is the arm documented at the top of this file.
+
+# No concurrency group, for the reason agent-visual-proof.yml states: GitHub
+# holds one run per group as pending and a third cancels the second outright,
+# and a cancelled proof run is a silent absence of proof rather than a loud
+# failure.
+
+env:
+  # Inside docs/proof/ on purpose: that is the one directory
+  # tools/lint-no-token-in-proof-captures.mjs scans, and it is the only
+  # automated check that a captured credential never reaches a proof log.
+  CAPTURE_DIR: ${{ github.workspace }}/docs/proof/chat-visual-proof/run-${{ github.run_id }}
+  CHAT_ORIGIN: http://localhost:3003
+  CONSOLE_ORIGIN: http://localhost:3000
+
+jobs:
+  capture:
+    name: Capture signed-in chat proof
+    runs-on: ubuntu-latest
+    # Measured end to end on run 33677630521, 10m53s: this run's own Supabase
+    # 27s, the stack build and boot 7m36s (most of it compiling the forked Open
+    # WebUI frontend from source), harness dependencies and a browser 42s, the
+    # console build 25s, the whole sign-in journey 13s, the capture 7s, posting
+    # 9s.
+    #
+    # 40 rather than 15, because the two things most likely to stretch are the
+    # two this job does not control: a cold Open WebUI boot has its own 420s
+    # deadline below, and the captured turn waits up to 180s for a provider to
+    # finish streaming. A wedged one of either should still fail inside the
+    # budget rather than sit until GitHub's own six hour ceiling.
+    timeout-minutes: 40
+    # A fork pull request receives no repository secrets at all, so a run on one
+    # would fail on a blank secret rather than on the change under test. Same
+    # composition as ci.yml's web-e2e job, and deliberately built only from
+    # atoms tools/verify-spec-wiring.mjs can prove: it refuses every negated
+    # form by design, and an unprovable condition means the capture spec cannot
+    # be credited with the pull-request coverage it actually has. The other
+    # secret-less case, Dependabot, is closed at the trigger instead: see the
+    # note on the paths list above.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+      # For the failure notifier at the end of this job, which is the only
+      # thing here that touches an issue.
+      issues: write
+    env:
+      OWUI_URL: http://localhost:3003
+      E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+      # Every compose call in this job has to resolve the SAME project, and
+      # there are five of them plus the two in-container helper scripts
+      # owui.setup.ts runs. A step that resolves a different file set resolves a
+      # different project, reads a stack missing services and reports on it; the
+      # teardown, which also passes --remove-orphans, would delete what it does
+      # not know about. One job-level variable is what keeps them identical.
+      # docker-compose.override.yml is named explicitly because setting
+      # COMPOSE_FILE stops compose auto-loading it.
+      #
+      # docker-compose.agent-proof.yml is reused verbatim rather than copied. It
+      # touches edge-api and nothing else, giving it the throwaway authority to
+      # trust for its JWKS fetch and the name to reach the TLS front by, which
+      # is exactly what this job needs too.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.override.yml:docker-compose.agent-proof.yml
+      # The same reasoning one step further. Four services in this file carry no
+      # `profiles:` key, so a compose call without the profile still resolves a
+      # valid project made of exactly those four, succeeds, and reports on a
+      # stack missing the service being asked about. Measured on run
+      # 33671163466: open-webui exited during boot and the failure log dump,
+      # which named the service explicitly, returned only edge-api,
+      # control-plane, litellm and markitdown, so the one log that could explain
+      # the failure was silently absent. A job-level profile is what stops that.
+      COMPOSE_PROFILES: local
+      # SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, the two
+      # NEXT_PUBLIC_ mirrors, SUPABASE_JWT_ISSUER and SUPABASE_JWKS_URL are
+      # deliberately NOT job-level entries. They are written to $GITHUB_ENV by
+      # the throwaway stack step, and a job-level entry TAKES PRECEDENCE over
+      # what a step writes there, so naming one here would silently point the
+      # stack, the browser and the seeder at the deleted hosted project. Same
+      # trap agent-visual-proof.yml and ci.yml's web-e2e job document.
+      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      # The one completion this job asks for goes to hive-free, which is what
+      # Open WebUI defaults to anyway (OWUI_DEFAULT_MODEL in
+      # deploy/docker/docker-compose.yml). Naming it here rather than relying on
+      # that default is what keeps a future change to the default from quietly
+      # pointing a job that runs on every chat pull request at a paid alias
+      # (owner directive 2026-08-30).
+      OWUI_DEFAULT_MODEL: hive-free
+      OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
+      # Stubbed, not supplied, and for the reason agent-visual-proof.yml sets
+      # out: as secrets these name the Supabase Cloud project deleted during the
+      # move to the self-hosted data plane, and a Dependabot-triggered run would
+      # resolve every one of them to the empty string and stop control-plane at
+      # boot with `storage unavailable`. Nothing in this capture touches an
+      # object. Port 9 is discard, so a future step that does touch storage gets
+      # connection refused and fails loudly rather than quietly reading and
+      # writing the live box's buckets.
+      S3_ENDPOINT: 'http://127.0.0.1:9'
+      S3_ACCESS_KEY: 'ci-stub-not-used'
+      S3_SECRET_KEY: 'ci-stub-not-used'
+      S3_REGION: 'us-east-1'
+      S3_USE_SSL: 'false'
+      S3_BUCKET_FILES: 'ci-stub-files'
+      S3_BUCKET_IMAGES: 'ci-stub-images'
+      PLAYWRIGHT_BROWSERS_PATH: /mnt/ms-playwright
+    steps:
+      - name: Resolve the pull request under proof
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_PR: ${{ github.event.inputs.pr }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          pr="${INPUT_PR:-$EVENT_PR}"
+          if [ -z "$pr" ]; then
+            echo "::error::no pull request number to prove"
+            exit 1
+          fi
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          # refs/pull/N/merge is what would land, which is what rule 8 asks to
+          # be proven, and it is also always current with main.
+          echo "ref=refs/pull/$pr/merge" >> "$GITHUB_OUTPUT"
+          # -R is load bearing: this step runs before the checkout, so there is
+          # no git repository for gh to infer the repository from.
+          gh pr view "$pr" -R "$GITHUB_REPOSITORY" --json number,title,headRefOid \
+            --jq '"proving PR #\(.number): \(.title) at head \(.headRefOid)"'
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.target.outputs.ref }}
+
+      - name: Reclaim disk space
+        # This job holds five container images including a Next.js production
+        # build and a from-source Open WebUI frontend build, two node_modules
+        # trees and a Chromium. The browser lives on /mnt, the runner's large
+        # volume; these preinstalled toolchains, which nothing here uses, are
+        # what frees room for Docker on the root disk.
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost || true
+          sudo mkdir -p /mnt/ms-playwright
+          sudo chown "$(id -un):$(id -gn)" /mnt/ms-playwright
+          df -h / /mnt
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Mint this run's internal service token
+        # Random per run and masked. It authenticates edge-api and Open WebUI to
+        # control-plane's /internal routes and never leaves this job, so the
+        # demo box's own token is never used here and a leak of one cannot reach
+        # the other.
+        run: |
+          set -euo pipefail
+          token="$(openssl rand -hex 32)"
+          echo "::add-mask::$token"
+          echo "CONTROL_PLANE_INTERNAL_TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Stand up this run's own Supabase, with the OAuth server on
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The hosted runner image already ships psql, so the usual case is a
+          # no-op. apt is the bounded fallback, for the reason ci.yml's web-e2e
+          # job bounds it: an unbounded apt hung there for a whole job budget
+          # and emitted nothing, and a hang that produces no evidence is worse
+          # than a failure that does.
+          if ! command -v psql >/dev/null; then
+            for attempt in 1 2 3; do
+              if sudo timeout 180 apt-get update -qq \
+                 && sudo timeout 180 apt-get install -y -qq postgresql-client; then
+                break
+              fi
+              echo "::warning::apt attempt $attempt failed or timed out, retrying"
+              sleep 10
+            done
+          fi
+          if ! command -v psql >/dev/null; then
+            echo "::error::psql is unavailable and apt could not install it"
+            exit 1
+          fi
+
+          # Same image and tag ci.yml's go-tests, web-e2e and the agent proof
+          # job already use, so there is one throwaway-Postgres approach in this
+          # repository rather than a fourth.
+          docker run -d --name hive-ci-db -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=hive_ci \
+            pgvector/pgvector:pg17
+          for _ in $(seq 1 90); do
+            if docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          if ! docker exec hive-ci-db pg_isready -U postgres -h 127.0.0.1; then
+            echo "::error::the throwaway Postgres never became ready"
+            docker logs hive-ci-db | tail -40
+            exit 1
+          fi
+
+          export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres \
+                 PGPASSWORD=postgres PGDATABASE=hive_ci
+
+          # The one Supabase origin, resolved before the stack is built so the
+          # discovery document, the issuer and every consumer are handed the
+          # same string. See the header for why it is the bridge address.
+          gw=$(docker network inspect bridge -f '{{ (index .IPAM.Config 0).Gateway }}')
+          supabase_origin="http://${gw}:9000"
+          echo "one Supabase origin for browser, containers and console: $supabase_origin"
+
+          # --jwks-tls-ca, because edge-api validates every browser token
+          # against a JWKS document and refuses both a plain http URL and an
+          # empty key set. --oauth-server, because Open WebUI signs in through
+          # GoTrue's OAuth 2.1 authorization server and the default pin has none.
+          ca_dir="$RUNNER_TEMP/supabase-ca"
+          scripts/ci-supabase-stack.sh --port 9000 \
+            --jwks-tls-ca "$ca_dir/root.crt" \
+            --oauth-server \
+            --external-url "${supabase_origin}/auth/v1" > /tmp/supabase-env
+
+          # set -e covers a non-zero exit and nothing covers a zero exit with
+          # truncated stdout: the loop below succeeds on an empty file and the
+          # job then dies inside the stack boot with an unset SUPABASE_URL,
+          # several steps from the cause.
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY \
+                   SUPABASE_URL_FROM_CONTAINER SUPABASE_JWT_ISSUER \
+                   SUPABASE_JWKS_URL SUPABASE_JWKS_HOST SUPABASE_JWKS_HOST_IP; do
+            if ! grep -q "^$v=." /tmp/supabase-env; then
+              echo "::error::the throwaway Supabase stack printed no $v line"
+              exit 1
+            fi
+          done
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            case "$line" in
+              # Dropped, and rewritten below to the one-origin form. The script
+              # prints the localhost form, which is correct for a caller that
+              # runs everything on the runner and wrong for this job. Matching
+              # SUPABASE_URL= exactly, so SUPABASE_URL_FROM_CONTAINER= is left
+              # alone.
+              SUPABASE_URL=*) continue ;;
+              *_KEY=*) echo "::add-mask::${line#*=}" ;;
+            esac
+            echo "$line" >> "$GITHUB_ENV"
+          done < /tmp/supabase-env
+
+          {
+            echo "SUPABASE_URL=$supabase_origin"
+            echo "SUPABASE_PUBLIC_URL=$supabase_origin"
+            echo "NEXT_PUBLIC_SUPABASE_URL=$supabase_origin"
+            echo "PROOF_SUPABASE_CA_DIR=$ca_dir"
+          } >> "$GITHUB_ENV"
+          sed -n 's/^SUPABASE_ANON_KEY=/NEXT_PUBLIC_SUPABASE_ANON_KEY=/p' /tmp/supabase-env >> "$GITHUB_ENV"
+          # What docker-compose.agent-proof.yml, reused here, reads to give
+          # edge-api the one certificate it needs and the name to reach the TLS
+          # front by.
+          {
+            sed -n 's/^SUPABASE_JWKS_HOST=/PROOF_JWKS_HOST=/p'       /tmp/supabase-env
+            sed -n 's/^SUPABASE_JWKS_HOST_IP=/PROOF_JWKS_HOST_IP=/p' /tmp/supabase-env
+          } >> "$GITHUB_ENV"
+
+          # The address a compose container reaches this database on. localhost
+          # inside those containers is the container itself; the docker0 gateway
+          # is routable from every bridge network compose creates. No pooler
+          # here and none wanted: this job touches no shared project.
+          #
+          # postgresql://, NOT postgres://. Both Go services take either, because
+          # pgx accepts the alias, and Open WebUI does not: compose hands the
+          # same string to it as PGVECTOR_DB_URL, SQLAlchemy resolves the scheme
+          # to a dialect plugin by name, and there is no dialect registered under
+          # "postgres". Measured on run 33671163466, where the chat container
+          # died fourteen seconds into boot with
+          # `NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:postgres`
+          # and compose reported only "dependency failed to start". A DSN is per
+          # driver and the one place three drivers share one is here.
+          dsn="postgresql://postgres:postgres@${gw}:5432/hive_ci?sslmode=disable"
+          {
+            echo "SUPABASE_DB_URL=$dsn"
+            echo "SUPABASE_DB_POOL_URL=$dsn"
+          } >> "$GITHUB_ENV"
+
+      - name: Assert the OAuth authorization server is actually serving
+        # The single most load-bearing precondition in this job, asserted where
+        # a failure can still name itself. Without the OAuth server every step
+        # below still succeeds until Playwright times out inside the sign-in
+        # journey, twenty minutes later, reporting that a button did not appear.
+        #
+        # The issuer check is the other half. The browser, Open WebUI's
+        # container and the id_token claim all have to agree on one origin, and
+        # a disagreement is silent everywhere except here: the OIDC client
+        # rejects the token with "invalid claim" long after anything names the
+        # address that caused it.
+        run: |
+          set -euo pipefail
+          doc=$(curl -sS --fail-with-body "$SUPABASE_URL/auth/v1/.well-known/openid-configuration")
+          printf '%s' "$doc" | jq -r '"issuer: \(.issuer)\nauthorization_endpoint: \(.authorization_endpoint)\ntoken_endpoint: \(.token_endpoint)"'
+          for field in issuer authorization_endpoint token_endpoint jwks_uri; do
+            if [ "$(printf '%s' "$doc" | jq -r --arg f "$field" '.[$f] // ""')" = "" ]; then
+              echo "::error::the discovery document has no $field, so GoTrue is not running an OAuth authorization server. --oauth-server selects a GoTrue new enough to have one; the default pin answers 404 on every route it uses."
+              exit 1
+            fi
+          done
+          issuer=$(printf '%s' "$doc" | jq -r '.issuer')
+          if [ "$issuer" != "$SUPABASE_URL/auth/v1" ]; then
+            echo "::error::the discovery document advertises issuer $issuer but every consumer was pointed at $SUPABASE_URL/auth/v1. An OIDC client validates the id_token claim against the document, so this would surface as a rejected token with nothing naming the address."
+            exit 1
+          fi
+
+      - name: Register this run's Open WebUI OAuth client
+        # The shipped registration script, unmodified. On hosted Supabase this
+        # client was dashboard state that nothing in the tree created; that is
+        # the reason it vanished with the project, and the reason it is a
+        # bring-up step here rather than a repository secret.
+        env:
+          GOTRUE_ADMIN_URL: ${{ env.SUPABASE_URL }}/auth/v1
+          SERVICE_ROLE_KEY: ${{ env.SUPABASE_SERVICE_ROLE_KEY }}
+          # Byte identical to what Open WebUI sends, which it builds from
+          # WEBUI_URL. GoTrue matches redirect_uris by exact string.
+          HIVE_CHAT_URL: ${{ env.CHAT_ORIGIN }}
+        run: |
+          set -euo pipefail
+          out=$(python3 scripts/register-owui-oauth-client.py)
+          printf '%s\n' "$out" | grep -v '^SUPABASE_OAUTH_CLIENT_SECRET=' || true
+          id=$(printf '%s\n' "$out" | sed -n 's/^SUPABASE_OAUTH_CLIENT_ID=//p')
+          secret=$(printf '%s\n' "$out" | sed -n 's/^SUPABASE_OAUTH_CLIENT_SECRET=//p')
+          if [ -z "$id" ] || [ -z "$secret" ]; then
+            echo "::error::the registration printed no client id and secret pair. A missing secret means the client already existed, which cannot happen on a throwaway GoTrue created minutes ago, so read the script's stderr above."
+            exit 1
+          fi
+          echo "::add-mask::$secret"
+          {
+            echo "SUPABASE_OAUTH_CLIENT_ID=$id"
+            echo "SUPABASE_OAUTH_CLIENT_SECRET=$secret"
+          } >> "$GITHUB_ENV"
+
+      - name: Seed this run's tenant, user and shim key
+        # The shipped seeder, unmodified: it self-provisions the tenant, the
+        # GoTrue user, the membership, the billing mapping and a real "hk_" Hive
+        # API key to use as OWUI_SHIM_KEY.
+        #
+        # OWUI_E2E_RUN_KEY namespaces both fixture addresses per run, which is
+        # what keeps this off any shared account. No password is set, reset or
+        # rotated on an existing account anywhere in this job: a rotation
+        # revokes the sessions of every concurrent run, which broke three agents
+        # at once on 2026-08-08 (docs/live-test-auth.md). A run-scoped identity
+        # has no prior password to preserve, so this run still gets a usable one
+        # and no other run is disturbed.
+        env:
+          OWUI_E2E_RUN_KEY: ${{ env.E2E_RUN_KEY }}
+        run: |
+          set -euo pipefail
+          # Both guards below exist to produce a readable failure, so neither
+          # may be pre-empted by set -e: a grep returns 1 when the line it wants
+          # is absent, which under pipefail would kill the step at the
+          # assignment rather than at the check.
+          # No --account-slug and no --tenant-slug, so this lands on the
+          # reserved CI account and tenant. That reads like the wrong choice for
+          # a job that mints and revokes keys and is not the nightly, and it is
+          # the right one here: the account is a row in a database created
+          # minutes earlier by this job and destroyed with the runner, so the
+          # slug names nothing shared and there is no key anywhere for a
+          # revocation to strand. assert_account_scope (issue #560, PR #1734)
+          # refuses any OTHER slug from a run that configures no consumer,
+          # precisely because a custom slug means a real deployment; measured on
+          # run 33673078162, which passed one and was refused by name.
+          if ! out=$(python3 scripts/seed-owui-e2e-user.py); then
+            echo "::error::seed-owui-e2e-user.py failed; its stderr is above"
+            exit 1
+          fi
+          field() { printf '%s\n' "$out" | grep "^$1=" | cut -d= -f2- || true; }
+          for pair in EMAIL:OWUI_E2E_EMAIL PASSWORD:OWUI_E2E_PASSWORD \
+                      SHIM_KEY:OWUI_SHIM_KEY BOOTSTRAP_EMAIL:OWUI_BOOTSTRAP_EMAIL \
+                      BOOTSTRAP_PASSWORD:OWUI_BOOTSTRAP_PASSWORD; do
+            src="${pair%%:*}"; dst="${pair##*:}"
+            val=$(field "$src")
+            if [ -z "$val" ]; then
+              echo "::error::seed-owui-e2e-user.py printed no $src line. A missing PASSWORD line means the account already existed and the seeder refused to rotate it, which cannot happen on a throwaway GoTrue: see its stderr above, and docs/live-test-auth.md."
+              exit 1
+            fi
+            case "$src" in *PASSWORD|SHIM_KEY) echo "::add-mask::$val" ;; esac
+            echo "$dst=$val" >> "$GITHUB_ENV"
+          done
+
+      - name: Grant the run tenant a free alias and a credit balance
+        # Both rows exist for the same reason: without them the capture is a
+        # photograph of the wrong thing, and neither absence announces itself.
+        #
+        # hive-free is visibility='restricted'
+        # (supabase/migrations/20260831_01_restrict_free_pool_aliases_visibility.sql),
+        # so a tenant with no explicit tenant_model_visibility row cannot see it
+        # in the picker or invoke it. Measured on run 33677630521: the picker
+        # listed seven aliases, none of them free, and the captured turn ran on
+        # Deepseek V4 Flash. That is a paid alias, on a job that runs on every
+        # chat pull request, which is exactly what the owner's 2026-08-30
+        # directive rules out. This is the same grant scripts/ci-seed-api-key.sh
+        # performs for the live-integration tenant, in the same shape, for the
+        # same reason; that migration says explicitly that granting the specific
+        # automated callers belongs at the layer provisioning each one.
+        #
+        # The credit balance is the second half. The reservation guard fails
+        # closed on a zero balance, and the chat surface renders "You're out of
+        # credits" over the composer, which was in run 33677630521's published
+        # screenshot. A proof image carrying a failure state the product does
+        # not really have is worse than no image: it is a picture of a defect
+        # that does not exist. Same synthetic $1000-equivalent grant the CI
+        # seeder uses, at the 1e9-per-USD unit.
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGDATABASE: hive_ci
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          # -c strings rather than a heredoc. A heredoc terminator has to sit at
+          # column zero, and every line inside a YAML block scalar is indented,
+          # so `SQL` never matched: psql swallowed the assertions below as part
+          # of its own input and the step failed with a bare exit code 3 naming
+          # nothing (run 33679175160). Two statements, two calls, each failing
+          # on its own.
+          psql --no-psqlrc -qX -v ON_ERROR_STOP=1 -c "
+            INSERT INTO public.tenant_model_visibility (tenant_id, alias_id, visible)
+            SELECT t.id, a.alias_id, true
+            FROM public.tenants t
+            CROSS JOIN (VALUES ('hive-free')) AS a(alias_id)
+            WHERE t.slug = 'owui-e2e'
+            ON CONFLICT (tenant_id, alias_id) DO UPDATE
+              SET visible = true, updated_at = now();"
+
+          psql --no-psqlrc -qX -v ON_ERROR_STOP=1 -c "
+            INSERT INTO public.credit_ledger_entries
+              (account_id, entry_type, credits_delta, idempotency_key, metadata)
+            SELECT tba.account_id, 'grant', 1000000000000::bigint,
+                   'chat-proof-grant-' || tba.account_id::text,
+                   jsonb_build_object('source', 'chat-visual-proof')
+            FROM public.tenant_billing_accounts tba
+            JOIN public.tenants t ON t.id = tba.tenant_id
+            WHERE t.slug = 'owui-e2e'
+            ON CONFLICT DO NOTHING;"
+
+          # Asserted, not assumed: both statements are silent when they match no
+          # row, and the failure would otherwise surface a quarter of an hour
+          # later as a picker with no free alias in it.
+          visible=$(psql --no-psqlrc -qtAX -c "SELECT count(*) FROM public.tenant_model_visibility v JOIN public.tenants t ON t.id = v.tenant_id WHERE t.slug = 'owui-e2e' AND v.alias_id = 'hive-free' AND v.visible")
+          credits=$(psql --no-psqlrc -qtAX -c "SELECT coalesce(sum(credits_delta), 0) FROM public.credit_ledger_entries e JOIN public.tenant_billing_accounts tba ON tba.account_id = e.account_id JOIN public.tenants t ON t.id = tba.tenant_id WHERE t.slug = 'owui-e2e'")
+          echo "hive-free visibility rows: $visible, credit balance: $credits"
+          if [ "$visible" != "1" ]; then
+            echo "::error::the run tenant holds no visible=true row for hive-free, so the picker would offer only paid aliases"
+            exit 1
+          fi
+          if [ "$credits" = "0" ]; then
+            echo "::error::the run tenant has a zero credit balance, so the capture would show the out-of-credits state"
+            exit 1
+          fi
+
+      - name: Materialize .env.ci
+        # One file, because nine compose invocations and the two in-container
+        # helper scripts owui.setup.ts runs all have to resolve the same stack.
+        # Values come from $GITHUB_ENV, written by the steps above, and are not
+        # re-read from secrets here: a second source of truth for one value is
+        # how the two drift.
+        run: |
+          set -euo pipefail
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY \
+                   SUPABASE_DB_URL SUPABASE_JWT_ISSUER SUPABASE_JWKS_URL \
+                   SUPABASE_OAUTH_CLIENT_ID SUPABASE_OAUTH_CLIENT_SECRET \
+                   OWUI_SHIM_KEY CONTROL_PLANE_INTERNAL_TOKEN; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::$v is empty; cannot materialize .env.ci"
+              exit 1
+            fi
+          done
+          cat > .env.ci <<EOF
+          SUPABASE_URL=${SUPABASE_URL}
+          SUPABASE_PUBLIC_URL=${SUPABASE_PUBLIC_URL}
+          SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+          SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+          SUPABASE_DB_URL=${SUPABASE_DB_URL}
+          SUPABASE_DB_POOL_URL=${SUPABASE_DB_POOL_URL}
+          SUPABASE_JWT_ISSUER=${SUPABASE_JWT_ISSUER}
+          SUPABASE_JWT_AUDIENCE=authenticated
+          SUPABASE_JWKS_URL=${SUPABASE_JWKS_URL}
+          NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+          SUPABASE_OAUTH_CLIENT_ID=${SUPABASE_OAUTH_CLIENT_ID}
+          SUPABASE_OAUTH_CLIENT_SECRET=${SUPABASE_OAUTH_CLIENT_SECRET}
+          OWUI_SHIM_KEY=${OWUI_SHIM_KEY}
+          OWUI_DEFAULT_MODEL=${OWUI_DEFAULT_MODEL}
+          CONTROL_PLANE_INTERNAL_TOKEN=${CONTROL_PLANE_INTERNAL_TOKEN}
+          HIVE_CHAT_URL=${CHAT_ORIGIN}
+          REDIS_URL=redis://redis:6379/0
+          S3_ENDPOINT=${S3_ENDPOINT}
+          S3_ACCESS_KEY=${S3_ACCESS_KEY}
+          S3_SECRET_KEY=${S3_SECRET_KEY}
+          S3_REGION=${S3_REGION}
+          S3_USE_SSL=${S3_USE_SSL}
+          S3_BUCKET_FILES=${S3_BUCKET_FILES}
+          S3_BUCKET_IMAGES=${S3_BUCKET_IMAGES}
+          LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-litellm-dev-key}
+          OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+          GROQ_API_KEY=${GROQ_API_KEY}
+          OPENROUTER_AUTO_MODEL=${OPENROUTER_AUTO_MODEL}
+          OPENROUTER_DEFAULT_MODEL=
+          OPENROUTER_EMBEDDING_MODEL=
+          OPENROUTER_EMBEDDING_FALLBACK_MODEL=
+          GROQ_FAST_MODEL=
+          GROQ_REASONING_MODEL=
+          NVIDIA_NIM_API_KEY=ci-stub-not-used
+          NVIDIA_NIM_EMBEDDING_MODEL=
+          PROOF_JWKS_HOST=${PROOF_JWKS_HOST}
+          PROOF_JWKS_HOST_IP=${PROOF_JWKS_HOST_IP}
+          PROOF_SUPABASE_CA_DIR=${PROOF_SUPABASE_CA_DIR}
+          EOF
+          chmod 600 .env.ci
+
+      - name: Boot the chat stack
+        working-directory: deploy/docker
+        run: |
+          set -euo pipefail
+          # The `up` is guarded rather than left to set -e. A service that exits
+          # during boot fails the `up` itself, and an unguarded failure there
+          # skips straight past the diagnostics below to the job's own dump,
+          # which is one step and one redaction pass further from the cause.
+          dump() {
+            docker compose --env-file ../../.env.ci ps
+            for svc in open-webui edge-api control-plane litellm; do
+              echo "--- $svc ---"
+              docker compose --env-file ../../.env.ci logs --no-color --tail=150 "$svc" \
+                | python3 ../../scripts/redact-log-credentials.py || true
+            done
+          }
+
+          # Two waves, and caddy-owui is deliberately not in the first.
+          #
+          # It declares `depends_on: open-webui: service_healthy`, and Open WebUI
+          # cold boots slowly: measured on a fresh database, 112 seconds from
+          # container start to its first passing health check, most of it its own
+          # alembic chain. Nothing in this repository defines that healthcheck,
+          # so it is inherited whole from the upstream base image with a test and
+          # nothing else, and Docker's defaults apply: start period 0s, interval
+          # 30s, three retries. The container is therefore declared unhealthy at
+          # about 90 seconds, roughly 22 seconds before it is actually up,
+          # compose treats that as a hard dependency failure, and the whole `up`
+          # aborts with "dependency failed to start" naming no cause. Docker
+          # itself recovers, flipping the container back to healthy on the first
+          # successful check, so the only thing that actually needed to happen
+          # was waiting. Filed as issue #1757: it is every fresh install, not
+          # only this job.
+          #
+          # This job waits with a deadline it chooses and an error message that
+          # says what did not happen, instead of inheriting a compose file's
+          # judgement about how long a warm deployment should take. The
+          # healthcheck itself is left alone on purpose: widening it would change
+          # how every deployment detects a genuinely dead chat container, which
+          # is a product decision and not this job's to make.
+          if ! docker compose --env-file ../../.env.ci up -d --build \
+                 redis litellm markitdown searxng control-plane edge-api open-webui; then
+            echo "::error::the chat stack did not come up"
+            dump
+            exit 1
+          fi
+
+          deadline=$(( $(date +%s) + 420 ))
+          until docker compose --env-file ../../.env.ci exec -T open-webui \
+                  curl -fsS -o /dev/null http://localhost:8080/health 2>/dev/null; do
+            if [ "$(date +%s)" -gt "$deadline" ]; then
+              echo "::error::Open WebUI never answered its own /health inside the container within 420s"
+              dump
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "Open WebUI is serving"
+
+          if ! docker compose --env-file ../../.env.ci up -d caddy-owui caddy-artifacts; then
+            echo "::error::the chat front did not start"
+            dump
+            exit 1
+          fi
+          healthy=0
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:3003/health >/dev/null 2>&1; then healthy=1; break; fi
+            sleep 2
+          done
+          if [ "$healthy" -ne 1 ]; then
+            echo "::error::the chat front never answered /health on the published port"
+            dump
+            exit 1
+          fi
+          echo "chat front is serving on $CHAT_ORIGIN"
+
+      - name: Assert edge-api wired Supabase JWT auth
+        # The silent misconfiguration this job cannot survive and cannot see:
+        # edge-api logs this line and then denies every Supabase-JWT caller,
+        # which reads as a disabled feature rather than a broken deployment,
+        # and every chat completion in the capture below would answer 401.
+        working-directory: deploy/docker
+        run: |
+          set -euo pipefail
+          if docker compose --env-file ../../.env.ci logs --no-color edge-api \
+               | grep -q "JWT auth wiring skipped"; then
+            echo "::error::edge-api skipped JWT auth wiring, so no browser session can authenticate"
+            exit 1
+          fi
+          echo "edge-api wired Supabase JWT auth"
+
+      - name: Sync the LiteLLM model list from the DB catalog
+        # The seam a stack booted from compose alone is missing. A deploy
+        # derives LiteLLM's serving config from the database via
+        # POST /internal/litellm/sync (deploy-demo-box.yml), and without that
+        # call LiteLLM keeps serving the static seed deploy/litellm/config.yaml.
+        # That seed predates the free pool and has no route-free-pool group, so
+        # every alias resolving into the pool fails with "Invalid model name
+        # passed in model=route-free-pool" while /v1/models, which reads the DB
+        # catalog, lists hive-free happily. Measured on run 33680014334: the
+        # capture reached a signed-in chat on Hive Free and the turn came back
+        # "Invalid request for hive-free."
+        #
+        # ci.yml's live-integration job calls the same endpoint for the same
+        # reason. Calling what production calls makes the migration chain the
+        # single source of truth for what this gateway serves.
+        env:
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+        run: |
+          set -euo pipefail
+          status=""
+          response_file=$(mktemp)
+          trap 'rm -f "$response_file"' EXIT
+          for i in 1 2 3; do
+            status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+              --connect-timeout 2 --max-time 35 \
+              -X POST -H "X-Internal-Token: $CONTROL_PLANE_INTERNAL_TOKEN" \
+              http://localhost:8081/internal/litellm/sync) || status="000"
+            [ "$status" = "200" ] && break
+            echo "attempt $i: sync returned $status, retry in 5s"
+            sleep 5
+          done
+          if [ "$status" != "200" ]; then
+            echo "::error::litellm config sync failed after 3 attempts, last status $status"
+            cat "$response_file" 2>/dev/null || true
+            exit 1
+          fi
+
+          # The sync restarts the litellm container as its last act, so the
+          # gateway is briefly down here. Wait rather than let the capture race
+          # the boot.
+          master_key="${LITELLM_MASTER_KEY:-litellm-dev-key}"
+          deadline=$(( $(date +%s) + 120 ))
+          : > /tmp/litellm-models.json
+          while :; do
+            if body=$(curl -sS --max-time 5 -H "Authorization: Bearer $master_key" \
+                 http://localhost:4000/v1/models 2>/dev/null); then
+              printf '%s' "$body" > /tmp/litellm-models.json
+              break
+            fi
+            if [ "$(date +%s)" -gt "$deadline" ]; then
+              echo "::error::litellm did not come back up within 120s of the config sync"
+              exit 1
+            fi
+            sleep 3
+          done
+
+          # The regression assertion, and the one that would have caught this
+          # before a capture spent fifteen minutes to discover it.
+          if ! jq -e '.data | map(.id) | index("route-free-pool") != null' /tmp/litellm-models.json >/dev/null; then
+            echo "::error::litellm does not serve route-free-pool after syncing from the DB catalog, so the captured turn on hive-free cannot resolve. Gateway models: $(jq -r '[.data[].id] | join(\", \")' /tmp/litellm-models.json)"
+            exit 1
+          fi
+          echo "gateway serves route-free-pool"
+
+      - name: Diagnose the model catalog layers
+        # Attributes an empty model list to one of two layers in a single
+        # glance, and then ASSERTS the second. A shim key edge-api refuses means
+        # no model is selectable and the capture below can only fail, and issue
+        # #717 spent four Playwright timeouts reporting that indirectly while a
+        # step like this printed status=403 and exited 0.
+        run: |
+          set +e
+          litellm_status=$(curl -s -o /tmp/litellm-models.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${LITELLM_MASTER_KEY:-litellm-dev-key}" \
+            http://localhost:4000/v1/models)
+          litellm_count=$(jq -r 'if (.data | type) == "array" then (.data | length) else "parse-error" end' /tmp/litellm-models.json 2>/dev/null)
+          edge_status=$(curl -s -o /tmp/edge-models.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${OWUI_SHIM_KEY}" \
+            http://localhost:8080/v1/models)
+          edge_count=$(jq -r 'if (.data | type) == "array" then (.data | length) else "parse-error" end' /tmp/edge-models.json 2>/dev/null)
+          echo "layer 1 (litellm /v1/models):  status=${litellm_status} count=${litellm_count:-parse-error}"
+          echo "layer 2 (edge-api /v1/models): status=${edge_status} count=${edge_count:-parse-error}"
+          if [ "$edge_status" != "200" ]; then
+            code=$(jq -r '.error.code // "unknown"' /tmp/edge-models.json 2>/dev/null)
+            echo "::error::edge-api /v1/models answered ${edge_status} (error code: ${code}) to the seeded OWUI_SHIM_KEY, so Open WebUI has no models to select. account_not_provisioned means the shim key's account has no public.tenant_billing_accounts row: see scripts/seed-owui-e2e-user.py's provision_billing_mapping and issue #717."
+            exit 1
+          fi
+          if [ "$edge_count" = "0" ]; then
+            echo "::error::edge-api served an empty model list to the seeded shim key, so the picker has nothing in it and no completion can be sent. Check the tenant's alias visibility (supabase/migrations/20260831_01_restrict_free_pool_aliases_visibility.sql)."
+            exit 1
+          fi
+          exit 0
+
+      - name: Install the harness dependencies
+        working-directory: apps/web-console
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Build and start the console, which serves the consent screen
+        # GoTrue sends the browser to GOTRUE_SITE_URL + /oauth/consent to
+        # collect consent, and that route is the console's own Server Component
+        # (apps/web-console/app/oauth/consent/page.tsx). Without it the
+        # authorize call redirects the browser at a 404 and the sign-in stops,
+        # with nothing in GoTrue's log to read.
+        #
+        # A host process rather than the web-console-prod image, because the
+        # only consumer is the browser on this runner: nothing in a container
+        # ever reaches the console, so an image build would add five minutes to
+        # produce a service with one caller. Same shape ci.yml's web-e2e job
+        # uses. The site URL the stack script defaults to is already
+        # http://localhost:3000, which is where this lands.
+        working-directory: apps/web-console
+        env:
+          NEXT_PUBLIC_APP_URL: ${{ env.CONSOLE_ORIGIN }}
+          CONTROL_PLANE_BASE_URL: http://localhost:8081
+        run: |
+          set -euo pipefail
+          npm run build
+          nohup npm start > /tmp/console.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null "$CONSOLE_ORIGIN/auth/sign-in"; then
+              echo "console is serving on $CONSOLE_ORIGIN"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::the console never started"
+          cat /tmp/console.log
+          exit 1
+
+      - name: Point the capture at a dead session (deliberate sabotage run)
+        # The negative control for the whole job. The capture is handed a
+        # storage state with no session in it, so it cannot reach a signed-in
+        # surface, and this run must go red rather than pass with an empty
+        # capture directory or a photograph of a login page.
+        #
+        # A dead state file rather than deleting the real one: owui-setup is a
+        # project dependency of the capture and would simply mint a fresh
+        # session over any file this step removed.
+        if: github.event.inputs.sabotage == 'true'
+        run: |
+          set -euo pipefail
+          printf '{"cookies":[],"origins":[]}' > "$RUNNER_TEMP/dead-session.json"
+          echo "PROOF_STORAGE_STATE=$RUNNER_TEMP/dead-session.json" >> "$GITHUB_ENV"
+          echo "::warning::capture pointed at an empty session on purpose; this run is expected to fail"
+
+      - name: Sign in and capture the proof
+        id: capture
+        # One invocation, not two. The owui-proof project depends on owui-setup,
+        # so Playwright runs the real "Continue with Hive" journey first and
+        # hands the capture its session. owui.setup.ts is the ONE implementation
+        # of that journey (sign-in-with-hive.ts says at length why there is not a
+        # second) and it also installs the hive_jwt_forward Functions filter the
+        # chat path needs.
+        #
+        # Deliberately not two steps with the setup project invoked on its own:
+        # tools/verify-spec-wiring.mjs excludes setup files from its spec
+        # universe, so an invocation selecting only owui-setup selects zero specs
+        # and is rejected as a broken selector. It is right to reject it, and the
+        # dependency is the mechanism that exists for this.
+        working-directory: apps/web-console
+        env:
+          HIVE_COMPOSE_FLAGS: --env-file ../../.env.ci --profile local
+          PROOF_OUT: ${{ env.CAPTURE_DIR }}
+          PROOF_NOTE: PR #${{ steps.target.outputs.pr }} · run ${{ github.run_id }}
+        run: npm run e2e:owui:proof
+
+      - name: Refuse an empty capture
+        # Belt and braces over the harness's own check: a capture directory with
+        # no images has to fail the job, never pass quietly.
+        run: |
+          set -euo pipefail
+          count=$(find "$CAPTURE_DIR" -name '*.png' | wc -l)
+          echo "captured $count screenshots"
+          [ "$count" -gt 0 ] || { echo "::error::no screenshots captured"; exit 1; }
+
+      - name: Check the text log carries no credential
+        id: lint
+        # Scans docs/proof/ whole, which the capture was written into, so the
+        # same guard that fails a hand-committed leak fails this one. It cannot
+        # inspect pixels; that half is handled by stamp.mjs, whose footer never
+        # carries a URL, and by the harness, which strips every query string
+        # before it writes a URL to the log at all.
+        #
+        # The log is generated per run rather than committed to the pull
+        # request's diff, and the reason the skill gives for committing one is
+        # satisfied here: the scan is over this directory, in this workspace, on
+        # this run's own file. A per-run log committed to the branch would be
+        # churn, not coverage. It is published in the comment below and uploaded
+        # as an artifact, so nothing about it is unreadable afterwards.
+        #
+        # No continue-on-error: a detected credential fails the job outright,
+        # and every step below that could republish the capture is gated on it.
+        run: npm run lint:proof-tokens
+
+      - name: Upload the captures
+        # Whenever the capture ran at all, including when it failed partway: a
+        # failure shot is evidence too. Never when the credential lint failed:
+        # this artifact is downloadable by anyone with the run URL on a public
+        # repository, so an always() upload would detect a leak, keep it out of
+        # the comment, and publish it anyway.
+        if: always() && steps.capture.conclusion != 'skipped' && steps.lint.conclusion != 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: chat-visual-proof-${{ github.run_id }}
+          path: ${{ env.CAPTURE_DIR }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Post the captures on the pull request
+        # scripts/post-pr-visual-proof.sh, which uploads to the permanent
+        # visual-proof-assets release. A raw.githubusercontent URL pinned to a
+        # branch renders at review time and 404s the instant that branch is
+        # deleted, which this repository's squash-and-delete merge policy does
+        # to every pull request (PR #867, .wolf/decisions.md D-042).
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.target.outputs.pr }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          images=("$CAPTURE_DIR"/*.png)
+          if [ "${#images[@]}" -eq 0 ]; then
+            echo "::error::nothing to post"
+            exit 1
+          fi
+          scripts/post-pr-visual-proof.sh "$PR" "${images[@]}" \
+            --caption "Signed-in Hive chat, captured in CI against a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase, its own registered OAuth client and a real streamed completion. Run ${GITHUB_RUN_ID}."
+          {
+            echo "<details><summary>Capture log (screenshot stamps carry no URL, and the log is"
+            echo "query-string stripped and linted by \`lint:proof-tokens\`)</summary>"
+            echo
+            echo '```'
+            cat "$CAPTURE_DIR/proof-log.txt"
+            echo '```'
+            echo
+            echo "</details>"
+          } > /tmp/proof-log-comment.md
+          gh pr comment "$PR" --body-file /tmp/proof-log-comment.md
+
+      - name: Dump the stack logs on failure
+        if: failure()
+        # No working-directory: a run that failed before the checkout has no
+        # deploy/docker, and a step that cannot even start its shell reports a
+        # directory error instead of the failure that actually happened.
+        run: |
+          if [ -d deploy/docker ]; then
+            (cd deploy/docker && docker compose --env-file ../../.env.ci \
+              logs --no-color --timestamps --tail=2000 2>&1) \
+              | python3 scripts/redact-log-credentials.py > /tmp/compose.log || true
+          fi
+          # The console's own log, which is where a consent-screen failure
+          # shows up and nowhere else.
+          python3 scripts/redact-log-credentials.py < /tmp/console.log > /tmp/console-redacted.log 2>/dev/null || true
+          docker logs supabase-auth 2>&1 | tail -200 \
+            | python3 scripts/redact-log-credentials.py > /tmp/gotrue.log || true
+
+      - name: Upload the failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: chat-visual-proof-logs-${{ github.run_id }}
+          # Traces, videos and index.html are excluded, and this repository is
+          # public, so anyone with a run URL can download what is left. The
+          # setup project walks a full OAuth journey: a trace holds every
+          # request header, every sb-*-auth-token cookie, and the callback URL
+          # whose query string carries code=. index.html carries the same
+          # material by another route, because the HTML reporter base64-inlines
+          # the whole payload into it, and a waitForURL timeout enumerates every
+          # URL it navigated. Neither is inspectable by a text linter. The
+          # failure screenshots and the error text remain, which is what a
+          # reader actually needs. Same exclusion list, and the same reasoning,
+          # as owui-nightly.yml.
+          path: |
+            /tmp/compose.log
+            /tmp/console-redacted.log
+            /tmp/gotrue.log
+            apps/web-console/playwright-report-owui
+            !apps/web-console/playwright-report-owui/**/*.zip
+            !apps/web-console/playwright-report-owui/**/*.webm
+            !apps/web-console/playwright-report-owui/index.html
+          if-no-files-found: ignore
+          retention-days: 5
+
+      - name: Announce a red run on the tracking issue
+        # WHY THIS EXISTS, and why this job is not a required check. The agent
+        # proof job failed on every branch for four days and nothing said so,
+        # because a path-gated job that nobody watches is silent by
+        # construction. The property actually needed is that a red run ANNOUNCES
+        # itself, not that it gates: making this required would block unrelated
+        # pull requests and turn a slow provider into a merge stopper.
+        #
+        # Excluded on a sabotage dispatch, which is the job's own negative
+        # control and is SUPPOSED to go red. Paging on it would train everyone
+        # to ignore this issue, which is the same failure as the silence it
+        # replaces.
+        if: failure() && github.event.inputs.sabotage != 'true'
+        # Never let the notifier change the job's verdict.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: chat visual proof is failing
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          body=$(printf '%s\n' \
+            "Run [\`${GITHUB_RUN_ID}\`](${RUN_URL}) failed on \`${GITHUB_REF_NAME}\` at commit \`${GITHUB_SHA}\`." \
+            "" \
+            "This job is deliberately not a required check, so nothing else will" \
+            "surface this. Read the run log and the uploaded failure artifacts" \
+            "before assuming it is the branch under test: when this job breaks" \
+            "repo-wide it is usually its own environment, not the change." \
+            "" \
+            "Close this by hand once a green run confirms the fix. It is not" \
+            "closed automatically, because a green run on one branch does not" \
+            "prove the job is healthy on main.")
+          # ONE issue, reused, or a bad week produces fifty and the signal
+          # drowns exactly the way the silence did. The list API rather than the
+          # search API on purpose: search is eventually consistent, and two
+          # failures minutes apart could both miss the issue the other just
+          # opened and file a duplicate.
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+                  --json number,title -q '.[] | [.number, .title] | @tsv' 2>/dev/null \
+                | awk -F'\t' -v t="$TITLE" '$2 == t { print $1; exit }')
+          if [ -n "${num:-}" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "$body" || true
+            echo "commented on existing tracking issue #$num"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$body" || true
+            echo "opened the tracking issue"
+          fi
+
+      - name: Tear down
+        if: always()
+        run: |
+          if [ -d deploy/docker ]; then
+            (cd deploy/docker && docker compose --env-file ../../.env.ci down -v --remove-orphans) || true
+          fi
+          docker rm -f supabase-gw supabase-rest supabase-auth supabase-tls hive-ci-db || true
+          rm -f .env.ci || true

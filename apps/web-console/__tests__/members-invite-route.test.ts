@@ -19,10 +19,19 @@ vi.mock("../lib/control-plane/client", () => ({
   // ControlPlaneError is referenced by the route for status mapping.
   ControlPlaneError: class ControlPlaneError extends Error {
     status: number;
-    constructor(status: number, message: string) {
+    code: string | null;
+    retryAfter: string | null;
+    constructor(
+      status: number,
+      message: string,
+      code: string | null = null,
+      retryAfter: string | null = null,
+    ) {
       super(message);
       this.name = "ControlPlaneError";
       this.status = status;
+      this.code = code;
+      this.retryAfter = retryAfter;
     }
   },
 }));
@@ -222,5 +231,33 @@ describe("app/api/console/members/route.ts POST", () => {
     const location = res.headers.get("location") ?? "";
     expect(location).not.toContain("CONTROL_PLANE");
     expect(location.toLowerCase()).toContain("could+not");
+  });
+
+  // Issue #1745. A cap refusal is not a bad request, and "please try again" is
+  // the one instruction that is guaranteed to fail while the window is open.
+  it("passes a cap refusal through with its own status and its wait time", async () => {
+    const { ControlPlaneError } = await import("../lib/control-plane/client");
+    mockCreateInvitation.mockRejectedValue(
+      new ControlPlaneError(429, "invitation limit reached, try again in 5 minutes"),
+    );
+    const { POST } = await import("../app/api/console/members/route");
+    const res = await POST(jsonRequest("teammate@example.com"));
+
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("5 minutes");
+  });
+
+  it("reports a counter outage as unavailable rather than as a bad request", async () => {
+    const { ControlPlaneError } = await import("../lib/control-plane/client");
+    mockCreateInvitation.mockRejectedValue(
+      new ControlPlaneError(503, "invitations are temporarily unavailable, please try again shortly"),
+    );
+    const { POST } = await import("../app/api/console/members/route");
+    const res = await POST(jsonRequest("teammate@example.com"));
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: string };
+    expect(body.error.toLowerCase()).toContain("unavailable");
   });
 });
