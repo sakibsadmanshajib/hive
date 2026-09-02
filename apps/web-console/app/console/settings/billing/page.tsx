@@ -149,7 +149,7 @@ export default async function BillingSettingsPage() {
       ) : (
         <EmptyState
           title="Could not load your billing details"
-          description="We could not reach the billing profile service, so this form is not showing what is currently saved. Refresh to try again."
+          description="We could not read the details this form needs, so it is not showing what is currently saved. Refresh to try again."
         />
       )}
     </ConsoleShell>

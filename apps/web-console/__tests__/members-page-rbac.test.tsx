@@ -23,10 +23,18 @@ const mockGetAccountProfile = vi.fn();
 // router.refresh() after issuing an invitation. Mocking the module rather than
 // the panel keeps the real form in the tree, so the role-selector assertions
 // below still test the thing they name.
-vi.mock("next/navigation", () => ({
+// Only the navigation calls this test drives are replaced.
+// unstable_rethrow() stays real: the console's reads call it first in
+// every catch so a framework throw is never classified as a data
+// failure, and a stubbed one would pass whether or not that holds.
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return {
+    ...actual,
   redirect: mockRedirect,
   useRouter: () => ({ refresh: vi.fn() }),
-}));
+  };
+});
 
 vi.mock("next/headers", () => ({
   cookies: vi.fn(async () => ({
@@ -276,15 +284,22 @@ describe("app/console/members/page.tsx", () => {
     expect(screen.queryByText(/something went wrong/i)).toBeNull();
   });
 
-  it("still surfaces a non-permission member-list failure", async () => {
+  // This used to assert that a non-permission failure rejected, taking the
+  // page down with it. Issue #494 changed that contract: the failure is now
+  // stated in place. What must not change is that it is never quietly
+  // rendered as an empty roster, which would be a claim about the workspace
+  // made from a failed request.
+  it("states a non-permission member-list failure instead of crashing", async () => {
     const { ControlPlaneError } = await import("../lib/control-plane/client");
     mockGetMembers.mockRejectedValue(new ControlPlaneError(500, "upstream down"));
     mockGetViewer.mockResolvedValue(viewerPayload(["members.invite"]));
     const mod = await import("../app/console/members/page");
 
-    await expect(
-      mod.default({ searchParams: Promise.resolve({}) }),
-    ).rejects.toThrow(/upstream down/);
+    render(await mod.default({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText(/could not load members/i)).toBeTruthy();
+    expect(screen.queryByText(/no members yet/i)).toBeNull();
+    expect(screen.queryByText(/owner-only/i)).toBeNull();
   });
 
   it("states the permission gate on role controls for a viewer without members.manage", async () => {

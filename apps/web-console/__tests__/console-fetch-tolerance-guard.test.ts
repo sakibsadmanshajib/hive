@@ -139,7 +139,7 @@ function isCaught(node: ts.Node, mustRethrow: boolean): boolean {
         return false;
       }
       const handler = call.arguments[0];
-      return handler ? reRaises(handler) : false;
+      return handler ? reRaisesControlFlow(handler) : false;
     }
     if (
       (ts.isPropertyAccessExpression(parent) || ts.isCallExpression(parent)) &&
@@ -184,7 +184,7 @@ function insideTry(node: ts.Node, mustRethrow: boolean): boolean {
     // The INNERMOST enclosing try is the one that handles this read. An outer
     // try that re-raises is no help when an inner catch has already swallowed
     // the throw, so this answers on the first one found and stops.
-    return mustRethrow ? reRaises(clause.block) : true;
+    return mustRethrow ? reRaisesControlFlow(clause.block) : true;
   }
   return false;
 }
@@ -253,15 +253,19 @@ function calledRead(
 }
 
 /**
- * Does this block re-raise? Answered by walking for a real ThrowStatement or a
- * real call to unstable_rethrow, not by matching the source text.
+ * Does this handler let Next.js's control flow past, and only that?
  *
- * Text matching accepted a `throw` written inside a string literal or a
- * comment, which is a rethrow that is not code at all. Nested functions are
- * not descended into: a throw inside a callback declared in the catch does not
- * re-raise the caught error.
+ * Only a real call to unstable_rethrow counts. A bare `throw` does not: it
+ * re-raises everything, so the read still escapes the Server Component and
+ * nothing has been tolerated. `throw new Error("failed")` is worse again,
+ * replacing the error and still escaping.
+ *
+ * Answered by walking the AST, because matching the source text accepted a
+ * `throw` written inside a string literal or a comment, which is a rethrow
+ * that is not code at all. Nested functions are not descended into: a call
+ * inside a callback declared in the handler does not run on the caught error.
  */
-function reRaises(block: ts.Node): boolean {
+function reRaisesControlFlow(block: ts.Node): boolean {
   let found = false;
   const visit = (node: ts.Node): void => {
     if (found) {
@@ -272,10 +276,6 @@ function reRaises(block: ts.Node): boolean {
       ts.isFunctionExpression(node) ||
       ts.isArrowFunction(node)
     ) {
-      return;
-    }
-    if (ts.isThrowStatement(node)) {
-      found = true;
       return;
     }
     if (

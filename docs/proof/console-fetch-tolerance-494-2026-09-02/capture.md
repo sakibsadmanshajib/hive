@@ -74,7 +74,7 @@ fetch and not by this change having broken the card.
 
 ## Commands
 
-```
+```sh
 # before
 cd deploy/docker   # worktree at origin/main
 docker compose run --build --rm --no-deps --name proof494main \
@@ -93,13 +93,19 @@ docker compose run --build --rm --no-deps --name proof494 \
   -e CONTROL_PLANE_BASE_URL=http://localhost:9099 \
   web-console sh -c "node /stub.mjs & npm run build && npm run start -- --hostname 0.0.0.0 --port 3000"
 
-# control: same server, fixture flipped to a healthy balance
+# control: same server, fixture flipped to a healthy balance.
+# The running fixture holds the port, so a second process cannot simply be
+# started beside it (that attempt fails with EADDRINUSE and leaves the 503 in
+# place). Stop the first one, then start the replacement detached. The image
+# has no ps or pkill, hence the /proc scan.
+docker exec proof494 sh -c \
+  'for p in /proc/[0-9]*; do grep -qa stub.mjs $p/cmdline 2>/dev/null && kill ${p##*/}; done'
 docker exec -d -e BALANCE_STATUS=200 -e STUB_PORT=9099 proof494 node /stub.mjs
 ```
 
 ## Console assertions run against capture 02
 
-```
+```text
 statuses (elements with role="status")            -> []
 body contains "Unavailable"                       -> true
 body contains "Northwind Analytics"               -> true
@@ -136,7 +142,7 @@ prevents that.
 
 Asserted rather than eyeballed:
 
-```
+```text
 body contains "could not read your spend alerts"  -> true
 body contains "No spend alerts configured yet"    -> false
 create form present in the DOM                    -> false

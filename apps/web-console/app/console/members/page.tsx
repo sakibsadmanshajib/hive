@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 
 import {
   ControlPlaneError,
@@ -201,16 +201,25 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
     members: AccountMember[];
     invitations: PendingInvitation[];
     restricted: boolean;
+    unreadable: boolean;
   }> {
-    if (!session) return { members: [], invitations: [], restricted: false };
+    if (!session) {
+      return { members: [], invitations: [], restricted: false, unreadable: false };
+    }
     try {
       const roster = await getMembers(session.access_token);
-      return { ...roster, restricted: false };
+      return { ...roster, restricted: false, unreadable: false };
     } catch (err: unknown) {
+      unstable_rethrow(err);
+      // 403 is a real answer about this viewer: the list is owner-only.
+      // Anything else is an outage, and rethrowing it took the whole page
+      // down. An empty roster would be worse still, since "No members yet"
+      // is a claim about the workspace (issue #494).
       if (err instanceof ControlPlaneError && err.status === 403) {
-        return { members: [], invitations: [], restricted: true };
+        return { members: [], invitations: [], restricted: true, unreadable: false };
       }
-      throw err;
+      console.error("MembersPage: could not load the member roster", err);
+      return { members: [], invitations: [], restricted: false, unreadable: true };
     }
   }
 
@@ -443,7 +452,12 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
           </CardContent>
         </Card>
 
-        {memberList.restricted ? (
+        {memberList.unreadable ? (
+          <EmptyState
+            title="Could not load members"
+            description="We could not reach the member service, so this is not showing who belongs to this workspace. Refresh to try again."
+          />
+        ) : memberList.restricted ? (
           <EmptyState
             title="Member list is owner-only"
             description="Only workspace owners can see who else belongs to this workspace. Ask an owner if you need the list."

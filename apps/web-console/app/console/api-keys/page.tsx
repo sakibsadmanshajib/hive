@@ -36,8 +36,13 @@ const CATALOG_READ_BUDGET_MS = 2_000;
  * hanging it.
  */
 async function catalogModelsOrNone(): Promise<CatalogModel[]> {
+  // Promise.race does not cancel the loser, so the handle is kept and cleared
+  // once the race settles. Without that, a catalog read that answered in
+  // 50ms still logged a timeout two seconds later and every render held a
+  // live timer until it fired.
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<CatalogModel[]>((resolve) => {
-    setTimeout(() => {
+    timer = setTimeout(() => {
       console.error(
         `ApiKeysPage: model catalog did not answer within ${CATALOG_READ_BUDGET_MS}ms, using the seeded alias`,
       );
@@ -47,7 +52,11 @@ async function catalogModelsOrNone(): Promise<CatalogModel[]> {
   const read = tolerate(getCatalogModels()).then(
     (models): CatalogModel[] => models ?? [],
   );
-  return Promise.race([read, timeout]);
+  try {
+    return await Promise.race([read, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export default async function ApiKeysPage() {

@@ -62,8 +62,8 @@ export default async function LogsPage({ searchParams }: LogsPageProps) {
   let fetchError = false;
   const [keys, models] = await Promise.all([
     tolerate(getApiKeys()),
-    tolerate(getCatalogModels()).then((rows): string[] =>
-      (rows ?? []).map((row) => row.id),
+    tolerate(getCatalogModels()).then((rows): string[] | null =>
+      rows === null ? null : rows.map((row) => row.id),
     ),
   ]);
 

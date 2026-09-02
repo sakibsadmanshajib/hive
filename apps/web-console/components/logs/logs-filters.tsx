@@ -15,7 +15,9 @@ interface LogsFiltersProps {
   state: LogsFilterState;
   // Model aliases offered in the select, sourced from the catalog the
   // workspace can already see.
-  models: string[];
+  // null when the catalog could not be read. An empty array is a workspace
+  // that routes to no models; the select says which it is (issue #494).
+  models: string[] | null;
   // null when the key list could not be read. An empty array is an account
   // with no keys; the select says which of the two it is (issue #494).
   keys: ApiKey[] | null;
@@ -116,8 +118,10 @@ export function LogsFilters({ state, models, keys }: LogsFiltersProps) {
           defaultValue={state.model ?? ""}
           className="h-8 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs text-[var(--color-ink)]"
         >
-          <option value="">All models</option>
-          {models.map((alias) => (
+          <option value="">
+            {models === null ? "Models unavailable" : "All models"}
+          </option>
+          {(models ?? []).map((alias) => (
             <option key={alias} value={alias}>
               {alias}
             </option>

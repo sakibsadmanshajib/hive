@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import {
   ControlPlaneError,
@@ -21,6 +21,7 @@ import { RateLimitForm } from "@/components/api-keys/rate-limit-form";
 import { ConsoleNotFound } from "@/components/app-shell/console-not-found";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -61,10 +62,11 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
   // outage on this path still leaves a trace (issue #494).
   const profile = await requireAccountProfile();
 
-  let limits: KeyLimits;
+  let limits: KeyLimits | null = null;
   try {
     limits = await getApiKeyLimits(keyID);
   } catch (err) {
+    unstable_rethrow(err);
     // A key that is not this account's own reads as 404 upstream. Branch on the
     // status rather than on message text: the previous message match also let a
     // transport failure through as an uncaught error and crashed the page.
@@ -97,7 +99,10 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
         />
       );
     }
-    throw err;
+    // Not a 404, so not an answer about this key: the limits could not be
+    // read. Rendering the form from a fabricated default would show caps that
+    // are not in force and invite the operator to save them (issue #494).
+    console.error("ApiKeyLimitsPage: could not load the key limits", err);
   }
 
   // The write runs as a server action, so the browser form never needs the
@@ -163,7 +168,14 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
         title="Rate limits"
         description="Per-key request and token limits. Tier overrides take precedence over system defaults for the matching tier."
       />
-      <RateLimitForm initial={limits} canEdit={canEdit} onSave={saveLimits} />
+      {limits ? (
+        <RateLimitForm initial={limits} canEdit={canEdit} onSave={saveLimits} />
+      ) : (
+        <EmptyState
+          title="Could not load these rate limits"
+          description="We could not reach the key service, so this form is not showing the limits currently in force. Refresh to try again."
+        />
+      )}
     </ConsoleShell>
   );
 }
