@@ -120,3 +120,102 @@ describe("ApiKeyList name column", () => {
     expect(screen.getByTitle("prod-server").textContent).toBe("prod-server");
   });
 });
+
+/**
+ * Issue #1683: the spend-against-limit surface was two plain dollar cells and
+ * the reader had to divide them in their head. These pin the bar that
+ * replaced them: a real progressbar with an accessible name, the percentage
+ * and both dollar figures readable together, and a fill that never leaves its
+ * track.
+ */
+describe("ApiKeyList budget usage bar", () => {
+  function lifetimeKey(spend: number, limit: number | null): ApiKey {
+    return baseKey({
+      spend_credits: spend,
+      budget_limit_credits: limit,
+      budget_summary: { kind: "lifetime", label: "Lifetime budget cap" },
+    });
+  }
+
+  it("renders no bar for an uncapped key, so nothing divides by a limit that is absent", () => {
+    render(
+      <ApiKeyList keys={[baseKey({ spend_credits: 360_000_000 })]} canManage={false} />,
+    );
+
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.getByText("Unlimited")).toBeTruthy();
+    expect(screen.getByText("$0.36")).toBeTruthy();
+  });
+
+  it("fills the bar to the spent share and shows the percentage beside both dollar figures", () => {
+    render(
+      <ApiKeyList keys={[lifetimeKey(1_000_000_000, 5_000_000_000)]} canManage={false} />,
+    );
+
+    const bar = screen.getByRole("progressbar");
+    expect(bar.getAttribute("value")).toBe("20");
+    expect(bar.getAttribute("max")).toBe("100");
+    expect(bar.getAttribute("aria-label")).toContain("$1.00");
+    expect(bar.getAttribute("aria-label")).toContain("$5.00 total");
+    expect(screen.getByText("20.0%")).toBeTruthy();
+    expect(screen.getByText("$1.00")).toBeTruthy();
+    expect(screen.getByText("$5.00 total")).toBeTruthy();
+    expect(screen.queryByText("Limit reached")).toBeNull();
+  });
+
+  it("marks a key that has spent exactly its limit as reached, with a full bar", () => {
+    render(
+      <ApiKeyList keys={[lifetimeKey(5_000_000_000, 5_000_000_000)]} canManage={false} />,
+    );
+
+    expect(screen.getByRole("progressbar").getAttribute("value")).toBe("100");
+    expect(screen.getByText("100.0%")).toBeTruthy();
+    expect(screen.getByText("Limit reached")).toBeTruthy();
+  });
+
+  it("clamps an over-limit key to a full track while still reporting the true percentage", () => {
+    render(
+      <ApiKeyList keys={[lifetimeKey(7_500_000_000, 5_000_000_000)]} canManage={false} />,
+    );
+
+    // The fill is capped at the track; only the number carries the overshoot,
+    // so the bar cannot render wider than the column that holds it.
+    expect(screen.getByRole("progressbar").getAttribute("value")).toBe("100");
+    expect(screen.getByText("150.0%")).toBeTruthy();
+    expect(screen.getByText("Limit reached")).toBeTruthy();
+  });
+
+  it("treats a zero limit as exhausted rather than dividing by zero", () => {
+    render(<ApiKeyList keys={[lifetimeKey(1_000_000, 0)]} canManage={false} />);
+
+    expect(screen.getByRole("progressbar").getAttribute("value")).toBe("100");
+    expect(screen.getByText("Limit reached")).toBeTruthy();
+    expect(screen.queryByText(/NaN|Infinity/)).toBeNull();
+  });
+
+  it("renders a zero-spend capped key as an empty bar, not a missing one", () => {
+    render(<ApiKeyList keys={[lifetimeKey(0, 5_000_000_000)]} canManage={false} />);
+
+    expect(screen.getByRole("progressbar").getAttribute("value")).toBe("0");
+    expect(screen.getByText("0.0%")).toBeTruthy();
+  });
+
+  it("shows both dollar figures but no ratio for a monthly cap, whose window the lifetime spend does not match", () => {
+    render(
+      <ApiKeyList
+        keys={[
+          baseKey({
+            spend_credits: 360_000_000,
+            budget_limit_credits: 5_000_000_000,
+            budget_summary: { kind: "monthly", label: "Monthly budget cap" },
+          }),
+        ]}
+        canManage={false}
+      />,
+    );
+
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.getByText("$0.36")).toBeTruthy();
+    expect(screen.getByText("$5.00/mo")).toBeTruthy();
+  });
+});

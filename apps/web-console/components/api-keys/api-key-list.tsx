@@ -3,8 +3,9 @@ import Link from "next/link";
 import type { ApiKey } from "@/lib/control-plane/client";
 import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/ui/data-table";
-import { formatShortDate } from "@/lib/format/credits";
+import { formatPercent, formatShortDate } from "@/lib/format/credits";
 import { formatUsdFromCredits } from "@/lib/format/model-pricing";
+import { cn } from "@/lib/cn";
 import { RevokeConfirmPanel } from "./revoke-confirm-panel";
 
 // Reset-cadence suffix for the limit cell, matching the New Key modal's own
@@ -33,6 +34,108 @@ function statusTone(status: string): { label: string; tone: ToneName } {
     default:
       return { label: status, tone: "neutral" };
   }
+}
+
+/**
+ * Spend against a key's cap: both dollar figures for the exact number, and a
+ * bar for the proportion at a glance (issue #1683). Before this the column
+ * pair was plain text and the reader had to divide two dollar amounts in
+ * their head to learn how much of the budget was gone.
+ *
+ * The bar renders only when the cap's window matches the spend figure's
+ * window. spend_credits is lifetime (RecordUsageFinalization writes the
+ * lifetime rollup on every settled request, Repository.GetLifetimeSpend sums
+ * it), so it divides honestly by a lifetime cap and not by a monthly one: a
+ * key at $500 lifetime against a $10/mo cap is nowhere near its monthly cap,
+ * and a bar reading 5000% would raise an alarm the enforcement path never
+ * raises. A monthly cap therefore keeps both figures and claims no ratio,
+ * until the list endpoint reports a month-to-date spend worth dividing.
+ *
+ * Native <progress> rather than a coloured div: the progressbar role, the
+ * value and the maximum come from the element itself, so a screen reader
+ * reads the proportion without a hand-built ARIA triple that can drift out of
+ * step with the rendered fill.
+ */
+function BudgetUsageCell({ row }: { row: ApiKey }) {
+  const spendText = formatUsdFromCredits(row.spend_credits);
+  const limit = row.budget_limit_credits;
+
+  if (limit === null) {
+    return (
+      <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+        <span className="tabular-nums text-[var(--color-ink)]">{spendText}</span>
+        <span className="text-xs text-[var(--color-ink-3)]">of</span>
+        <span className="text-[var(--color-ink-3)]">Unlimited</span>
+      </div>
+    );
+  }
+
+  const limitText = `${formatUsdFromCredits(limit)}${limitSuffix(row.budget_summary.kind)}`;
+  const figures = (
+    <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+      <span className="tabular-nums text-[var(--color-ink)]">{spendText}</span>
+      <span className="text-xs text-[var(--color-ink-3)]">of</span>
+      <span className="tabular-nums text-[var(--color-ink-2)]">{limitText}</span>
+    </div>
+  );
+
+  if (row.budget_summary.kind !== "lifetime") {
+    return figures;
+  }
+
+  // A non-positive cap refuses every request, so any spend at all against one
+  // is a budget that is gone. Resolving it here to a plain 0 or 1 keeps the
+  // division out of the render path entirely: no NaN from 0/0, no Infinity
+  // from a spend over a zero cap, and nothing downstream has to defend
+  // against either.
+  const ratio =
+    limit > 0 ? row.spend_credits / limit : row.spend_credits > 0 ? 1 : 0;
+  const reached = ratio >= 1;
+  // The fill is clamped to the track and only the percentage carries the
+  // overshoot, so a key at 150% cannot render a bar wider than its column.
+  const fill = Number((Math.min(ratio, 1) * 100).toFixed(1));
+  const percentText = formatPercent(ratio);
+
+  return (
+    <div className="flex min-w-[11rem] max-w-[15rem] flex-col gap-1.5">
+      <div className="flex items-baseline justify-between gap-3">
+        {figures}
+        <span className="flex items-center gap-1.5">
+          {reached ? <Badge tone="danger">Limit reached</Badge> : null}
+          <span
+            className={cn(
+              "text-xs tabular-nums",
+              reached
+                ? "text-[var(--color-danger)]"
+                : "text-[var(--color-ink-2)]",
+            )}
+          >
+            {percentText}
+          </span>
+        </span>
+      </div>
+      <progress
+        value={fill}
+        max={100}
+        aria-label={`Budget used: ${spendText} of ${limitText}`}
+        // The clamped fill would otherwise announce "100%" for a key at 150%.
+        // aria-valuetext keeps what a screen reader hears identical to the
+        // percentage printed beside the bar.
+        aria-valuetext={reached ? `${percentText}, limit reached` : percentText}
+        className={cn(
+          "h-1.5 w-full appearance-none overflow-hidden rounded-full border-0",
+          "bg-[var(--color-surface-inset)]",
+          "[&::-webkit-progress-bar]:rounded-full",
+          "[&::-webkit-progress-bar]:bg-[var(--color-surface-inset)]",
+          "[&::-webkit-progress-value]:rounded-full",
+          "[&::-moz-progress-bar]:rounded-full",
+          reached
+            ? "[&::-webkit-progress-value]:bg-[var(--color-danger)] [&::-moz-progress-bar]:bg-[var(--color-danger)]"
+            : "[&::-webkit-progress-value]:bg-[var(--color-accent)] [&::-moz-progress-bar]:bg-[var(--color-accent)]",
+        )}
+      />
+    </div>
+  );
 }
 
 export function ApiKeyList({ keys, canManage }: ApiKeyListProps) {
@@ -73,33 +176,14 @@ export function ApiKeyList({ keys, canManage }: ApiKeyListProps) {
       },
     },
     {
-      key: "spend_credits",
-      // "lifetime" is in the header, not implied. spend_credits is the key's
-      // whole-life total (Repository.GetLifetimeSpend), while the cap beside
-      // it can be monthly, and two numbers side by side read as a ratio. A
-      // key at $500 lifetime against a $10/mo cap is not over its cap, and
-      // an unqualified "Spend" column says it is.
-      header: "Spend (lifetime)",
-      numeric: true,
-      align: "right",
-      cell: (row) => (
-        <span className="tabular-nums">{formatUsdFromCredits(row.spend_credits)}</span>
-      ),
-    },
-    {
-      key: "budget_limit_credits",
-      header: "Credit limit",
-      numeric: true,
-      align: "right",
-      cell: (row) =>
-        row.budget_limit_credits === null ? (
-          <span className="text-[var(--color-ink-3)]">Unlimited</span>
-        ) : (
-          <span className="tabular-nums">
-            {formatUsdFromCredits(row.budget_limit_credits)}
-            {limitSuffix(row.budget_summary.kind)}
-          </span>
-        ),
+      key: "budget_usage",
+      // "lifetime" stays in the header, not implied. spend_credits is the
+      // key's whole-life total (Repository.GetLifetimeSpend), while the cap
+      // beside it can be monthly, and two numbers side by side read as a
+      // ratio. A key at $500 lifetime against a $10/mo cap is not over its
+      // cap, and an unqualified "Spend" column says it is.
+      header: "Spend (lifetime) vs limit",
+      cell: (row) => <BudgetUsageCell row={row} />,
     },
     {
       key: "expires_at",
