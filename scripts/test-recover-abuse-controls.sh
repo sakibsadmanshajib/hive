@@ -162,4 +162,5 @@ GOTRUE_URL=http://127.0.0.1:8999 \
 MAILHOG_URL=http://127.0.0.1:8925 \
 JWT_SECRET="$JWT_SECRET" \
  MAIL_CONTAINER="${PREFIX}-mail" \
+ AUTH_CONTAINER="${PREFIX}-auth" \
   python3 "${HERE}/scripts/recover_abuse_controls_probe.py"

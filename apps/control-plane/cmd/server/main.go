@@ -355,6 +355,23 @@ func main() {
 	// listener below share this one registry.
 	metricsRegistry, promRegistry := metrics.NewRegistry()
 
+	// Outbound mail relay probe. Registered here, next to the registry, because
+	// it depends on nothing else this process builds: it reads the relay from the
+	// environment and needs neither a database pool nor a console origin, so it
+	// keeps reporting on a stack whose other wiring failed.
+	//
+	// It exists for what deploy/docker/Caddyfile.supabase does to
+	// POST /auth/v1/recover: an identical 200 {} is synthesized for GoTrue's 200,
+	// 429 and 5xx so that no caller can read the account list off a status code.
+	// A broken relay therefore tells every user to check an inbox nothing will
+	// arrive in, and the response carries no trace of it. GoTrue's own log names
+	// the failure, but nothing reads a container log on a schedule. This is the
+	// series that does. See MailRelayUnusable in deploy/prometheus/alerts.yml.
+	if !startMailRelayWatch(runCtx, promRegistry) {
+		log.Println("WARN mail relay probe disabled: no SMTP relay configured (HIVE_SMTP_HOST, HIVE_MAIL_FROM). " +
+			"Nothing here reports whether password recovery, invitation or confirmation mail can be delivered")
+	}
+
 	// Hoisted so the payments wiring block below can reference them.
 	var accountsSvc *accounts.Service
 	var accountingSvc *accounting.Service

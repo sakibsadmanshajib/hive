@@ -326,11 +326,31 @@
 			# ponytail: a genuine server fault on this route is therefore
 			# invisible to the caller, who sees the same 200 as a sent mail.
 			# That is the same trade the throttle makes and it is the right way
-			# round: GoTrue logs the failure, and the alternative is telling
-			# every anonymous caller which addresses hold accounts whenever
-			# mail is down. Everything outside this list still passes through,
-			# so a 400 on a malformed address is unchanged; those are decided
-			# before the user lookup and cannot vary by account.
+			# round: the alternative is telling every anonymous caller which
+			# addresses hold accounts whenever mail is down. Everything outside
+			# this list still passes through, so a 400 on a malformed address is
+			# unchanged; those are decided before the user lookup and cannot
+			# vary by account.
+			#
+			# Invisible to the CALLER is not invisible to an operator, and that
+			# distinction is the whole reason this trade is affordable. GoTrue
+			# logs the refusal, and control-plane exports
+			# hive_mail_relay_usable, which MailRelayUnusable in
+			# deploy/prometheus/alerts.yml pages on. That gauge is what stops
+			# this from being a loud failure swapped for a quiet absence: with
+			# the relay down, every user is told to check an inbox nothing will
+			# arrive in, and before the gauge existed nothing anywhere said so.
+			#
+			# It watches the relay, not this route, because there is nowhere
+			# here to watch from. A signal emitted on this branch and not the
+			# others is the oracle again, and Caddy's own metrics record the
+			# status Caddy WROTE, so they see the synthesized 200 and never the
+			# upstream 5xx (measured on caddy 2.11.3 against this file). The
+			# relay is the shared cause in any case: docker-compose.yml gives
+			# control-plane HIVE_SMTP_HOST from the same ENTERPRISE_SMTP_HOST
+			# that feeds GOTRUE_SMTP_HOST. What the gauge does NOT cover is a
+			# 5xx from something other than the relay, a template or database
+			# fault in the recovery path, which stays log-only.
 			@sameanswer status 200 429 5xx
 			handle_response @sameanswer {
 				header Content-Type application/json

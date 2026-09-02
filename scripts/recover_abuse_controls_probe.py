@@ -39,6 +39,11 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "")
 # that opens the cheapest oracle on this route, and it is not reachable by
 # sending requests.
 MAIL_CONTAINER = os.environ.get("MAIL_CONTAINER", "")
+# GoTrue's own container, read rather than driven. With the gateway answering
+# 200 {} whatever happens, GoTrue's log is the only place the failure is named
+# at all for a 5xx the relay did not cause, so "operators are not blind" is a
+# claim this run has to check rather than assert.
+AUTH_CONTAINER = os.environ.get("AUTH_CONTAINER", "")
 
 # GoTrue hardcodes the burst of the limiter /recover is wrapped in to 30
 # (newLimiterPer5mOver1h in internal/api/apilimiter/apilimiter.go), whatever
@@ -127,6 +132,25 @@ def relay(state: str) -> None:
     time.sleep(1.0)
 
 
+def container_log(name: str) -> str:
+    done = subprocess.run(["docker", "logs", name], check=True, capture_output=True)
+    return (done.stdout + done.stderr).decode(errors="replace")
+
+
+# The exact line GoTrue writes when a recovery send fails, not a loose
+# substring. "500" and "recovery" each appear in this log for reasons that have
+# nothing to do with a failed send, so a check on those alone would pass on a
+# GoTrue that had stopped logging this entirely.
+FAILED_SEND_LINE = '"msg":"500: Error sending recovery email"'
+
+
+def failed_send_lines() -> int:
+    return sum(
+        1 for line in container_log(AUTH_CONTAINER).splitlines()
+        if FAILED_SEND_LINE in line
+    )
+
+
 def get_json(url: str) -> dict:
     with urllib.request.urlopen(url, timeout=15) as resp:
         return json.loads(resp.read().decode())
@@ -181,8 +205,8 @@ def settle() -> None:
 
 
 def main() -> int:
-    if not MAIL_CONTAINER:
-        print("MAIL_CONTAINER is unset; run this through scripts/test-recover-abuse-controls.sh",
+    if not MAIL_CONTAINER or not AUTH_CONTAINER:
+        print("MAIL_CONTAINER or AUTH_CONTAINER is unset; run this through scripts/test-recover-abuse-controls.sh",
               file=sys.stderr)
         return 2
     users = [f"u{i}@example.test" for i in range(1, 9)]
@@ -308,6 +332,14 @@ def main() -> int:
     # One request per candidate address, no window to arm, and the body names
     # the reason. Cheaper than either oracle closed above, and its trigger is
     # the exact state this issue was filed over.
+    # Counted before the relay goes down, and asserted to be zero, so the
+    # after-count below is a discriminating check rather than a substring that
+    # happens to be present. Section 5 uses the same control/fix shape.
+    failed_sends_before = failed_send_lines()
+    check(
+        failed_sends_before == 0,
+        f"nothing has failed to send yet, so the log check below discriminates (control, {failed_sends_before} lines)",
+    )
     relay("stop")
     try:
         down_unknown = recover_via_console("still-nobody@example.test", "203.0.113.201")
@@ -326,6 +358,19 @@ def main() -> int:
             raw_down[0] >= 500 and raw_unknown[0] == 200,
             f"GoTrue itself does answer them differently, {raw_down[0]} against "
             f"{raw_unknown[0]}, so the gateway is what closes it",
+        )
+        # The response is deliberately silent, so the log has to not be. This is
+        # the only operator-visible trace of a 5xx the shared relay did not
+        # cause (a template or database fault in the recovery path); a relay
+        # outage is additionally carried by hive_mail_relay_usable, which
+        # MailRelayUnusable in deploy/prometheus/alerts.yml pages on. If GoTrue
+        # ever stops logging this, the swallow becomes total and this fails.
+        failed_sends_after = failed_send_lines()
+        check(
+            failed_sends_after > failed_sends_before,
+            "and GoTrue's own log now names the failed recovery send at error "
+            f"level ({failed_sends_after} lines, was {failed_sends_before}), "
+            "which is the only trace left once the gateway has answered 200",
         )
     finally:
         relay("start")
