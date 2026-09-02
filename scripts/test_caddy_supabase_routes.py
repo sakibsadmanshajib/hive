@@ -601,7 +601,7 @@ def check_recover_refusal_is_indistinguishable(public):
     only fire for an address that HAS a user row. So an honest status here
     reads the account list two requests at a time. The route rewrites every 429
     back to the endpoint's own 200 {}."""
-    if "@recover path /auth/v1/recover" not in public:
+    if not re.search(r"@recover\s*\{[^}]*\bpath\s+/auth/v1/recover\b", public):
         fail(
             "the public snippet no longer routes /auth/v1/recover on its own, so a "
             "rate-limited reset answers 429 while an unknown address answers 200, which "
@@ -614,11 +614,25 @@ def check_recover_refusal_is_indistinguishable(public):
     # X-Sb-Error-Code: over_email_send_rate_limit on the 429 and on nothing an
     # unknown address ever receives, so copying upstream headers through is not
     # an option either.
-    if "@sameanswer status 200 429" not in public:
+    # POST-only, or the exact path outranks the preflight handle's /auth/v1/*
+    # (handle blocks sort by path specificity, not source order) and the
+    # browser's OPTIONS goes to GoTrue, which answers it with no
+    # Access-Control-* headers and so blocks the POST that follows.
+    if not re.search(r"@recover\s*\{[^}]*\bmethod\s+POST\b", public):
         fail(
-            "the /auth/v1/recover route no longer answers 200 and 429 from ONE handler, so "
-            "a refused reset and a sent one are two response paths again and differ in their "
-            "headers even when status and body match (issue #1744)"
+            "the /auth/v1/recover matcher no longer restricts itself to POST, so it also "
+            "takes the CORS preflight away from the handle that answers it and a browser "
+            "cannot send the request at all (issue #1744)"
+        )
+    # 5xx is the cheapest of the three oracles: GoTrue reaches its mail send
+    # only for an address that has a user row, so a broken relay answers a real
+    # address 500 and an unknown one 200, in one request, with no window to arm.
+    if "@sameanswer status 200 429 5xx" not in public:
+        fail(
+            "the /auth/v1/recover route no longer answers 200, 429 and 5xx from ONE "
+            "handler. Two paths differ in their headers even when status and body match, and "
+            "dropping 5xx hands back the one-request oracle a stopped mail relay opens "
+            "(issue #1744)"
         )
     if 'respond "{}" 200' not in public:
         fail(

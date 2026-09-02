@@ -293,14 +293,45 @@
 	# needs the send moved off the request path, which is GoTrue's to do, not
 	# this gateway's. It is a slower and far noisier oracle than a status code
 	# or a header set, and it is the residual this route does NOT close.
-	@recover path /auth/v1/recover
+	#
+	# The matcher names POST, and that is not tidiness. `handle` blocks are
+	# sorted by path specificity rather than by the order they appear in this
+	# file, so an exact /auth/v1/recover outranks the preflight handle's
+	# /auth/v1/* and would take the browser's OPTIONS with it. GoTrue answers
+	# that preflight 204 with no Access-Control-* headers at all, for the
+	# `apikey` reason written out at supabase_auth_cors_preflight, and the
+	# browser then blocks the POST before sending it. Restricting this route to
+	# the method it is about hands OPTIONS back to the preflight handle where
+	# every sibling route already sends it.
+	@recover {
+		method POST
+		path /auth/v1/recover
+	}
 	handle @recover {
 		uri strip_prefix /auth/v1
 		reverse_proxy supabase-auth:9999 {
 			header_up X-Forwarded-For {client_ip}
 			header_up -Sb-Forwarded-For
 
-			@sameanswer status 200 429
+			# 5xx is in this list because it is the cheapest oracle of the
+			# three, not a completeness flourish. GoTrue reaches its mail
+			# send only for an address that HAS a user row, so a broken relay
+			# answers a real address 500 {"msg":"Error sending recovery
+			# email"} and an unknown one 200 {}. That is ONE request per
+			# candidate, with no per-address window to arm first, and the body
+			# names the reason. Its trigger condition is a mail relay that has
+			# stopped accepting, which is the exact state this issue was filed
+			# over.
+			#
+			# ponytail: a genuine server fault on this route is therefore
+			# invisible to the caller, who sees the same 200 as a sent mail.
+			# That is the same trade the throttle makes and it is the right way
+			# round: GoTrue logs the failure, and the alternative is telling
+			# every anonymous caller which addresses hold accounts whenever
+			# mail is down. Everything outside this list still passes through,
+			# so a 400 on a malformed address is unchanged; those are decided
+			# before the user lookup and cannot vary by account.
+			@sameanswer status 200 429 5xx
 			handle_response @sameanswer {
 				header Content-Type application/json
 				header Access-Control-Allow-Origin "*"

@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -34,6 +35,10 @@ CONSOLE_URL = os.environ.get("CONSOLE_URL", "http://127.0.0.1:8880")
 GOTRUE_URL = os.environ.get("GOTRUE_URL", "http://127.0.0.1:8999")
 MAILHOG_URL = os.environ.get("MAILHOG_URL", "http://127.0.0.1:8925")
 JWT_SECRET = os.environ.get("JWT_SECRET", "")
+# The mail relay is stopped and restarted mid-run: a broken relay is the state
+# that opens the cheapest oracle on this route, and it is not reachable by
+# sending requests.
+MAIL_CONTAINER = os.environ.get("MAIL_CONTAINER", "")
 
 # GoTrue hardcodes the burst of the limiter /recover is wrapped in to 30
 # (newLimiterPer5mOver1h in internal/api/apilimiter/apilimiter.go), whatever
@@ -73,9 +78,11 @@ def service_role_jwt() -> str:
 def post(url: str, body: dict, headers: dict) -> tuple[int, list[tuple[str, str]], str]:
     """Returns the response headers as a LIST, not a dict.
 
-    A dict silently collapses repeated headers, and `Via` is repeated once per
-    proxy hop: the difference between a proxied answer and a synthesized one is
-    exactly one `Via`, so a dict here would hide half of what this file checks.
+    A dict silently collapses repeated headers, and `Via` repeats once per proxy
+    hop. That is not what makes today's comparison red -- a proxied answer also
+    differs by `Vary` and `Server`, which a dict would still catch. It is
+    defence against a future config whose ONLY difference is the hop count,
+    which a dict could not see at all.
     """
     req = urllib.request.Request(
         url,
@@ -104,6 +111,20 @@ def describe(response: tuple[int, list[tuple[str, str]], str]) -> str:
     status, headers, body = response
     names = ", ".join(sorted(k.lower() for k, _ in headers if k.lower() != "date"))
     return f"{status} {body.strip()!r} [{names}]"
+
+
+def options(url: str, headers: dict) -> tuple[int, list[tuple[str, str]], str]:
+    req = urllib.request.Request(url, headers=headers, method="OPTIONS")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status, list(resp.headers.items()), resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        return exc.code, list(exc.headers.items()), exc.read().decode()
+
+
+def relay(state: str) -> None:
+    subprocess.run(["docker", state, MAIL_CONTAINER], check=True, capture_output=True)
+    time.sleep(1.0)
 
 
 def get_json(url: str) -> dict:
@@ -160,7 +181,11 @@ def settle() -> None:
 
 
 def main() -> int:
-    users = [f"u{i}@example.test" for i in range(1, 7)]
+    if not MAIL_CONTAINER:
+        print("MAIL_CONTAINER is unset; run this through scripts/test-recover-abuse-controls.sh",
+              file=sys.stderr)
+        return 2
+    users = [f"u{i}@example.test" for i in range(1, 9)]
     for email in users:
         create_user(email)
 
@@ -180,10 +205,12 @@ def main() -> int:
     settle()
     check(mail_count(users[0]) == 1, "and the real address was actually mailed")
     # The gateway restates GoTrue's CORS headers on this route because it
-    # synthesizes the response rather than proxying it. Two of them would be
-    # worse than none: a browser rejects a duplicated
-    # Access-Control-Allow-Origin exactly as hard as a missing one, and the
-    # structural check in test_caddy_supabase_routes.py can only read text.
+    # synthesizes the response rather than proxying it, so this asserts exactly
+    # one, unconditionally: none blocks a cross-origin browser, and two blocks
+    # it exactly as hard. It is the runtime half of a rule
+    # test_caddy_supabase_routes.py can only read as text. Note what it
+    # measures on an older config: zero, not two, because GoTrue emits the
+    # header only when an Origin is sent and this request sends none.
     acao = [v for k, v in unknown[1] if k.lower() == "access-control-allow-origin"]
     check(acao == ["*"], f"exactly one Access-Control-Allow-Origin reaches the caller (got {acao})")
 
@@ -255,6 +282,53 @@ def main() -> int:
         mail_count(users[5]) == before + 1,
         "and naming the client address serves that same caller (fix)",
     )
+
+    print("\n6. the CORS preflight still reaches the handle that answers it")
+    # handle blocks sort by path specificity, not source order, so an exact
+    # /auth/v1/recover outranks the preflight handle's /auth/v1/* and would
+    # take the browser's OPTIONS with it. GoTrue answers that preflight with no
+    # Access-Control-* headers, and the browser then never sends the POST. The
+    # route is POST-only for this reason and nothing else checks it.
+    pre = {"Host": "console.localhost", "Origin": "https://console.localhost",
+           "Access-Control-Request-Method": "POST",
+           "Access-Control-Request-Headers": "apikey, content-type"}
+    recover_pre = options(f"{CONSOLE_URL}/auth/v1/recover", pre)
+    sibling_pre = options(f"{CONSOLE_URL}/auth/v1/token", pre)
+    check(recover_pre[0] == 204, f"the preflight for /recover answers 204 (got {recover_pre[0]})")
+    check(
+        any(k.lower() == "access-control-allow-origin" for k, _ in recover_pre[1]),
+        "and carries Access-Control-Allow-Origin, without which the browser blocks the POST",
+    )
+    check(
+        sorted(k.lower() for k, _ in recover_pre[1]) == sorted(k.lower() for k, _ in sibling_pre[1]),
+        "and answers with the same header set as a sibling auth route",
+    )
+
+    print("\n7. a stopped mail relay does not answer real and unknown differently")
+    # One request per candidate address, no window to arm, and the body names
+    # the reason. Cheaper than either oracle closed above, and its trigger is
+    # the exact state this issue was filed over.
+    relay("stop")
+    try:
+        down_unknown = recover_via_console("still-nobody@example.test", "203.0.113.201")
+        down_real = recover_via_console(users[6], "203.0.113.202")
+        check(
+            answer(down_unknown) == known_before,
+            f"with the relay down an unknown address is unchanged (got {describe(down_unknown)})",
+        )
+        check(
+            answer(down_real) == known_before,
+            f"and a real address answers identically to it (got {describe(down_real)})",
+        )
+        raw_down = recover_direct(users[7], "203.0.113.203")
+        raw_unknown = recover_direct("still-nobody-2@example.test", "203.0.113.204")
+        check(
+            raw_down[0] >= 500 and raw_unknown[0] == 200,
+            f"GoTrue itself does answer them differently, {raw_down[0]} against "
+            f"{raw_unknown[0]}, so the gateway is what closes it",
+        )
+    finally:
+        relay("start")
 
     print()
     if failures:
