@@ -56,6 +56,9 @@ func (o *Orchestrator) executeResponsesStreaming(
 		apierrors.WriteAuthFailure(w, authErr, headers)
 		return
 	}
+	// Success carries the rate-limit metadata too (issue #1725), set before
+	// any streaming write.
+	apierrors.ApplyHeaders(w, headers)
 
 	// 2. Select route
 	route, err := o.selectRoute(ctx, snapshot, SelectRouteInput{

@@ -51,6 +51,28 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
     {
+      // The visual proof capture (.github/workflows/chat-visual-proof.yml).
+      // Depends on owui-setup for its session the same way the two projects
+      // above do, so the proof job never has to invoke a setup project on its
+      // own: tools/verify-spec-wiring.mjs excludes setup files from its spec
+      // universe and correctly rejects an invocation that selects only one.
+      //
+      // Gated on hasCreds like the others, so a fork or a local run missing the
+      // seeded values skips it rather than failing on a blank credential.
+      name: "owui-proof",
+      // Anchored on the parent directory, not a bare `proof/`. Playwright
+      // matches testMatch against the ABSOLUTE path, so `/proof\//` also
+      // matches any checkout whose own path contains that segment: measured in
+      // a worktree named ci-chat-visual-proof, where this project collected
+      // every owui spec in the tree.
+      testMatch: hasCreds ? /owui\/proof\/[^/]+\.spec\.ts$/ : [],
+      dependencies: ["owui-setup"],
+      // The capture waits on a real provider stream. The spec sets its own
+      // per-test timeout on top of this.
+      timeout: 420_000,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
       // Logs in from scratch against a deployed OWUI_URL, so it takes no
       // storageState and depends on no setup project. The spec skips itself
       // when OWUI_URL is a loopback address, which leaves the nightly

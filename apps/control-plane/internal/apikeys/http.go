@@ -37,6 +37,13 @@ func limitsResponse(l KeyLimits) map[string]interface{} {
 	}
 }
 
+// Account-scope window routes. Kept on this handler because the rows live
+// beside the per-key ones and share the same repository and snapshot cache.
+const (
+	accountRateLimitsPath   = "/api/v1/accounts/current/rate-limits"
+	accountUsageWindowsPath = "/api/v1/accounts/current/usage-windows"
+)
+
 // Handler handles all API-key HTTP routes.
 type Handler struct {
 	svc        *Service
@@ -45,6 +52,11 @@ type Handler struct {
 	policy     authz.Policy
 	testVC     *accounts.ViewerContext // non-nil in tests to bypass real accounts service
 	testActor  *authz.Actor            // non-nil in tests to supply a canned Actor
+
+	// usageWindows is optional and, when set, lets this handler answer the
+	// consumption endpoint by reading the same Redis counters the edge
+	// limiter writes.
+	usageWindows *UsageWindowReader
 
 	// resolveHealth is optional and, when set, records whether
 	// /internal/apikeys/resolve — the endpoint edge-api's whole authorization
@@ -67,6 +79,16 @@ func (h *Handler) WithResolveHealth(rh *db.ResolveHealth) *Handler {
 	return &cloned
 }
 
+// WithUsageWindows returns a copy of the handler wired to read the edge
+// limiter's window counters. Without it the consumption endpoint answers 503
+// rather than reporting zero usage, because "unavailable" and "you have used
+// nothing" are opposite claims and only one of them is true.
+func (h *Handler) WithUsageWindows(reader *UsageWindowReader) *Handler {
+	cloned := *h
+	cloned.usageWindows = reader
+	return &cloned
+}
+
 // WithRoleService returns a copy of the handler wired with the platform role
 // service so the admin overlay is enabled for Actor construction. Without it,
 // Actor.IsAdmin is always false and platform admins cannot manage API keys via
@@ -83,6 +105,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	base := "/api/v1/accounts/current/api-keys"
 
 	switch {
+	case r.Method == http.MethodGet && path == accountRateLimitsPath:
+		h.handleGetAccountRateLimits(w, r)
+	case r.Method == http.MethodPut && path == accountRateLimitsPath:
+		h.handleUpdateAccountRateLimits(w, r)
+	case r.Method == http.MethodGet && path == accountUsageWindowsPath:
+		h.handleGetUsageWindows(w, r)
 	case r.Method == http.MethodGet && path == base:
 		h.handleListKeys(w, r)
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/limits"):
@@ -499,6 +527,203 @@ func (h *Handler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		"budget_kind":      policy.BudgetKind,
 		"policy_version":   policy.PolicyVersion,
 	})
+}
+
+// accountRateLimitsResponse renders the administrator view. It carries the raw
+// allowance, which the customer-facing consumption endpoint deliberately does
+// not: this route is platform-admin only, and an administrator setting an
+// allowance has to see the number being set.
+func accountRateLimitsResponse(limits AccountRateLimits) map[string]interface{} {
+	body := map[string]interface{}{
+		"account_id":       limits.AccountID.String(),
+		"session_limit":    limits.SessionLimit,
+		"weekly_limit":     limits.WeeklyLimit,
+		"weekly_anchor_at": limits.WeeklyAnchorAt.UTC().Format(time.RFC3339),
+		// Explicit rather than inferred from a null limit by every reader in
+		// turn. An unconfigured window is unlimited, and saying so on the wire
+		// is what stops a surface printing a bar for a limit nobody set.
+		"session_configured": limits.SessionLimit != nil,
+		"weekly_configured":  limits.WeeklyLimit != nil,
+	}
+	if limits.UpdatedAt != nil {
+		body["updated_at"] = limits.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return body
+}
+
+// windowTargetAccount resolves WHICH account a platform admin is configuring.
+//
+// Defaults to the account the admin is currently in; ?account_id=<uuid> names
+// another. Without it these two routes could only ever configure the caller's
+// own account, which for a platform-admin-only lever means Hive could not set
+// an allowance on a subscriber at all, and the feature would be unreachable in
+// production however correct the storage underneath it was.
+//
+// No extra authorization decision is taken here: both callers have already
+// required PermPlatformAdmin, which is the permission to administer any
+// account's allowance.
+func windowTargetAccount(w http.ResponseWriter, r *http.Request, current uuid.UUID) (uuid.UUID, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("account_id"))
+	if raw == "" {
+		return current, true
+	}
+	parsed, err := uuid.Parse(raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_id must be a UUID"})
+		return uuid.Nil, false
+	}
+	return parsed, true
+}
+
+func (h *Handler) handleGetAccountRateLimits(w http.ResponseWriter, r *http.Request) {
+	vc, ok := h.resolveViewerContext(w, r, authz.PermPlatformAdmin)
+	if !ok {
+		return
+	}
+	accountID, ok := windowTargetAccount(w, r, vc.CurrentAccount.ID)
+	if !ok {
+		return
+	}
+	limits, err := h.svc.GetAccountRateLimits(r.Context(), accountID)
+	if err != nil {
+		handleKeyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, accountRateLimitsResponse(limits))
+}
+
+// handleUpdateAccountRateLimits is the writer those two columns have never had.
+//
+// Platform admin only, on purpose. A subscription allowance is Hive's lever,
+// not the customer's (issue #1684): an account owner who could raise their own
+// weekly allowance would not have one.
+func (h *Handler) handleUpdateAccountRateLimits(w http.ResponseWriter, r *http.Request) {
+	vc, ok := h.resolveViewerContext(w, r, authz.PermPlatformAdmin)
+	if !ok {
+		return
+	}
+	accountID, ok := windowTargetAccount(w, r, vc.CurrentAccount.ID)
+	if !ok {
+		return
+	}
+
+	// Decoded field by field, because "absent" and "explicitly null" have to
+	// mean different things here and a plain pointer cannot tell them apart.
+	//
+	// encoding/json sets a pointer field to nil for BOTH a missing key and a
+	// JSON null, whatever the depth: a **int64 does not buy the distinction,
+	// it only hides the fact that it was never there. The first version of
+	// this handler used one, and its test passed only because the value it
+	// tried to clear happened to be unset already. Omitting a field leaves it
+	// alone; sending null clears it to unlimited.
+	var body map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	// Read, modify, write. Not atomic: two administrators writing the same
+	// account at the same instant can lose one of the two edits. Left as is
+	// deliberately -- the caller set is platform admins acting on one account
+	// at a time, and the alternative is expressing "leave an omitted field
+	// alone" in the upsert itself, which trades a rare lost edit for SQL that
+	// has to encode the absent/null distinction a second time.
+	current, err := h.svc.GetAccountRateLimits(r.Context(), accountID)
+	if err != nil {
+		handleKeyError(w, err)
+		return
+	}
+
+	input := AccountRateLimitsInput{SessionLimit: current.SessionLimit, WeeklyLimit: current.WeeklyLimit}
+	for _, field := range []struct {
+		name   string
+		target **int64
+	}{
+		{"session_limit", &input.SessionLimit},
+		{"weekly_limit", &input.WeeklyLimit},
+	} {
+		raw, present := body[field.name]
+		if !present {
+			continue
+		}
+		if string(raw) == "null" {
+			*field.target = nil
+			continue
+		}
+		var value int64
+		if err := json.Unmarshal(raw, &value); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": field.name + " must be a whole number of credits, or null for no limit",
+			})
+			return
+		}
+		*field.target = &value
+	}
+	if raw, present := body["weekly_anchor_at"]; present && string(raw) != "null" {
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "weekly_anchor_at must be RFC3339"})
+			return
+		}
+		anchor, err := time.Parse(time.RFC3339, text)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "weekly_anchor_at must be RFC3339"})
+			return
+		}
+		input.WeeklyAnchorAt = &anchor
+	}
+
+	limits, err := h.svc.UpdateAccountRateLimits(r.Context(), accountID, input)
+	if err != nil {
+		if errIs(err, ErrAnchorNotUsable) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+				"error": "weekly_anchor_at must be an instant in the past; a future anchor puts the limiter and the consumption display on different counters",
+				"code":  "weekly_anchor_not_usable",
+			})
+			return
+		}
+		if errIs(err, ErrLimitsOutOfRange) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+				"error": "a window limit must be a positive number of credits, or null for no limit; zero is not a limit of zero",
+				"code":  "limits_out_of_range",
+			})
+			return
+		}
+		handleKeyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, accountRateLimitsResponse(limits))
+}
+
+// handleGetUsageWindows is the customer-facing consumption read: percentages
+// and reset times, never an absolute allowance (D-068, D-070).
+func (h *Handler) handleGetUsageWindows(w http.ResponseWriter, r *http.Request) {
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysRead)
+	if !ok {
+		return
+	}
+	if h.usageWindows == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "usage windows are unavailable on this deployment",
+			"code":  "usage_windows_unavailable",
+		})
+		return
+	}
+	limits, err := h.svc.GetAccountRateLimits(r.Context(), vc.CurrentAccount.ID)
+	if err != nil {
+		handleKeyError(w, err)
+		return
+	}
+	windows, err := h.usageWindows.Read(r.Context(), vc.CurrentAccount.ID, limits)
+	if err != nil {
+		slog.Warn("usage windows unreadable", "account_id", vc.CurrentAccount.ID, "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "usage windows are temporarily unavailable",
+			"code":  "usage_windows_unavailable",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, windows)
 }
 
 func (h *Handler) handleGetLimits(w http.ResponseWriter, r *http.Request) {

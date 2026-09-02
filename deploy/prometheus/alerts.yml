@@ -118,3 +118,84 @@ groups:
         annotations:
           summary: "Alias {{ $labels.alias }} is billing cache-{{ $labels.side }} tokens on the fallback rate"
           description: "{{ $value }} request(s) on alias {{ $labels.alias }} (provider {{ $labels.provider }}) priced a cache-{{ $labels.side }} token on the documented default multiplier because model_aliases.cache_{{ $labels.side }}_price_credits is NULL for this alias. Seed a real per-model rate (see the migration pattern in supabase/migrations/20260825_01_deepseek_cache_write_price.sql) so this stops being the normal path for this alias."
+
+      # Issue #560. Open WebUI presents OWUI_SHIM_KEY, and nothing else, on the
+      # upstream calls that carry no signed-in user: the bodyless GET /v1/models
+      # the model picker is built from, text-to-speech and speech-to-text. When
+      # that key stops resolving, handleModels answers 401 and the picker comes
+      # up empty, and an empty picker issues no chat request at all, so the chat
+      # surface looks like a silent no-op rather than a credential failure;
+      # voice fails with a generic invalid-key error that names no cause.
+      # Sign-in still works, because it carries the user's own token.
+      #
+      # Document RAG is unaffected, and for a stronger reason than "issue #1696
+      # moved it onto the user's token". On /v1/embeddings the shim key is never
+      # resolved at all: auth.hasShimAuthorization matches the Authorization
+      # header by string comparison against the configured value, and
+      # forwardUnwrapped then swaps in the signed-in user's token before authz.
+      # A revoked key is still the same string, so revocation is invisible
+      # there. Necessary-but-not-sufficient would be the wrong summary of it.
+      #
+      # edge-api probes the key at boot and every five minutes and logs the
+      # verdict. That log line is not the signal: nothing reads it on a
+      # schedule. This is, because it reaches Alertmanager and the ops mailbox.
+      #
+      # for: 6m is one probe interval plus a margin, so a genuinely revoked key
+      # pages within roughly ten minutes of the revocation instead of being
+      # found by a customer. The gauge is not written at all while the control
+      # plane is unreachable (edge-api holds its last value), so a cold
+      # control-plane container cannot fire this.
+      #
+      # Three bounds on this rule, stated rather than discovered later.
+      #
+      #   1. The gauge starts at 1 on each edge-api start (see
+      #      registerOWUIShimKeyMetric for why a 0 start would page on a slow
+      #      first probe), so an edge-api restarting more often than every six
+      #      minutes keeps resetting this window. A container in that state is a
+      #      louder outage than the one this rule watches for, and a stable one
+      #      reaches the threshold on the first probe after boot.
+      #   2. A blank OWUI_SHIM_KEY exports no series at all, deliberately: a
+      #      deployment with no chat front-end has no key to break, and a gauge
+      #      sitting at 0 there would be a permanent false page.
+      #   3. Holding the last verdict means "usable" and "never actually
+      #      measured" are the same reading, so a boot whose control plane is
+      #      never reachable would sit at 1 forever with nothing observed. That
+      #      is what OWUIShimKeyVerdictStale below covers, and EdgeAPITargetDown
+      #      in alerts/monitoring.yml covers the case where the series stops
+      #      being scraped at all. Neither absence can read as healthy.
+      - alert: OWUIShimKeyUnusable
+        expr: |
+          hive_owui_shim_key_usable == 0
+        for: 6m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OWUI_SHIM_KEY does not resolve; the chat model picker is empty and text-to-speech and speech-to-text are down"
+          description: "edge-api cannot resolve the Open WebUI shim key to an active, tenant-provisioned Hive API key allowed at least one model. GET /v1/models answers 401 for it, so the model picker is empty right now and an empty picker issues no chat request at all, which reads to a user as a chat surface that silently does nothing; text-to-speech and speech-to-text are failing with a generic invalid-key error. Sign-in is unaffected, and so is document RAG: its embeddings carry the signed-in user's own token since issue #1696, and this key is never resolved on that path at all. The cause is in edge-api's log (`docker compose logs edge-api | grep 'owui:'`), which names whether the key is revoked, unmapped to a tenant, or allowed no models. Remedy for a revoked key: python3 scripts/seed-owui-e2e-user.py --account-slug <this deployment's account> --tenant-slug <its tenant> --env-file .env with OWUI_BASE_URL and OWUI_ADMIN_TOKEN set, then recreate open-webui. That run revokes the key it replaces only when it minted the one being replaced (it revokes only <account-slug>-key); if this account also carries a key minted by hand under some other nickname, the script leaves it active on purpose and you must revoke it yourself once the new key is serving, or a superseded credential stays valid forever."
+
+      # The staleness half of the rule above, and the reason that rule can be
+      # trusted at all. hive_owui_shim_key_usable holds its last real verdict
+      # and starts at 1, so an edge-api whose control plane never answers
+      # exports a healthy-looking 1 indefinitely with nothing measured. This
+      # reads the companion series edge-api writes only on a real verdict, so an
+      # unknown key state is loud instead of quietly green.
+      #
+      # 1800 is six probe intervals: long enough that a control plane restarting
+      # or briefly unreachable never trips it, short enough that "we have not
+      # known the state of this credential for half an hour" reaches somebody.
+      # The series is 0 until the first verdict lands, which is an unbounded age
+      # and so fires this rather than passing it.
+      #
+      # warning, not critical: nothing is known to be broken here, the check
+      # itself has stopped answering. HighAPIErrorRate is the backstop if the
+      # control plane really is down, since a failed resolve answers 401 and
+      # RATE_LIMIT_FAIL_OPEN defaults to false.
+      - alert: OWUIShimKeyVerdictStale
+        expr: |
+          time() - hive_owui_shim_key_last_verdict_seconds > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OWUI_SHIM_KEY has not been checked successfully for over 30 minutes"
+          description: "edge-api's shim-key probe has not reached a verdict in {{ $value | humanizeDuration }} (an age in years means it has never reached one since this edge-api started), so hive_owui_shim_key_usable is holding a value nothing has confirmed and OWUIShimKeyUnusable cannot fire on a key that died in the meantime. The probe writes this series only when it actually resolves the key, so this means the control plane has been unreachable from edge-api (see `docker compose logs edge-api | grep 'owui:'` for the transient warnings), or the probe goroutine is not running. Do not rotate the key over this: nothing here says the key is bad."

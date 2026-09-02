@@ -49,6 +49,7 @@
     "e2e/phase-19/owui/09-agent-workspace-nav.spec.ts": ["owui"],
     "e2e/phase-19/owui/deployed-login.spec.ts": ["owui-deployed-login"],
     "e2e/phase-19/owui/owui.setup.ts": ["owui-setup"],
+    "e2e/phase-19/owui/proof/chat-visual-proof.spec.ts": ["owui-proof"],
     "e2e/phase-19/owui/performance/embed-latency.spec.ts": ["owui-perf"],
     "e2e/phase-19/owui/performance/ttfb.spec.ts": ["owui-perf"],
     "tests/e2e/_probe/agent-workspace-flows.spec.ts": ["agent-workspace"],

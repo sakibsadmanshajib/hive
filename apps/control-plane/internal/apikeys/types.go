@@ -104,6 +104,18 @@ type RotateKeyResult struct {
 // ErrNotFound is returned when a key is not found.
 var ErrNotFound = errors.New("apikeys: not found")
 
+// ErrNotSupported reports a repository wired without account-scope window
+// storage. It is an error rather than a silent no-op so a deployment that
+// cannot store a limit says so instead of accepting one and enforcing nothing,
+// which is the failure mode this whole issue is about.
+var ErrNotSupported = errors.New("apikeys: operation not supported by this repository")
+
+// ErrAnchorNotUsable reports a weekly anchor the system cannot count from: the
+// zero time, or an instant in the future. Refused at the writer because the
+// weekly Redis bucket key is derived from it, so an unusable anchor is not a
+// cosmetic problem but two subsystems counting in two different places.
+var ErrAnchorNotUsable = errors.New("apikeys: weekly anchor must be a past instant")
+
 // ErrNotAgentTaskKey is returned when RevokeAgentTaskKey is handed an id that
 // resolves to a key of some other kind. Never silently ignored: it means the
 // caller's premise about what that id identifies is wrong.
@@ -156,7 +168,45 @@ type RatePolicy struct {
 	// env-driven tier defaults at hot-path enforcement. Tiers absent from this
 	// map fall through to env defaults. Tiers present override env defaults.
 	TierOverrides map[string]TierLimit `json:"tier_overrides,omitempty"`
+	// WeeklyAnchorAt is the instant the account's weekly allowance restores,
+	// repeating every seven days. Carried on the account policy only; the edge
+	// uses the account's anchor for every scope, because one account whose
+	// week ends at several different instants is neither explainable to a
+	// customer nor enforceable as one allowance.
+	WeeklyAnchorAt *time.Time `json:"weekly_anchor_at,omitempty"`
 }
+
+// AccountRateLimits is the read model for an account's two usage windows.
+//
+// Both limits are pointers, and nil is the only representation of "not
+// configured". The database agrees: the column is NULL, and a stored zero is
+// refused by a CHECK, so the reading that made this whole subsystem inert --
+// zero silently meaning unlimited -- is no longer expressible
+// (supabase/migrations/20260902_02_usage_window_limits.sql, issue #1725).
+type AccountRateLimits struct {
+	AccountID      uuid.UUID  `json:"account_id"`
+	SessionLimit   *int64     `json:"session_limit"`
+	WeeklyLimit    *int64     `json:"weekly_limit"`
+	WeeklyAnchorAt time.Time  `json:"weekly_anchor_at"`
+	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+}
+
+// AccountRateLimitsInput is an administrator's write of the two windows. A nil
+// limit clears it, which means unlimited; a zero is rejected rather than
+// silently treated as either.
+type AccountRateLimitsInput struct {
+	SessionLimit   *int64
+	WeeklyLimit    *int64
+	WeeklyAnchorAt *time.Time
+}
+
+// WindowLimitMax bounds a configured window allowance, in the weighted usage
+// score the edge limiter counts (credits, plus token counts weighted by
+// free_token_weight_tenths). 1e15 is about a million dollars of credit at
+// D-046's rate: far above any real plan, low enough that a typo of an extra
+// nine digits is refused rather than stored as an allowance nobody could ever
+// exhaust.
+const WindowLimitMax int64 = 1_000_000_000_000_000
 
 // TierLimit is a per-tier override pair. Either field at zero means
 // "no override for that dimension; use env default".

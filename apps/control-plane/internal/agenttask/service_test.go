@@ -246,7 +246,7 @@ func (s *slotEngine) cancelCount() int {
 // launch outcome has to read the settled row rather than the create return.
 func createSettled(t *testing.T, svc *agenttask.Service, tenantID, userID uuid.UUID, pack agenttask.Pack) agenttask.Task {
 	t.Helper()
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, pack, "", uuid.Nil, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, pack, "", uuid.Nil, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -271,7 +271,7 @@ func createWithoutWaiting(t *testing.T, svc *agenttask.Service, tenantID, userID
 	}
 	done := make(chan result, 1)
 	go func() {
-		task, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
+		task, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, nil, "")
 		done <- result{task: task, err: err}
 	}()
 
@@ -289,9 +289,73 @@ func createWithoutWaiting(t *testing.T, svc *agenttask.Service, tenantID, userID
 
 func TestService_CreateTask_InvalidPack(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
-	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"), "", uuid.Nil, "")
+	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"), "", uuid.Nil, nil, "")
 	if !errors.Is(err, agenttask.ErrInvalidPack) {
 		t.Fatalf("expected ErrInvalidPack, got %v", err)
+	}
+}
+
+// An absent pack is the composer's normal submission since issue #1623: the
+// customer no longer picks one, so the service resolves it here, at the one
+// point every caller routes through, and persists the resolved value. It is
+// still an error to send a pack that is neither empty nor real, because that
+// is a broken client rather than a caller declining to choose.
+func TestService_CreateTask_EmptyPackIsInferredFromTheInstructions(t *testing.T) {
+	cases := map[string]struct {
+		instructions string
+		want         agenttask.Pack
+	}{
+		"coding request":    {"Refactor the billing module and run the test suite.", agenttask.PackCoding},
+		"knowledge request": {"Summarise the vendor contract into a one page memo.", agenttask.PackKnowledgeWork},
+		// Nothing to read is still an answer: the column has a CHECK
+		// constraint and the launch fails closed, so there is no third state
+		// to persist.
+		"no instructions": {"", agenttask.PackKnowledgeWork},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			repo := newFakeRepository()
+			svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+			tenantID, userID := uuid.New(), uuid.New()
+
+			created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.Pack(""), tc.instructions, uuid.Nil, nil, "")
+			if err != nil {
+				t.Fatalf("CreateTask with no pack: %v", err)
+			}
+			svc.WaitIdle()
+
+			if created.Pack != tc.want {
+				t.Errorf("returned pack = %q, want %q", created.Pack, tc.want)
+			}
+			// Read back rather than trusting the returned struct: the pack the
+			// launcher and every later reader see is the stored one.
+			stored, err := svc.Get(context.Background(), tenantID, userID, created.ID)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if stored.Pack != tc.want {
+				t.Errorf("stored pack = %q, want %q", stored.Pack, tc.want)
+			}
+		})
+	}
+}
+
+// An explicit pack is still honoured exactly as it was. This is the override
+// the composer's correction control uses and the field every existing API
+// client already sends, so inference must never overwrite one.
+func TestService_CreateTask_ExplicitPackWins(t *testing.T) {
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+	// Instructions that the inference would read as coding, sent with an
+	// explicit knowledge-work pack: the caller's word is the answer.
+	created, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(),
+		agenttask.PackKnowledgeWork, "Refactor the billing module.", uuid.Nil, nil, "")
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	svc.WaitIdle()
+	if created.Pack != agenttask.PackKnowledgeWork {
+		t.Errorf("explicit pack was overwritten: got %q, want %q", created.Pack, agenttask.PackKnowledgeWork)
 	}
 }
 
@@ -346,7 +410,7 @@ func TestService_CreateTask_ForwardsBearerJWTButNeverPersistsIt(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), engine, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackKnowledgeWork, "", uuid.Nil, "test-user-jwt")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackKnowledgeWork, "", uuid.Nil, nil, "test-user-jwt")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -397,7 +461,7 @@ func TestService_Get_WrongUserReturnsNotFound(t *testing.T) {
 	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, ownerID, otherID := uuid.New(), uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, ownerID, agenttask.PackCoding, "", uuid.Nil, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, ownerID, agenttask.PackCoding, "", uuid.Nil, nil, "")
 	if err != nil {
 		t.Fatalf("seed CreateTask: %v", err)
 	}
@@ -416,10 +480,10 @@ func TestService_List_ScopedToTenantAndUser(t *testing.T) {
 	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userA, userB := uuid.New(), uuid.New(), uuid.New()
 
-	if _, err := svc.CreateTask(context.Background(), tenantID, userA, agenttask.PackCoding, "", uuid.Nil, ""); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userA, agenttask.PackCoding, "", uuid.Nil, nil, ""); err != nil {
 		t.Fatalf("seed userA task: %v", err)
 	}
-	if _, err := svc.CreateTask(context.Background(), tenantID, userB, agenttask.PackCoding, "", uuid.Nil, ""); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userB, agenttask.PackCoding, "", uuid.Nil, nil, ""); err != nil {
 		t.Fatalf("seed userB task: %v", err)
 	}
 
@@ -642,7 +706,7 @@ func TestService_LaunchSucceedsButTransitionFails_TaskFailsVisibly(t *testing.T)
 	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -705,7 +769,7 @@ func TestService_PanicAfterLaunch_StopsTheSessionAndFailsTheTask(t *testing.T) {
 	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -733,7 +797,7 @@ func TestService_PanicInsidePanicHandler_DoesNotCrashTheProcess(t *testing.T) {
 	svc := agenttask.NewService(repo, eng, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	if _, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, ""); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, nil, ""); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	svc.WaitIdle() // a panic escaping the recover takes the whole test binary down
@@ -749,7 +813,7 @@ func TestService_LaunchPanic_DoesNotCrashTheProcess(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), panickingEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	tenantID, userID := uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, "")
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "", uuid.Nil, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -857,6 +921,53 @@ func (f *fakeRepository) ListEvents(_ context.Context, _, _ uuid.UUID, id uuid.U
 		}
 	}
 	return out, nil
+}
+
+// A pack that is only whitespace is a caller declining to choose, not a
+// broken client, and both surfaces have to read it the same way. edge-api
+// already trims before forwarding, so a customer never saw the difference,
+// but the internal surface took the untrimmed value straight to the CHECK
+// constraint and answered ErrInvalidPack for an input the public path
+// infers. Trimming here, where the inference already lives, is what makes
+// the edge handler's own comment ("control-plane is the single place that
+// decides") literally true rather than true only for its own caller.
+func TestService_CreateTask_WhitespaceOnlyPackIsInferred(t *testing.T) {
+	repo := newFakeRepository()
+	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+	tenantID, userID := uuid.New(), uuid.New()
+
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.Pack("  "),
+		"Summarise the vendor contract into a one page memo.", uuid.Nil, nil, "")
+	if err != nil {
+		t.Fatalf("CreateTask with a whitespace-only pack: %v", err)
+	}
+	svc.WaitIdle()
+
+	if created.Pack != agenttask.PackKnowledgeWork {
+		t.Errorf("returned pack = %q, want %q", created.Pack, agenttask.PackKnowledgeWork)
+	}
+	stored, err := svc.Get(context.Background(), tenantID, userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.Pack != agenttask.PackKnowledgeWork {
+		t.Errorf("stored pack = %q, want %q", stored.Pack, agenttask.PackKnowledgeWork)
+	}
+}
+
+// The same trim, on a pack the caller did name. A padded but real value is
+// the caller's word and is honoured; inference never runs.
+func TestService_CreateTask_PaddedExplicitPackIsHonoured(t *testing.T) {
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+	created, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(),
+		agenttask.Pack(" coding-pack "), "Summarise the vendor contract into a one page memo.", uuid.Nil, nil, "")
+	if err != nil {
+		t.Fatalf("CreateTask with a padded pack: %v", err)
+	}
+	svc.WaitIdle()
+	if created.Pack != agenttask.PackCoding {
+		t.Errorf("pack = %q, want %q", created.Pack, agenttask.PackCoding)
+	}
 }
 
 // A cancelled run is the second writer of a terminal status, and the

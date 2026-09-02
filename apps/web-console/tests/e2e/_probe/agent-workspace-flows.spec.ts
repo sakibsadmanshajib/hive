@@ -32,10 +32,12 @@ import { signInToChat } from "../support/live-auth";
  * - vendor/open-webui/src/lib/hive/ComposerModeToggle.svelte: the `Chat |
  *   Cowork` radiogroup, `data-hive-composer-mode` on the group,
  *   `data-hive-mode="chat"|"cowork"` on each segment.
- * - vendor/open-webui/src/lib/hive/ComposerCoworkRow.svelte: the pack row that
- *   only renders in Cowork mode, `data-hive-cowork-row` on the row,
- *   `data-hive-composer-pack` on its own radiogroup, `data-hive-pack` per
- *   segment.
+ * - vendor/open-webui/src/lib/hive/ComposerCoworkRow.svelte: the row that only
+ *   renders in Cowork mode, `data-hive-cowork-row` on the row. It carries no
+ *   pack radiogroup since issue #1623: the kind of task is inferred server
+ *   side (apps/control-plane/internal/agenttask/infer.go) and the row shows a
+ *   correction, `data-hive-pack-inferred` plus `data-hive-pack-override`, only
+ *   after a run has been classified.
  * - vendor/open-webui/src/lib/components/chat/Chat.svelte (submitHandler,
  *   submitCoworkRun, applyCoworkRun, followCoworkRun): Cowork mode decides
  *   what a submit does; a run is created via createTask and rendered as an
@@ -151,15 +153,13 @@ async function signIn(context: BrowserContext): Promise<Page> {
 const modeToggle = (page: Page) => page.locator("[data-hive-composer-mode]");
 const modeSegment = (page: Page, mode: "chat" | "cowork") => page.locator(`[data-hive-mode="${mode}"]`);
 const coworkRow = (page: Page) => page.locator("[data-hive-cowork-row]");
-const packGroup = (page: Page) => page.locator("[data-hive-composer-pack]");
-const packSegment = (page: Page, pack: "knowledge-work-pack" | "coding-pack") =>
-  page.locator(`[data-hive-pack="${pack}"]`);
+const inferredPack = (page: Page) => page.locator("[data-hive-pack-inferred]");
 
-/** Selects Cowork and waits for the pack row's own group to confirm it rendered. */
+/** Selects Cowork and waits for its row to confirm it rendered. */
 async function switchToCowork(page: Page): Promise<void> {
   await modeSegment(page, "cowork").click();
   await expect(modeToggle(page)).toHaveAttribute("data-hive-composer-mode", "cowork");
-  await expect(packGroup(page)).toBeVisible();
+  await expect(coworkRow(page)).toBeVisible();
 }
 
 const TASK_LIST_GLOB = "**/api/v1/hive/agent/tasks";
@@ -292,15 +292,17 @@ test.describe("authenticated composer (Cowork mode)", () => {
     await expect(coworkRow(page)).toHaveCount(0);
   });
 
-  test("[C30] the pack row defaults to Knowledge work and reflects selection", async ({ context }) => {
+  test("[C30] the cowork row asks for no pack, and discloses nothing before a run", async ({
+    context,
+  }) => {
     const page = await signIn(context);
     await switchToCowork(page);
-    await expect(packGroup(page)).toHaveAttribute("data-hive-composer-pack", "knowledge-work-pack");
-    await expect(packSegment(page, "knowledge-work-pack")).toHaveAttribute("aria-checked", "true");
-    await packSegment(page, "coding-pack").click();
-    await expect(packGroup(page)).toHaveAttribute("data-hive-composer-pack", "coding-pack");
-    await expect(packSegment(page, "coding-pack")).toHaveAttribute("aria-checked", "true");
-    await expect(packSegment(page, "knowledge-work-pack")).toHaveAttribute("aria-checked", "false");
+    // Issue #1623: no second choice to make. A radiogroup here would be the
+    // control this issue removed.
+    await expect(page.locator("[data-hive-pack]")).toHaveCount(0);
+    await expect(page.locator("[data-hive-composer-pack]")).toHaveCount(0);
+    // And nothing to correct yet, because nothing has been classified.
+    await expect(inferredPack(page)).toHaveCount(0);
   });
 
   test("[C31] blank instructions in Cowork mode are refused, no request fires", async ({ context }) => {
@@ -422,7 +424,7 @@ test.describe("authenticated composer (Cowork mode)", () => {
     },
   );
 
-  test("[C33] the composer's Cowork controls are exactly two modes and, once selected, two packs", async ({
+  test("[C33] the composer's Cowork controls are exactly two modes and nothing else", async ({
     context,
   }) => {
     const page = await signIn(context);
@@ -434,8 +436,8 @@ test.describe("authenticated composer (Cowork mode)", () => {
     await switchToCowork(page);
     await expect(
       page.locator("[data-hive-pack]"),
-      "the pack row must carry exactly two segments; a third means a control shipped with no " +
-        "entry in agent-workspace-controls.json",
-    ).toHaveCount(2);
+      "issue #1623 removed the pack radiogroup; any segment here means the second choice came " +
+        "back and the composer asks a customer to classify their own request again",
+    ).toHaveCount(0);
   });
 });

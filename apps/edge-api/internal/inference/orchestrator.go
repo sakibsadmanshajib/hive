@@ -116,6 +116,9 @@ func (o *Orchestrator) executeSync(
 		apierrors.WriteAuthFailure(w, authErr, headers)
 		return
 	}
+	// Success carries the rate-limit metadata too, so a caller can pace itself
+	// before it is refused (issue #1725).
+	apierrors.ApplyHeaders(w, headers)
 
 	// 2. Select route
 	endSelectRoute := o.stage(endpoint, StageSelectRoute)

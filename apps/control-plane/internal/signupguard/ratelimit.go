@@ -104,6 +104,24 @@ func (rl *RateLimiter) Allow(ctx context.Context, subject string) error {
 	return nil
 }
 
+// RetryAfter reports how long until the fixed window that just refused a
+// subject rolls over, so a caller can tell a user when the refusal lifts rather
+// than leaving them to guess.
+//
+// It lives beside Allow because it is the same bucketing read backwards: Allow
+// buckets by now/window, so the current bucket ends at the next multiple of the
+// window. Keep the two in step.
+func RetryAfter(window time.Duration, now time.Time) time.Duration {
+	if window <= 0 {
+		window = time.Hour
+	}
+	seconds := int64(window / time.Second)
+	if seconds <= 0 {
+		return window
+	}
+	return time.Duration(seconds-now.Unix()%seconds) * time.Second
+}
+
 // RedisIncrementer adapts a go-redis client to the Incrementer interface using
 // an INCR + EXPIRE pipeline. EXPIRE is only meaningful on the first increment,
 // but issuing it every call is idempotent and cheap, and guarantees a TTL even

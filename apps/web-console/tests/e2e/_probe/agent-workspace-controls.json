@@ -50,17 +50,17 @@
     },
     {
       "id": "C29",
-      "description": "Chat/Cowork mode toggle: a two-segment radiogroup defaulting to Chat, and selecting Cowork reveals the pack row",
+      "description": "Chat/Cowork mode toggle: a two-segment radiogroup defaulting to Chat, and selecting Cowork reveals the cowork row",
       "requires_creds": true,
       "screen": "composer",
       "dom": "[data-hive-mode]"
     },
     {
       "id": "C30",
-      "description": "Cowork pack row: Knowledge work/Coding radios default to Knowledge work and reflect selection",
+      "description": "Cowork row offers no pack to choose (issue #1623): the kind of task is inferred server side from the instructions, so the row carries the note and, only after a run has been classified, one sentence naming what it was read as plus one button offering the other pack",
       "requires_creds": true,
       "screen": "composer",
-      "dom": "[data-hive-pack]"
+      "dom": "[data-hive-cowork-row]"
     },
     {
       "id": "C31",

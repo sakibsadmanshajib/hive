@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/packages/ratewindows"
 )
 
 type slidingWindowCall struct {
@@ -14,11 +16,11 @@ type slidingWindowCall struct {
 }
 
 type longWindowCall struct {
-	currentKey  string
-	keyPrefix   string
-	limit       int64
-	score       int64
-	bucketCount int
+	familyPrefix string
+	window       string
+	limit        int64
+	score        int64
+	bucketCount  int
 }
 
 func TestLimiterUsesSeparateAccountAndKeyThresholds(t *testing.T) {
@@ -39,9 +41,11 @@ func TestLimiterUsesSeparateAccountAndKeyThresholds(t *testing.T) {
 			}
 			return true, limit - 1, 30, nil
 		},
-		runLongWindow: func(_ context.Context, currentKey string, keyPrefix string, bucketSize time.Duration, bucketCount int, limit int64, score int64, now time.Time) (bool, int64, int, error) {
-			return true, limit - score, 300, nil
+		runLongWindow: func(_ context.Context, familyPrefix string, shape ratewindows.Shape, _ time.Time, limit int64, score int64, now time.Time) (longWindowResult, error) {
+			// Pre-charge, matching the real script: the charge is a second pass.
+			return longWindowResult{Allowed: true, Remaining: limit, Used: 0, ResetAt: now.Add(300 * time.Second)}, nil
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 
 	snapshot := AuthSnapshot{
@@ -102,16 +106,18 @@ func TestWindowScoreUsesWeightedFreeTokens(t *testing.T) {
 		runSlidingWindow: func(_ context.Context, keys []string, limit int, amount int64, now time.Time) (bool, int, int, error) {
 			return true, limit - int(amount), 30, nil
 		},
-		runLongWindow: func(_ context.Context, currentKey string, keyPrefix string, bucketSize time.Duration, bucketCount int, limit int64, score int64, now time.Time) (bool, int64, int, error) {
+		runLongWindow: func(_ context.Context, familyPrefix string, shape ratewindows.Shape, _ time.Time, limit int64, score int64, now time.Time) (longWindowResult, error) {
 			windowCalls = append(windowCalls, longWindowCall{
-				currentKey:  currentKey,
-				keyPrefix:   keyPrefix,
-				limit:       limit,
-				score:       score,
-				bucketCount: bucketCount,
+				familyPrefix: familyPrefix,
+				window:       shape.Name,
+				limit:        limit,
+				score:        score,
+				bucketCount:  shape.Buckets,
 			})
-			return true, limit - score, 300, nil
+			// Pre-charge, matching the real script: the charge is a second pass.
+			return longWindowResult{Allowed: true, Remaining: limit, Used: 0, ResetAt: now.Add(300 * time.Second)}, nil
 		},
+		commitLongWindows: func(context.Context, []pendingCharge) error { return nil },
 	}
 
 	snapshot := AuthSnapshot{
@@ -141,10 +147,10 @@ func TestWindowScoreUsesWeightedFreeTokens(t *testing.T) {
 	var accountScore int64 = -1
 	var keyScore int64 = -1
 	for _, call := range windowCalls {
-		if strings.Contains(call.currentKey, "fraud:{acct:acc-1}:5h:") {
+		if call.window == ratewindows.Session && strings.Contains(call.familyPrefix, "rlwin:{acct:acc-1}") {
 			accountScore = call.score
 		}
-		if strings.Contains(call.currentKey, "fraud:{key:key-1}:5h:") {
+		if call.window == ratewindows.Session && strings.Contains(call.familyPrefix, "rlwin:{key:key-1}") {
 			keyScore = call.score
 		}
 	}

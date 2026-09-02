@@ -26,7 +26,8 @@ func (a *AuthorizerAdapter) AuthorizeRequest(r *http.Request) (AuthResult, error
 		return AuthResult{}, &authz.AuthzError{OpenAIErr: authErr, Headers: headers}
 	}
 	return AuthResult{
-		AccountID: snapshot.AccountID,
-		APIKeyID:  snapshot.KeyID,
+		RateLimitHeaders: headers,
+		AccountID:        snapshot.AccountID,
+		APIKeyID:         snapshot.KeyID,
 	}, nil
 }

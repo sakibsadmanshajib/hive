@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -21,7 +22,7 @@ import (
 // TaskClient is the minimal interface the handler needs from Client.
 // Exported so tests can inject a fake without a real control-plane.
 type TaskClient interface {
-	Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string, projectID uuid.UUID, bearerJWT string) (Task, error)
+	Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string, projectID uuid.UUID, attachments []Attachment, bearerJWT string) (Task, error)
 	List(ctx context.Context, tenantID, userID uuid.UUID) ([]Task, error)
 	Get(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
 	Cancel(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
@@ -139,6 +140,89 @@ type createTaskRequest struct {
 	// advancing issue #1312). Client supplied, so it is authorized before
 	// control-plane is called at all; see handleCreate.
 	ProjectID string `json:"project_id,omitempty"`
+	// Attachments are the documents the person attached in the composer
+	// before starting the run (issue #1065), already extracted to text by the
+	// surface they uploaded on. Carried inline rather than by id on purpose:
+	// the sandbox has no credential for Hive's storage and no route to it, so
+	// something has to hand it the bytes, and the browser that uploaded them
+	// is the one party already authorized to read them. No new read path, no
+	// new permission, nothing widened.
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// Attachment is one document travelling with a task, validated here and
+// forwarded to control-plane and from there to the launcher, which writes it
+// into the sandbox's working directory.
+type Attachment struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+const (
+	// maxAttachments bounds how many documents one run can carry.
+	maxAttachments = 5
+	// maxAttachmentBytes bounds their combined extracted text.
+	//
+	// ponytail: an inline cap, not a general file transfer. It comfortably
+	// holds an ordinary document (a 100 page report extracts to well under
+	// this) and it is the honest ceiling of carrying content on the create
+	// request at all. The upgrade path, when a run needs a 25 MB PDF, is for
+	// the launcher to fetch the document itself, which needs a credential and
+	// a route it does not have today.
+	maxAttachmentBytes = 256 << 10
+	// maxAttachmentNameBytes matches what a POSIX file name can be.
+	maxAttachmentNameBytes = 255
+	// maxCreateBodyBytes is derived from the content cap rather than picked,
+	// because JSON escaping is what decides how much wire a legal attachment
+	// takes. A control character encodes as \uXXXX, six bytes for one, so the
+	// worst case is six times maxAttachmentBytes; eight leaves room for the
+	// names, the pack, the instructions and the quoting around all of it.
+	//
+	// Getting this wrong is not a size error, it is a wrong error: a legal
+	// attachment would come back as "invalid request body", and the person
+	// would read a malformed-JSON refusal for a document that was fine.
+	maxCreateBodyBytes = 8 * maxAttachmentBytes
+)
+
+// validateAttachments refuses anything the launcher would refuse, before a
+// credit hold is taken and before control-plane is called. The launcher checks
+// the names again because it is the process that turns one into a path; this
+// check exists so a bad request never becomes a row.
+func validateAttachments(in []Attachment) error {
+	if len(in) == 0 {
+		return nil
+	}
+	if len(in) > maxAttachments {
+		return fmt.Errorf("a task can carry at most %d attachments", maxAttachments)
+	}
+	total := 0
+	for _, a := range in {
+		name := strings.TrimSpace(a.Name)
+		if name == "" {
+			return errors.New("attachment name required")
+		}
+		if len(name) > maxAttachmentNameBytes {
+			return errors.New("attachment name is too long")
+		}
+		if strings.ContainsAny(name, "/\\") || name == "." || name == ".." {
+			return fmt.Errorf("attachment name %q is not a file name", name)
+		}
+		// Control characters, NUL and newline included. A newline in a name is
+		// not merely an odd file name: the name is repeated back to the model
+		// as a bullet in the run's initial message, so one would let the person
+		// forge extra lines there.
+		if strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return fmt.Errorf("attachment name %q is not a file name", name)
+		}
+		if a.Content == "" {
+			return fmt.Errorf("attachment %q is empty", name)
+		}
+		total += len(a.Content)
+	}
+	if total > maxAttachmentBytes {
+		return fmt.Errorf("attachments total more than %d KiB of text", maxAttachmentBytes>>10)
+	}
+	return nil
 }
 
 // ProjectAuthorizer answers whether the submitting user may attach the project
@@ -157,12 +241,28 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createTaskRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxCreateBodyBytes)).Decode(&req); err != nil {
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.Pack) == "" {
-		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "pack required")
+	// An absent pack is a normal submission since issue #1623, not a bad
+	// request: the composer stopped asking a customer to choose between two
+	// words that name a system prompt, and control-plane resolves it from the
+	// instructions instead (agenttask.InferPack). Whitespace normalises to the
+	// same empty value so a hand-rolled client sending " " takes the same
+	// route rather than reaching the pack CHECK constraint.
+	//
+	// Deliberately no default substituted here. Two layers each holding their
+	// own idea of the default is how the two ends come to disagree about what
+	// actually ran; this edge forwards what it was given and control-plane is
+	// the single place that decides.
+	req.Pack = strings.TrimSpace(req.Pack)
+
+	// Ahead of the project check and the solvency gate, for the same reason
+	// that check is ahead of the gate: a request that cannot be honoured
+	// should not take a hold or create a row first.
+	if err := validateAttachments(req.Attachments); err != nil {
+		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, err.Error())
 		return
 	}
 
@@ -222,7 +322,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.client.Create(r.Context(), user.TenantID, user.ID, req.Pack, req.Instructions, projectID, bearerJWT(r))
+	task, err := h.client.Create(r.Context(), user.TenantID, user.ID, req.Pack, req.Instructions, projectID, req.Attachments, bearerJWT(r))
 	if err != nil {
 		writeTaskError(w, err)
 		return

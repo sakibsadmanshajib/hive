@@ -12,6 +12,8 @@ use ./packages/audit-canonical
 
 use ./packages/budgetkeys
 
+use ./packages/ratewindows
+
 use ./packages/embedmodel
 
 use ./packages/dbtest

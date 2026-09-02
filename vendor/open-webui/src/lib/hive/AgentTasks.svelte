@@ -231,7 +231,7 @@
 		announcement = 'Starting task.';
 
 		try {
-			const task = await createTask(sessionToken(), pack, trimmed, apiBase);
+			const task = await createTask(sessionToken(), pack, trimmed, [], apiBase);
 			// A create that round-trips is direct evidence the endpoint is back, so
 			// the failure count is stale. Without this the poll stays given up and
 			// the row the user just created sits under an alert telling them to
