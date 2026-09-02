@@ -109,6 +109,17 @@ func ParseTenantID(lookup TenantLookup) (uuid.UUID, error) {
 }
 
 // RatePolicy is the edge-side rate-limit projection for one scope.
+//
+// RollingFiveHourLimit and WeeklyLimit keep their zero-means-unset wire
+// semantics deliberately, rather than becoming pointers when the database
+// columns went nullable (issue #1725). Control-plane emits this JSON into a
+// Redis snapshot cache with a sixty second TTL, so during a deploy a new
+// edge-api reads snapshots a previous control-plane wrote. If zero started
+// meaning "a configured zero allowance" at the edge, every one of those cached
+// snapshots would refuse every request for up to a minute after each deploy.
+// The ambiguity is removed at the writer instead: the database now stores NULL
+// for unset and rejects a stored zero outright, so a zero on this wire can only
+// ever have meant unset.
 type RatePolicy struct {
 	RateLimitRPM          int                        `json:"rate_limit_rpm"`
 	RateLimitTPM          int                        `json:"rate_limit_tpm"`
@@ -116,6 +127,10 @@ type RatePolicy struct {
 	WeeklyLimit           int64                      `json:"weekly_limit"`
 	FreeTokenWeightTenths int                        `json:"free_token_weight_tenths"`
 	TierOverrides         map[string]TierOverridePol `json:"tier_overrides,omitempty"`
+	// WeeklyAnchorAt is the account's weekly reset instant, RFC3339. The
+	// weekly window is anchored, not rolling (D-069): the allowance restores
+	// in full here rather than leaking back a day at a time.
+	WeeklyAnchorAt *string `json:"weekly_anchor_at,omitempty"`
 }
 
 // TierOverridePol is the edge-side projection of a per-tier RPM/TPM override

@@ -1584,5 +1584,9 @@ func authorizeAliasRequest(w http.ResponseWriter, r *http.Request, authorizer *a
 		apierrors.WriteAuthFailure(w, authErr, headers)
 		return snapshot, false
 	}
+	// Rate-limit metadata on the SUCCESS path too (issue #1725). Headers that
+	// appeared only on a 429 told a caller nothing until it was already being
+	// refused, and gave every Hive surface nothing to display.
+	apierrors.ApplyHeaders(w, headers)
 	return snapshot, true
 }

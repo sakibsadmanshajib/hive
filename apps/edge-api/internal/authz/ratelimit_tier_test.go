@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/packages/ratewindows"
 )
 
 // CheckWithTier should layer a tier scope after key+account, with effective
@@ -18,8 +20,8 @@ func TestCheckWithTierEnforcesMinKeyOrTierRPM(t *testing.T) {
 			calls = append(calls, slidingWindowCall{keys: append([]string(nil), keys...), limit: limit, amount: amount})
 			return true, limit - 1, 30, nil
 		},
-		runLongWindow: func(_ context.Context, _, _ string, _ time.Duration, _ int, limit int64, score int64, _ time.Time) (bool, int64, int, error) {
-			return true, limit - score, 300, nil
+		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
+			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
 		},
 	}
 
@@ -61,8 +63,8 @@ func TestCheckWithTierUsesKeyLimitWhenTighter(t *testing.T) {
 			}
 			return true, 1000, 30, nil
 		},
-		runLongWindow: func(_ context.Context, _, _ string, _ time.Duration, _ int, limit int64, score int64, _ time.Time) (bool, int64, int, error) {
-			return true, limit - score, 300, nil
+		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
+			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
 		},
 	}
 
@@ -100,8 +102,8 @@ func TestCheckWithTierTierOverridesWinOverEnvDefaults(t *testing.T) {
 			}
 			return true, 1000, 30, nil
 		},
-		runLongWindow: func(_ context.Context, _, _ string, _ time.Duration, _ int, limit int64, score int64, _ time.Time) (bool, int64, int, error) {
-			return true, limit - score, 300, nil
+		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
+			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
 		},
 	}
 
@@ -143,8 +145,8 @@ func TestCheckWithTierShortCircuitsOnKeyDeny(t *testing.T) {
 			}
 			return true, limit - 1, 30, nil
 		},
-		runLongWindow: func(_ context.Context, _, _ string, _ time.Duration, _ int, limit int64, score int64, _ time.Time) (bool, int64, int, error) {
-			return true, limit - score, 300, nil
+		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
+			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
 		},
 	}
 
@@ -174,8 +176,8 @@ func TestCheckWithTierZeroTierLimitsAllowed(t *testing.T) {
 		runSlidingWindow: func(_ context.Context, _ []string, limit int, _ int64, _ time.Time) (bool, int, int, error) {
 			return true, limit - 1, 30, nil
 		},
-		runLongWindow: func(_ context.Context, _, _ string, _ time.Duration, _ int, limit int64, score int64, _ time.Time) (bool, int64, int, error) {
-			return true, limit - score, 300, nil
+		runLongWindow: func(_ context.Context, _ string, _ ratewindows.Shape, _ time.Time, limit int64, score int64, _ time.Time) (longWindowResult, error) {
+			return longWindowResult{Allowed: true, Remaining: limit - score, Used: score}, nil
 		},
 	}
 	snapshot := AuthSnapshot{

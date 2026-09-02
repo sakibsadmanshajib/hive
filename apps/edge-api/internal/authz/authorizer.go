@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/packages/ratewindows"
 )
 
 // Authorizer performs hot-path edge authorization checks.
@@ -252,6 +253,7 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 		}
 	}
 
+	var successHeaders map[string]string
 	if a.limiter != nil {
 		limitResult, err := a.limiter.Check(ctx, snapshot, aliasID, estimatedCredits, billableTokens, freeTokens)
 		if err != nil {
@@ -274,30 +276,110 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 			// Fail open: explicitly enabled by operator (dev/local). Admit
 			// despite the degraded limiter.
 		} else if !limitResult.Allowed {
-			code := "rate_limit_exceeded"
-			return AuthSnapshot{}, rateLimitHeaders(limitResult), newErr(
-				"rate_limit_error",
-				rateLimitMessage(limitResult),
-				&code,
-			)
+			return AuthSnapshot{}, RateLimitHeaders(limitResult), rateLimitError(limitResult)
+		} else {
+			// Success headers. A limit nobody can see until they hit it is
+			// the defect issue #1725 was filed for; every caller of Authorize
+			// that holds a ResponseWriter applies these.
+			successHeaders = RateLimitHeaders(limitResult)
 		}
 	}
 
-	return snapshot, nil, nil
+	return snapshot, successHeaders, nil
 }
 
+// rateLimitMessage is the sentence a customer reads on a refusal. It names the
+// window that ran out and the instant it comes back, because "Please try again
+// later" is indistinguishable from a broken product, which is exactly how this
+// was reported (issue #1725).
+//
+// Percentages and times only, never a currency figure or a credit balance: the
+// allowance is a proportion the customer spends, and D-070 keeps money off
+// every surface but an invoice.
 func rateLimitMessage(result LimitResult) string {
 	switch result.Reason {
 	case "request_limit_exceeded":
-		return fmt.Sprintf("Rate limit reached for requests. Limit: %d / min. Please try again in a little while.", result.RequestLimit)
+		return fmt.Sprintf("Rate limit reached for requests. Limit: %d per minute.%s", result.RequestLimit, resetClause(result))
 	case "token_limit_exceeded":
-		return fmt.Sprintf("Rate limit reached for tokens. Limit: %d / min. Please try again in a little while.", result.TokenLimit)
+		return fmt.Sprintf("Rate limit reached for tokens. Limit: %d per minute.%s", result.TokenLimit, resetClause(result))
+	case "session_limit_exceeded":
+		return "You have used all of your session allowance. Hive measures a session over a rolling five hour window." + resetClause(result)
+	case "weekly_limit_exceeded":
+		return "You have used all of your weekly allowance. It restores in full on your account's weekly reset." + resetClause(result)
 	default:
-		return "Rate limit reached for your current quota window. Please try again later."
+		return "Rate limit reached for your current usage window." + resetClause(result)
 	}
 }
 
-func rateLimitHeaders(result LimitResult) map[string]string {
+// resetClause renders the reset instant, in UTC and in RFC3339, plus a
+// human-readable interval. Empty when the limiter could not produce a real
+// reset, rather than inventing one.
+func resetClause(result LimitResult) string {
+	if result.ResetAt.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf(" It resets at %s (in %s).",
+		result.ResetAt.UTC().Format(time.RFC3339),
+		humanizeDuration(result.RequestResetSeconds))
+}
+
+// humanizeDuration renders whole seconds as the coarsest sensible unit.
+func humanizeDuration(seconds int) string {
+	switch {
+	case seconds <= 0:
+		return "under a minute"
+	case seconds < 60:
+		return fmt.Sprintf("%d seconds", seconds)
+	case seconds < 3600:
+		return pluralize(seconds/60, "minute")
+	case seconds < 86400:
+		return pluralize(seconds/3600, "hour")
+	default:
+		return pluralize(seconds/86400, "day")
+	}
+}
+
+func pluralize(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// rateLimitError builds the wire error for a refusal.
+//
+// A long-window refusal carries its own code, so an allowance refusal, a
+// per-minute throughput refusal and the spend-cap refusal in internal/limits
+// are three outcomes a caller can branch on rather than one indistinguishable
+// string. The per-minute pair deliberately keeps the historical
+// rate_limit_exceeded: those two have been reachable in production since v1.0
+// and every OpenAI-compatible SDK matches on that exact code, whereas no
+// caller anywhere has ever seen a long-window refusal (no account had a window
+// configured, issue #1725), so there is no contract to keep for those.
+func rateLimitError(result LimitResult) *apierrors.OpenAIError {
+	code := "rate_limit_exceeded"
+	switch result.Reason {
+	case "session_limit_exceeded", "weekly_limit_exceeded":
+		code = result.Reason
+	}
+	err := apierrors.NewError("rate_limit_error", rateLimitMessage(result), &code)
+	if !result.ResetAt.IsZero() {
+		err.Error.ResetAt = result.ResetAt.UTC().Format(time.RFC3339)
+	}
+	err.Error.LimitWindow = result.Window
+	return &err
+}
+
+// RateLimitHeaders renders the limiter result as response headers.
+//
+// Exported and emitted on SUCCESS as well as on a refusal (issue #1725): a
+// caller cannot pace itself against a limit it only learns about by hitting it,
+// and headers that appear solely on a 429 are the reason no Hive surface could
+// show a consumption figure.
+//
+// Both spellings ship: the OpenAI style x-ratelimit-* set every OpenAI SDK
+// already reads, and the IETF RateLimit-* aliases newer clients look for.
+func RateLimitHeaders(result LimitResult) map[string]string {
 	headers := make(map[string]string)
 
 	if result.RequestLimit > 0 {
@@ -315,13 +397,82 @@ func rateLimitHeaders(result LimitResult) map[string]string {
 		headers["x-ratelimit-reset-tokens"] = strconv.Itoa(result.TokenResetSeconds)
 	}
 
+	// Long windows ship as PERCENTAGES, never as the raw allowance. The
+	// allowance is a credit score, credits convert to dollars by a constant
+	// the console publishes, and a subscription's internal credit value is
+	// confidential (D-068); a percentage says everything a caller needs for
+	// pacing and discloses none of it (D-070).
+	var policies []string
+	for _, window := range []WindowState{result.Session, result.Weekly} {
+		if !window.Configured {
+			continue
+		}
+		headers["x-ratelimit-"+window.Name+"-used-percent"] = strconv.Itoa(window.UsedPercent())
+		headers["x-ratelimit-"+window.Name+"-remaining-percent"] = strconv.Itoa(window.RemainingPercent())
+		headers["x-ratelimit-"+window.Name+"-reset"] = strconv.Itoa(windowResetSeconds(window))
+		headers["x-ratelimit-"+window.Name+"-reset-at"] = window.ResetAt.UTC().Format(time.RFC3339)
+		policies = append(policies, fmt.Sprintf("%q;q=100;w=%d", window.Name, windowSeconds(window.Name)))
+	}
+
+	// IETF aliases describe the binding window: the one that refused, or the
+	// tightest configured one. Its quota unit is percent of allowance, which
+	// the accompanying RateLimit-Policy declares as q=100.
+	if binding, ok := bindingWindow(result); ok {
+		headers["ratelimit-limit"] = "100"
+		headers["ratelimit-remaining"] = strconv.Itoa(binding.RemainingPercent())
+		headers["ratelimit-reset"] = strconv.Itoa(windowResetSeconds(binding))
+	} else if result.RequestLimit > 0 {
+		headers["ratelimit-limit"] = strconv.Itoa(result.RequestLimit)
+		headers["ratelimit-remaining"] = strconv.Itoa(maxInt(result.RequestRemaining, 0))
+		headers["ratelimit-reset"] = strconv.Itoa(maxInt(result.RequestResetSeconds, 0))
+		policies = append(policies, fmt.Sprintf("%q;q=%d;w=60", "requests", result.RequestLimit))
+	}
+	if len(policies) > 0 {
+		headers["ratelimit-policy"] = strings.Join(policies, ", ")
+	}
+
 	retryAfter := result.RequestResetSeconds
 	if retryAfter <= 0 {
 		retryAfter = result.TokenResetSeconds
 	}
-	if retryAfter > 0 {
+	if retryAfter > 0 && !result.Allowed {
 		headers["retry-after"] = strconv.Itoa(retryAfter)
 	}
 
 	return headers
+}
+
+// bindingWindow is the long window the IETF aliases describe.
+func bindingWindow(result LimitResult) (WindowState, bool) {
+	if result.Window != "" {
+		if result.Window == result.Session.Name && result.Session.Configured {
+			return result.Session, true
+		}
+		if result.Window == result.Weekly.Name && result.Weekly.Configured {
+			return result.Weekly, true
+		}
+	}
+	switch {
+	case result.Session.Configured && result.Weekly.Configured:
+		if result.Weekly.Remaining < result.Session.Remaining {
+			return result.Weekly, true
+		}
+		return result.Session, true
+	case result.Session.Configured:
+		return result.Session, true
+	case result.Weekly.Configured:
+		return result.Weekly, true
+	}
+	return WindowState{}, false
+}
+
+func windowResetSeconds(window WindowState) int {
+	return maxInt(window.ResetSeconds, 0)
+}
+
+func windowSeconds(name string) int {
+	if name == ratewindows.Weekly {
+		return int(ratewindows.WeeklyBucketSize / time.Second)
+	}
+	return int(ratewindows.SessionBucketSize) / int(time.Second) * ratewindows.SessionBucketCount
 }

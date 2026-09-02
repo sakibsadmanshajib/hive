@@ -561,6 +561,39 @@ func (s *Service) UpdateLimits(ctx context.Context, accountID, keyID uuid.UUID, 
 	return limits, nil
 }
 
+// GetAccountRateLimits reads the account's two usage windows.
+func (s *Service) GetAccountRateLimits(ctx context.Context, accountID uuid.UUID) (AccountRateLimits, error) {
+	repo, ok := s.repo.(AccountRateLimitsRepository)
+	if !ok {
+		return AccountRateLimits{}, fmt.Errorf("apikeys: get account rate limits: %w", ErrNotSupported)
+	}
+	limits, err := repo.GetAccountRateLimits(ctx, accountID)
+	if err != nil {
+		return AccountRateLimits{}, fmt.Errorf("apikeys: get account rate limits: %w", err)
+	}
+	return limits, nil
+}
+
+// UpdateAccountRateLimits writes the account's two usage windows.
+//
+// Snapshot invalidation is deliberately not attempted per key here. The edge
+// caches an auth snapshot for sixty seconds (authz.snapshotTTL) and there is no
+// index from an account to its keys' token hashes on this path, so a changed
+// allowance takes effect within a minute rather than instantly. That is the
+// right trade for an administrator action that happens rarely: the alternative
+// is a scan of every key on the account inside a request handler.
+func (s *Service) UpdateAccountRateLimits(ctx context.Context, accountID uuid.UUID, input AccountRateLimitsInput) (AccountRateLimits, error) {
+	repo, ok := s.repo.(AccountRateLimitsRepository)
+	if !ok {
+		return AccountRateLimits{}, fmt.Errorf("apikeys: update account rate limits: %w", ErrNotSupported)
+	}
+	limits, err := repo.UpsertAccountRateLimits(ctx, accountID, input)
+	if err != nil {
+		return AccountRateLimits{}, fmt.Errorf("apikeys: update account rate limits: %w", err)
+	}
+	return limits, nil
+}
+
 // UpdatePolicy updates the per-key policy configuration.
 func (s *Service) UpdatePolicy(ctx context.Context, accountID, actorUserID, keyID uuid.UUID, input UpdatePolicyInput) (KeyPolicy, error) {
 	policy, err := s.repo.UpsertPolicy(ctx, accountID, keyID, input)

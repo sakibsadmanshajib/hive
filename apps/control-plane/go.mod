@@ -13,6 +13,7 @@ require (
 	github.com/sakibsadmanshajib/hive/apps/agent-engine v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/audit-canonical v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/budgetkeys v0.0.0
+	github.com/sakibsadmanshajib/hive/packages/ratewindows v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/dbtest v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/embedmodel v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/sanitize v0.0.0
@@ -61,6 +62,8 @@ replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/sto
 replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../packages/audit-canonical
 
 replace github.com/sakibsadmanshajib/hive/packages/budgetkeys => ../../packages/budgetkeys
+
+replace github.com/sakibsadmanshajib/hive/packages/ratewindows => ../../packages/ratewindows
 
 replace github.com/sakibsadmanshajib/hive/packages/dbtest => ../../packages/dbtest
 

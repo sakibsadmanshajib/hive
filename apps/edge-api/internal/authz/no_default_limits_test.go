@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/packages/ratewindows"
 )
 
 // Owner directive, 2026-08-30: Hive imposes NO default rate limit anywhere. A
@@ -132,9 +134,9 @@ func TestCheckWithNoConfiguredLimitsNeverRunsAWindow(t *testing.T) {
 			windowCalls++
 			return false, 0, 0, errors.New("sliding window must not have been consulted")
 		},
-		runLongWindow: func(context.Context, string, string, time.Duration, int, int64, int64, time.Time) (bool, int64, int, error) {
+		runLongWindow: func(context.Context, string, ratewindows.Shape, time.Time, int64, int64, time.Time) (longWindowResult, error) {
 			longCalls++
-			return false, 0, 0, errors.New("long window must not have been consulted")
+			return longWindowResult{}, errors.New("long window must not have been consulted")
 		},
 	}
 

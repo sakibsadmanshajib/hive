@@ -328,6 +328,8 @@ jobs:
             path: ./apps/control-plane
           - module: budgetkeys
             path: ./packages/budgetkeys
+          - module: ratewindows
+            path: ./packages/ratewindows
           - module: storage
             path: ./packages/storage
           - module: sanitize

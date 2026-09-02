@@ -5,8 +5,10 @@ import {
   getAccountProfile,
   getApiKeys,
   getCatalogModels,
+  getUsageWindows,
   getViewer,
   type CatalogModel,
+  type UsageWindows,
 } from "@/lib/control-plane/client";
 import { apiBaseUrl } from "@/lib/api-contract";
 import { pickQuickstartAlias } from "@/lib/quickstart-model";
@@ -14,6 +16,7 @@ import { can } from "@/lib/viewer-gates";
 import { ApiKeyCreateForm } from "@/components/api-keys/api-key-create-form";
 import { ApiKeyList } from "@/components/api-keys/api-key-list";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
+import { UsageWindowsCard } from "@/components/usage/usage-windows-card";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -52,7 +55,7 @@ export default async function ApiKeysPage() {
     redirect("/console/settings/profile");
   }
 
-  const [keys, profile, models] = await Promise.all([
+  const [keys, profile, models, windows] = await Promise.all([
     getApiKeys(),
     getAccountProfile().catch(
       (): { owner_name: string } => ({ owner_name: "" }),
@@ -70,6 +73,13 @@ export default async function ApiKeysPage() {
     // snippet naming a different model than this deployment would recommend,
     // which is indistinguishable from working unless it leaves a trace.
     catalogModelsOrNone(),
+    // Null on any failure, rendered as "unavailable" rather than as zero
+    // usage: a bar that reads empty because the counter store is unreachable
+    // tells the customer the opposite of the truth (issue #1725).
+    getUsageWindows().catch((error: unknown): UsageWindows | null => {
+      console.error("ApiKeysPage: could not load usage windows", error);
+      return null;
+    }),
   ]);
 
   return (
@@ -94,6 +104,7 @@ export default async function ApiKeysPage() {
       />
 
       <div className="flex flex-col gap-6">
+        <UsageWindowsCard windows={windows} />
         <ApiKeyCreateForm
           apiBaseUrl={apiBaseUrl()}
           quickstartModel={pickQuickstartAlias(models)}

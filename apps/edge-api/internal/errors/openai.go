@@ -12,11 +12,21 @@ type OpenAIError struct {
 }
 
 // OpenAIErrorBody contains the error details inside the envelope.
+//
+// ResetAt and LimitWindow are Hive additions, present only on a rate-limit
+// refusal and omitted everywhere else, so the envelope an OpenAI SDK parses is
+// unchanged for every other error. They exist because a refusal that names no
+// window and no reset is indistinguishable from an outage (issue #1725), and a
+// caller should not have to parse English out of Message to retry correctly.
 type OpenAIErrorBody struct {
 	Message string  `json:"message"`
 	Type    string  `json:"type"`
 	Param   *string `json:"param"`
 	Code    *string `json:"code"`
+	// ResetAt is RFC3339 UTC.
+	ResetAt string `json:"reset_at,omitempty"`
+	// LimitWindow is "session" or "weekly" for a long-window refusal.
+	LimitWindow string `json:"limit_window,omitempty"`
 }
 
 // NewError creates a new OpenAIError with the given type, message, and optional code.
@@ -56,6 +66,22 @@ func WriteErrorWithParam(w http.ResponseWriter, httpStatus int, errType string, 
 	json.NewEncoder(w).Encode(body)
 }
 
+// WriteErrorBody writes an already-built error body, preserving every field on
+// it. WriteError rebuilds the body from four arguments and so drops the
+// rate-limit metadata; this is the path for an error that carries any.
+func WriteErrorBody(w http.ResponseWriter, httpStatus int, body OpenAIErrorBody) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatus)
+	_ = json.NewEncoder(w).Encode(OpenAIError{Error: body})
+}
+
+// ApplyHeaders sets each non-blank header on w. Exported for the success path:
+// rate-limit headers now ship on a 200 as well as a 429, and the handlers that
+// do that are outside this package.
+func ApplyHeaders(w http.ResponseWriter, headers map[string]string) {
+	applyHeaders(w, headers)
+}
+
 // applyHeaders sets each non-blank header on w. Shared by every error path
 // that carries retry metadata, so a header only needs handling here once.
 func applyHeaders(w http.ResponseWriter, headers map[string]string) {
@@ -85,8 +111,14 @@ func WriteAuthFailure(w http.ResponseWriter, oerr *OpenAIError, headers map[stri
 		WriteError(w, http.StatusUnauthorized, "invalid_request_error", "Invalid API key.", &code)
 		return
 	}
-	if oerr.Error.Code != nil && *oerr.Error.Code == "rate_limit_exceeded" {
-		WriteRateLimitError(w, oerr.Error.Message, oerr.Error.Code, headers)
+	// Switched on TYPE, not on the exact code string. Issue #1725 split one
+	// rate-limit code into several (session_limit_exceeded,
+	// weekly_limit_exceeded, and the existing per-minute pair), and a code
+	// match would have quietly answered 401 to every one of the new ones: a
+	// customer over their allowance being told their API key is wrong.
+	if oerr.Error.Type == "rate_limit_error" {
+		applyHeaders(w, headers)
+		WriteErrorBody(w, http.StatusTooManyRequests, oerr.Error)
 		return
 	}
 	status := http.StatusUnauthorized
