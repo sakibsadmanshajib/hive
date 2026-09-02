@@ -26,9 +26,12 @@ bypassed from the CLI or UI.
 - `Go tests (storage)`
 - `Repo policy lints (tenant + audit)`
 - `Web console (type + unit + build)`
+- `Agent console (type + unit + build)`
+- `Live integration (SDK tests + smoke)`
+- `Web E2E (full stack)`
 - `PR is attached to a triaged issue`
 
-The first six are jobs in `.github/workflows/ci.yml`. The seventh is the single
+The first nine are jobs in `.github/workflows/ci.yml`. The tenth is the single
 job in `.github/workflows/pr-tracking-gate.yml`, which enforces
 `.claude/rules/tracking-discipline.md`: a pull request links an issue, and that
 issue is triaged. No other workflow may publish any of these names, and
@@ -55,7 +58,7 @@ individual steps, so it always concludes on its own merits. Filtering inside the
 workflow keeps a docs-only pull request mergeable without a second workflow
 standing in for the real one.
 
-One consequence to expect: on a docs-only or hooks-only pull request the six
+One consequence to expect: on a docs-only or hooks-only pull request the nine
 `ci.yml` required checks legitimately go green in a few seconds, because each
 required job runs to completion with every step skipped. The tracking gate is
 the exception and really does run there, since a documentation change needs an
