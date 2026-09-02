@@ -61,11 +61,24 @@ docker network create "$NET" >/dev/null
 echo "== postgres"
 docker run -d --name "${PREFIX}-pg" --network "$NET" --network-alias "${PREFIX}-pg" \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=postgres "$PG_IMAGE" >/dev/null
+# Retry the real statement rather than pg_isready. The postgres entrypoint runs
+# a temporary local server during initialisation and then restarts it, and
+# pg_isready answers yes to that one: on a CI runner this loop exited on the
+# init server and the next command hit the socket gap with
+# "No such file or directory". Waiting on the operation you actually need has
+# no such gap.
+schema_ready=""
 for _ in $(seq 1 60); do
-  docker exec "${PREFIX}-pg" pg_isready -U postgres >/dev/null 2>&1 && break
+  if docker exec "${PREFIX}-pg" psql -U postgres -c 'CREATE SCHEMA IF NOT EXISTS auth' >/dev/null 2>&1; then
+    schema_ready=1
+    break
+  fi
   sleep 1
 done
-docker exec "${PREFIX}-pg" psql -U postgres -c 'CREATE SCHEMA IF NOT EXISTS auth' >/dev/null
+if [ -z "$schema_ready" ]; then
+  echo "postgres never accepted a connection; nothing below was exercised" >&2
+  exit 1
+fi
 
 echo "== mailhog"
 docker run -d --name "${PREFIX}-mail" --network "$NET" --network-alias "${PREFIX}-mail" \
@@ -125,10 +138,23 @@ docker run -d --name "${PREFIX}-console" --network "$NET" --network-alias caddy-
   -v "${HERE}/deploy/docker/Caddyfile.console:/etc/caddy/Caddyfile:ro" \
   "$CADDY_IMAGE" >/dev/null
 
+# Same shape, same reason: a loop that simply runs out leaves the driver to
+# fail with a connection error that reads as a broken assertion rather than as
+# a stack that never came up.
+console_ready=""
 for _ in $(seq 1 60); do
-  curl -fsS -m 2 -H 'Host: console.localhost' http://127.0.0.1:8880/auth/v1/settings >/dev/null 2>&1 && break
+  if curl -fsS -m 2 -H 'Host: console.localhost' http://127.0.0.1:8880/auth/v1/settings >/dev/null 2>&1; then
+    console_ready=1
+    break
+  fi
   sleep 1
 done
+if [ -z "$console_ready" ]; then
+  echo "the console origin never answered; nothing below was exercised" >&2
+  docker logs --tail 30 "${PREFIX}-console" >&2 || true
+  docker logs --tail 30 "${PREFIX}-supabase" >&2 || true
+  exit 1
+fi
 
 echo "== driving"
 CONSOLE_URL=http://127.0.0.1:8880 \
