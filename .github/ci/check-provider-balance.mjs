@@ -35,6 +35,13 @@
 // demo that empties the account. Taking the max means the alarm can fire early
 // and cannot fire late.
 //
+// The window `usage_weekly` covers is not documented as rolling or as
+// calendar anchored, and the figures the endpoint returns are consistent with
+// either reading. That ambiguity matters in one direction only: if it resets
+// on a fixed weekday, source 1 under-reads for a day or so after the reset.
+// Source 2 is what covers that, which is a second reason not to rely on the
+// provider's figure alone once a sample exists.
+//
 // Source 1 is scoped to the key this runs with; source 2 is account-wide. They
 // agree today, because that key's `usage` equals the account's `total_usage`.
 // If a second key is ever added they will not, so the check compares them and

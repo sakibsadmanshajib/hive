@@ -175,6 +175,14 @@ jobs:
       # the next run needs it either way.
       - name: Save the usage sample for the next run
         if: always()
+        # Best effort, and never allowed to decide the run's colour. On a run
+        # that could not read the API at all the script exits before writing
+        # the file, and with no cache to restore there is then no path to save,
+        # which actions/cache/save reports as an error. Letting that fail the
+        # job would paint a red square whose cause has nothing to do with the
+        # balance, on top of the alarm that already fired correctly. Losing a
+        # sample only degrades the check to the provider's weekly figure.
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: provider-balance-state.json
@@ -183,7 +191,7 @@ jobs:
       - name: File the tracking issue and fail
         if: steps.check.outputs.low == 'true'
         env:
-          TITLE: the OpenRouter balance is running out
+          TITLE: the OpenRouter balance is low or unreadable
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -199,6 +207,12 @@ jobs:
             "OpenRouter balance, and that file declares no chat fallback on purpose, so" \
             "at zero those routes refuse outright rather than degrading to another" \
             "model. Top up at https://openrouter.ai/settings/credits." \
+            "" \
+            "If the block above begins with FATAL rather than LOW, the balance could not be" \
+            "read at all, and no amount of topping up will clear it: check the" \
+            "OPENROUTER_API_KEY repository secret and whether the endpoint answered. That" \
+            "case is reported here too, deliberately, because a monitor that stays quiet" \
+            "when it cannot see the number is the failure this alarm exists to remove." \
             "" \
             "This check runs every six hours and closes this issue itself on the first" \
             "healthy run after the top-up, so there is nothing to close by hand. It is" \
@@ -254,7 +268,7 @@ jobs:
       - name: Close the tracking issue on recovery
         if: steps.check.outputs.low == 'false'
         env:
-          TITLE: the OpenRouter balance is running out
+          TITLE: the OpenRouter balance is low or unreadable
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         # Without this, one shortfall would leave an issue open forever, and the
         # dedupe above would then swallow every later alert as "already open"
