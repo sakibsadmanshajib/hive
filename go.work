@@ -10,6 +10,8 @@ use ./packages/storage
 
 use ./packages/audit-canonical
 
+use ./packages/budgetkeys
+
 use ./packages/embedmodel
 
 use ./packages/dbtest

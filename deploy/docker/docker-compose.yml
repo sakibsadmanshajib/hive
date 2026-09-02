@@ -645,11 +645,15 @@ services:
       # #1648). An invoice normally uses the account's own fx_snapshots
       # effective_rate, the rate it bought its credits at, so it reconciles
       # against that receipt; this covers accounts with no snapshot and the
-      # spend-alert cron. Unset falls back to payments.DefaultUSDBDTRate and the
+      # spend-alert cron, and the budget hard-cap counter that turns settled
+      # credits into the taka figure the edge gate compares against the cap
+      # (issue #1651). Unset falls back to payments.DefaultUSDBDTRate and the
       # resolved rate and its source are logged. Anything that is not a plain
       # positive decimal with at most six fractional digits makes invoice
       # generation and the spend-alert pass refuse rather than bill at a rate
-      # nobody chose.
+      # nobody chose, and leaves the budget spend counter unwired: the process
+      # still serves, no workspace hard cap is enforced while it runs, and
+      # hive_budget_mtd_counter_wired reads 0.
       HIVE_USD_BDT_RATE: ${HIVE_USD_BDT_RATE:-}
       # RAG ingestion (#232). Without EMBEDDING_BASE_URL the ingest route is not
       # registered and uploaded documents stay "pending" forever. Must match the

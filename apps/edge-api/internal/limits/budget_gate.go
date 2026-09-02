@@ -16,21 +16,25 @@
 //     crossings are surfaced via the `budget_soft_cap_crossed_total` Prometheus
 //     counter and the spend-alert cron's user-visible notifications.
 //   - **Cache invalidation strategy**: control-plane PUSHES the new hard_cap
-//     to Redis on every upsert (`budget:hard_cap:{workspaceID}`). The gate
-//     READS with a brief TTL (~30s) so a missed publish heals on the next
-//     read; meanwhile the per-workspace MTD counter is INCRed inline as
-//     usage settles, so eventual consistency stays bounded.
+//     to Redis on every upsert (`budget:hard_cap:{workspaceID}`), with no
+//     expiry, and DELETEs it when the budget is deleted. The per-workspace MTD
+//     counter is rewritten inline as usage settles, so both values follow the
+//     ledger rather than a clock.
 //
-// **The MTD counter has no writer (issue #1651).** Nothing in this repository
-// ever INCRs `budget:mtd_spend:{ws}:YYYY-MM`; the only references are this
-// package and its own tests, which seed the key themselves. A missing key reads
-// as zero spend, so the hard cap never blocks while the console advertises
-// "Requests blocked beyond this". The paragraph above describes the intended
-// design, not the running system. Whoever wires the writer must INCR **BDT
-// subunits**, not ledger credits: `budget:hard_cap:{ws}` is written in subunits
-// by control-plane's budgets service, and a counter in credits would trip the
-// gate at roughly one ten-millionth of the intended spend, which is issue #1648
-// pointed the other way and rejects live traffic with a 402.
+// **Both writers live in control-plane and neither can be imported from here**
+// (each app owns its own `internal/` tree). The cap comes from
+// `budgets/service.go`; the MTD counter from `budgets/mtd_counter.go`, added by
+// issue #1651 after the gate had spent months reading a key nothing wrote, with
+// its own tests seeding that key, so a hard cap the console advertises as
+// "Requests blocked beyond this" never blocked anything. The join is a literal
+// pinned on both sides: see budget_gate_contract_test.go here and the counter's
+// tests there.
+//
+// The counter carries **BDT subunits**, never ledger credits. A credit is one
+// billionth of a USD and a paisa one hundredth of a taka, so a counter in
+// credits would trip this gate at roughly one ten-millionth of the intended
+// spend, which is issue #1648 pointed the other way and rejects live traffic
+// with a 402 rather than misprinting a document.
 //
 // The middleware extracts workspace identity by calling the supplied
 // `WorkspaceFromRequest` resolver — keeps this package decoupled from the
@@ -50,6 +54,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/sakibsadmanshajib/hive/packages/budgetkeys"
 )
 
 // =============================================================================
@@ -93,17 +99,20 @@ func (r *redisCacheReader) Get(ctx context.Context, key string) (string, bool, e
 const BDTSubunitsCurrency = "BDT"
 
 // HardCapRedisKeyPattern returns the Redis key the control-plane writes and
-// the gate reads. Kept in sync with the control-plane's
-// `budgets.hardCapRedisKey` — see budgets/service.go.
+// the gate reads.
+//
+// The shape lives in packages/budgetkeys, imported by both sides, rather than
+// being spelled out here and again in control-plane. Two copies agreeing by
+// convention is what let issue #1651 exist.
 func HardCapRedisKeyPattern(workspaceID string) string {
-	return fmt.Sprintf("budget:hard_cap:{%s}", workspaceID)
+	return budgetkeys.HardCap(workspaceID)
 }
 
 // MTDSpendRedisKeyPattern returns the Redis key holding the workspace's
 // month-to-date spend (BDT subunits, integer string). Period-suffixed so a
 // new month starts at zero without explicit reset.
 func MTDSpendRedisKeyPattern(workspaceID string, period time.Time) string {
-	return fmt.Sprintf("budget:mtd_spend:{%s}:%s", workspaceID, period.Format("2006-01"))
+	return budgetkeys.MTDSpend(workspaceID, period)
 }
 
 // SoftCapCrossedMetric reports the Prometheus counter name the gate increments
@@ -250,12 +259,23 @@ func (g *BudgetGate) Wrap(next http.Handler) http.Handler {
 
 		decision, err := g.evaluate(r.Context(), workspaceID)
 		if err != nil {
-			// Fail-open on Redis errors — better to bill a few extra requests
-			// than crash the hot path. The 24-hour budget cron settles below
-			// the cap on the next pass. We MUST emit observability though:
-			// silent fail-open is a hard-cap bypass and SRE needs a counter +
-			// log line to detect sustained Redis outages or malformed cache
-			// values rather than discover them via reconciliation drift.
+			// FAIL OPEN on cache errors, deliberately, and the reasoning is
+			// worth stating because the other direction is defensible too.
+			//
+			// Credit here is PREPAID: accounting refuses a reservation that
+			// exceeds the account's available balance before any request is
+			// dispatched. So the hard cap is a sub-balance control a customer
+			// sets on top of that floor, not the only thing between them and
+			// unbounded spend, and a Redis blip can overspend the cap but can
+			// never overspend the balance. Failing closed would trade that
+			// bounded overshoot for a 402 on every capped workspace whenever
+			// Redis hiccups, which is an outage on the product's main path
+			// caused by a cache.
+			//
+			// It is not free, so it is not silent: the counter and the WARN
+			// below are how a sustained bypass is detected rather than
+			// discovered later in reconciliation. A non-zero rate here means
+			// workspaces are being served with their caps unenforced.
 			g.failOpen.Inc(workspaceID)
 			g.logger.WarnContext(r.Context(), "budget_gate: fail-open on cache error",
 				"workspace_id", workspaceID, "error", err)
@@ -338,9 +358,14 @@ func (g *BudgetGate) fetchHardCap(ctx context.Context, workspaceID string) (*big
 	return hardCap, nil
 }
 
-// fetchMTDSpend reads the workspace's BDT-subunit spend counter. The counter
-// is INCRed inline by the control-plane settlement path; missing keys mean
-// "no spend yet this period".
+// fetchMTDSpend reads the workspace's BDT-subunit spend counter, rewritten by
+// the control-plane settlement path on every settled charge.
+//
+// A missing key reads as "no spend yet this period", which is right at the
+// start of a month and wrong after a Redis eviction. The writer closes that
+// second case from its side: the first settlement that finds the key gone
+// reseeds it from the ledger rather than restarting the customer's month at
+// zero. Nothing this side can do about it, since the gate has no ledger.
 func (g *BudgetGate) fetchMTDSpend(ctx context.Context, workspaceID string) (*big.Int, error) {
 	period := startOfMonthUTC(g.now())
 	key := MTDSpendRedisKeyPattern(workspaceID, period)

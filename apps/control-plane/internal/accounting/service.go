@@ -3,6 +3,7 @@ package accounting
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -32,12 +33,24 @@ type apiKeyService interface {
 	MarkLastUsed(ctx context.Context, apiKeyID uuid.UUID, at time.Time) error
 }
 
+// SpendCounter records settled spend against the workspace month-to-date
+// counter the edge-api budget gate reads, so a customer's hard cap is measured
+// against money that was actually charged (issue #1651).
+//
+// Optional: a deployment without Redis wires none, and settlement carries on.
+// Its failures are logged and swallowed, never returned; see the call site in
+// finalizeLocked for why that direction and not the other.
+type SpendCounter interface {
+	RecordSettledSpend(ctx context.Context, workspaceID uuid.UUID, credits int64, at time.Time) error
+}
+
 type Service struct {
-	repo      Repository
-	ledgerSvc ledgerService
-	usageSvc  usageService
-	apiKeySvc apiKeyService
-	locker    AccountLocker
+	repo         Repository
+	ledgerSvc    ledgerService
+	usageSvc     usageService
+	apiKeySvc    apiKeyService
+	locker       AccountLocker
+	spendCounter SpendCounter
 }
 
 func NewService(repo Repository, ledgerSvc ledgerService, usageSvc usageService, apiKeySvcs ...apiKeyService) *Service {
@@ -57,6 +70,16 @@ func NewService(repo Repository, ledgerSvc ledgerService, usageSvc usageService,
 func (s *Service) WithAccountLocker(locker AccountLocker) *Service {
 	if locker != nil {
 		s.locker = locker
+	}
+	return s
+}
+
+// WithSpendCounter installs the month-to-date spend counter the edge-api budget
+// gate reads. Returns the service for chaining. A nil counter leaves settlement
+// exactly as it was, which is what a deployment with no Redis gets.
+func (s *Service) WithSpendCounter(counter SpendCounter) *Service {
+	if counter != nil {
+		s.spendCounter = counter
 	}
 	return s
 }
@@ -381,6 +404,56 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 	reservation, err = s.repo.FinalizeReservation(ctx, input.AccountID, input.ReservationID, actualCredits, unusedCredits, input.TerminalUsageConfirmed, nextStatus, reason)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: finalize reservation: %w", err)
+	}
+
+	// The charge counts against the workspace's hard cap now that the row has
+	// left the open state. This is the only place a spend counter can be wired
+	// without missing an endpoint, since every settlement (sync, streaming,
+	// images, audio, session chat, batch) arrives here, and it records
+	// actualCredits, what the ledger captured, not the caller's estimate, which
+	// the clamp above may have cut.
+	//
+	// AFTER the row transition, not right after the charge. A finalization that
+	// charged and then failed on the release or on this row leaves the
+	// reservation open, and its caller retries (sessionbilling does so
+	// explicitly). The retry deduplicates the charge on its idempotency key but
+	// would reach a counter call placed earlier a second time, counting one
+	// charge twice against the customer's cap. Placed here, the status guard at
+	// the top of this function short-circuits the retry before it arrives.
+	//
+	// FAILING OPEN, deliberately, and loudly. Returning this error would abort a
+	// finalization whose charge has already posted, stranding the hold: exactly
+	// the credit leak of issue #616, caused by a Redis blip. Failing closed
+	// would cost the money path itself, so a counter failure costs a cap that
+	// goes briefly unenforced instead.
+	//
+	// WHAT RECOVERS IT, precisely, because the counter's own rebuild does not.
+	// That rebuild fires when the accumulator key is MISSING, so it covers a
+	// wipe and not a blip: an ordinary failed write leaves the key alive holding
+	// the month's running total, and the next settlement increments the survivor
+	// with nothing noticing the gap. The same hole swallows this charge if the
+	// process dies or ctx is cancelled between the row transition above and this
+	// call, which an edge-api client timeout produces directly, since the write
+	// rides the inbound request context.
+	//
+	// The spend-alert pass is what actually closes both. It walks every
+	// workspace with a budget once a minute and restates the counter and the cap
+	// from the ledger (budgets.MTDSpendCounter.SyncWorkspace), so the gate's view
+	// converges on a schedule rather than only when a key happens to be absent.
+	// Worst case for a charge dropped here is under-enforcement for the rest of
+	// that minute.
+	//
+	// The ERROR line and hive_budget_mtd_counter_write_failures_total are the
+	// signal in the meantime; a silent skip would make an unenforced cap
+	// invisible, which is the defect class issue #1651 is about.
+	if actualCredits > 0 && s.spendCounter != nil {
+		if err := s.spendCounter.RecordSettledSpend(ctx, reservation.AccountID, actualCredits, time.Now().UTC()); err != nil {
+			slog.ErrorContext(ctx, "budget mtd counter write failed; hard cap is unenforced for this workspace until it succeeds",
+				"workspace_id", reservation.AccountID,
+				"reservation_id", reservation.ID,
+				"credits", actualCredits,
+				"error", err)
+		}
 	}
 
 	if !input.TerminalUsageConfirmed {

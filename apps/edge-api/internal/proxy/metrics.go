@@ -22,6 +22,17 @@ type EdgeMetrics struct {
 	HTTPRequestDuration     *prometheus.HistogramVec
 	UpstreamRequestsTotal   *prometheus.CounterVec
 	UpstreamRequestDuration *prometheus.HistogramVec
+
+	// BudgetGateFailOpenTotal counts requests the budget gate served without
+	// being able to evaluate the workspace's hard cap, because Redis errored or
+	// held a malformed value. Every one of them is a request served with a
+	// customer's spend cap unenforced, so a sustained non-zero rate is a
+	// hard-cap bypass and worth an alert.
+	//
+	// Deliberately unlabelled: the workspace id belongs in the gate's log line,
+	// not in a metric label, where one series per workspace would be unbounded
+	// cardinality on a hot path.
+	BudgetGateFailOpenTotal prometheus.Counter
 }
 
 // NewEdgeMetrics creates and registers edge-api metrics on a fresh custom registry.
@@ -47,12 +58,17 @@ func NewEdgeMetrics() (*EdgeMetrics, *prometheus.Registry) {
 			Help:    "Upstream provider request duration in seconds",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"provider"}),
+		BudgetGateFailOpenTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "hive_budget_gate_fail_open_total",
+			Help: "Requests served with the workspace hard cap unevaluated because the budget cache errored",
+		}),
 	}
 	reg.MustRegister(
 		m.HTTPRequestsTotal,
 		m.HTTPRequestDuration,
 		m.UpstreamRequestsTotal,
 		m.UpstreamRequestDuration,
+		m.BudgetGateFailOpenTotal,
 	)
 	return m, reg
 }

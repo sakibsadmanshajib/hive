@@ -12,6 +12,7 @@ require (
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/sakibsadmanshajib/hive/apps/agent-engine v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/audit-canonical v0.0.0
+	github.com/sakibsadmanshajib/hive/packages/budgetkeys v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/dbtest v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/embedmodel v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/sanitize v0.0.0
@@ -58,6 +59,8 @@ require (
 replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/storage
 
 replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../packages/audit-canonical
+
+replace github.com/sakibsadmanshajib/hive/packages/budgetkeys => ../../packages/budgetkeys
 
 replace github.com/sakibsadmanshajib/hive/packages/dbtest => ../../packages/dbtest
 

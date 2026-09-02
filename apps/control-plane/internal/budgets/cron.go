@@ -28,12 +28,24 @@ import (
 // All operands are *big.Int; the inequality uses Cmp on a temporary big.Int.
 // =============================================================================
 
+// GateStateSyncer restates the Redis values the edge-api budget gate reads for
+// one workspace, from figures already read out of the database.
+//
+// The pass below is the only thing in this product that walks every workspace
+// with a budget on a schedule, so it is where the gate's view converges on the
+// ledger: see MTDSpendCounter.SyncWorkspace for the two holes that closes.
+// Optional, and nil in any deployment without Redis.
+type GateStateSyncer interface {
+	SyncWorkspace(ctx context.Context, workspaceID uuid.UUID, ledgerCredits, hardCap *big.Int, at time.Time) error
+}
+
 // CronEvaluator owns the spend-alert evaluation pass.
 type CronEvaluator struct {
 	repo     WorkspaceBudgetRepository
 	notifier AlertNotifier
 	logger   *slog.Logger
 	now      func() time.Time
+	gate     GateStateSyncer
 }
 
 // NewCronEvaluator constructs a CronEvaluator.
@@ -47,6 +59,16 @@ func NewCronEvaluator(repo WorkspaceBudgetRepository, notifier AlertNotifier, lo
 		logger:   logger,
 		now:      func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// WithGateStateSync makes each pass also restate the edge-api gate's Redis view
+// of every workspace it visits. Returns the evaluator for chaining. Without it
+// the pass only sends alerts, which is what a deployment with no Redis gets.
+func (c *CronEvaluator) WithGateStateSync(gate GateStateSyncer) *CronEvaluator {
+	if gate != nil {
+		c.gate = gate
+	}
+	return c
 }
 
 // EvaluateBudgets runs one evaluation pass. It is safe to call repeatedly: each
@@ -114,6 +136,36 @@ func (c *CronEvaluator) evaluateWorkspace(ctx context.Context, wsID uuid.UUID, n
 	if budget == nil {
 		return 0, nil
 	}
+
+	// Read the ledger before the alert-shaped early returns below, because the
+	// gate sync needs it for every workspace with a budget, including one with
+	// no soft cap and one with no alerts configured. Those workspaces still have
+	// a hard cap that has to be enforced. One indexed aggregate per capped
+	// workspace per pass.
+	mtdCredits, err := c.repo.MonthToDateSpendCredits(ctx, wsID, period)
+	if err != nil {
+		return 0, fmt.Errorf("mtd spend: %w", err)
+	}
+
+	// Convert before comparing: the cap the customer typed is in taka and the
+	// ledger total is in credits, one billionth of a USD each.
+	mtd, err := payments.CreditsToBDTSubunits(mtdCredits, rate.Rate)
+	if err != nil {
+		return 0, fmt.Errorf("mtd spend conversion: %w", err)
+	}
+
+	// Restate what the edge gate reads. This is the only scheduled walk of every
+	// workspace with a budget, so it is what puts caps back after a deploy
+	// empties Redis, and what corrects a counter write that failed while its key
+	// was alive. Failure here is logged and does not stop the alert it shares a
+	// pass with: the two are independent controls.
+	if c.gate != nil {
+		if err := c.gate.SyncWorkspace(ctx, wsID, mtdCredits, budget.HardCap, now); err != nil {
+			c.logger.ErrorContext(ctx, "budget gate state sync failed; this workspace's hard cap may be unenforced",
+				"workspace_id", wsID, "error", err)
+		}
+	}
+
 	if budget.SoftCap == nil || budget.SoftCap.Sign() == 0 {
 		// Soft cap of 0 disables percentage-based alerts (would div by zero).
 		return 0, nil
@@ -125,18 +177,6 @@ func (c *CronEvaluator) evaluateWorkspace(ctx context.Context, wsID uuid.UUID, n
 	}
 	if len(alerts) == 0 {
 		return 0, nil
-	}
-
-	mtdCredits, err := c.repo.MonthToDateSpendCredits(ctx, wsID, period)
-	if err != nil {
-		return 0, fmt.Errorf("mtd spend: %w", err)
-	}
-
-	// Convert before comparing: the cap the customer typed is in taka and the
-	// ledger total is in credits, one billionth of a USD each.
-	mtd, err := payments.CreditsToBDTSubunits(mtdCredits, rate.Rate)
-	if err != nil {
-		return 0, fmt.Errorf("mtd spend conversion: %w", err)
 	}
 
 	fired := 0

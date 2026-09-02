@@ -9,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/sakibsadmanshajib/hive/packages/budgetkeys"
 )
 
 // =============================================================================
@@ -58,10 +60,10 @@ func NewService(repo ThresholdRepository, notifier EmailNotifier) *Service {
 // NewServiceWithWorkspace creates a Service with both the legacy threshold
 // surface and the Phase 14 workspace budget + spend-alert surface.
 //
-// `redis` is optional: if non-nil, hard-cap upserts publish to Redis so the
-// edge-api budget gate's cache can refresh within its TTL window. If nil,
-// edge-api falls back to its TTL-based read-through and accepts a brief
-// staleness window.
+// `redis` is optional: if non-nil, hard-cap upserts publish the cap to Redis
+// where the edge-api budget gate reads it. If nil, nothing publishes it and the
+// gate stays pass-through for every workspace, since it has no other source for
+// a cap.
 func NewServiceWithWorkspace(
 	repo ThresholdRepository,
 	notifier EmailNotifier,
@@ -177,24 +179,52 @@ func (e *ValidationError) Error() string {
 
 // hardCapRedisKey returns the Redis key the edge-api budget gate reads.
 //
-// Cache invalidation strategy (per AUDIT Section D.5 risk callout):
-//   - Control-plane WRITES the key on every SetBudget call (push-on-write).
-//   - Edge-api READS with a TTL (ttl ~30s) so a missed publish heals quickly.
+// Cache invalidation strategy:
+//   - Control-plane WRITES the key on every SetBudget call (push-on-write) and
+//     DELETES it on DeleteBudget, so Redis follows the row.
 //   - The key encodes only hard_cap (the only value the hot-path needs); soft
 //     cap stays control-plane-internal and is consulted by the alert cron.
 //
-// This is "fast path eventually consistent": worst-case staleness window is
-// ttl + propagation; under that window a workspace whose owner just lowered
-// the cap may briefly remain enabled. Acceptable for v1.1 (no SLA on cap
-// changes propagation); Phase 18 may add Redis pub/sub for sub-second.
+// Worst-case staleness is one publish: a workspace whose owner just lowered the
+// cap keeps the old one until the SET lands. That is bounded by a round trip,
+// not by a clock.
 func hardCapRedisKey(workspaceID uuid.UUID) string {
-	return fmt.Sprintf("budget:hard_cap:{%s}", workspaceID.String())
+	return budgetkeys.HardCap(workspaceID.String())
 }
 
-// hardCapRedisTTL is the read-through TTL the edge-api gate observes. The
-// control-plane SETs the key on every upsert with this TTL so a missed
-// invalidate heals on the next read.
-const hardCapRedisTTL = 30 * time.Second
+// hardCapRedisTTL is how long a published cap survives without being restated.
+//
+// The history matters, because a TTL here is what caused half of issue #1651 and
+// is now what fixes a different half. It used to be thirty seconds, under a
+// comment claiming the edge-api gate would read through on a miss. The gate does
+// no such thing: a missing key reads as "no budget configured" and the gate
+// becomes pass-through, so a cap stopped being enforced thirty seconds after the
+// customer typed it and NOTHING ever wrote it again.
+//
+// What makes a TTL correct now is that something does write it again. The
+// spend-alert pass walks every workspace with a budget every sixty seconds and
+// restates its cap, so a live cap is refreshed 1,440 times before this expires,
+// and an expiry can only be reached by a key nothing is refreshing. That is
+// exactly the key that should not exist:
+//
+//   - The publish on upsert and the removal on delete are unordered, so a
+//     delayed publish can land after a removal.
+//   - A DeleteBudget whose row delete succeeds and whose Redis DEL fails leaves
+//     the key behind, and the pass cannot clear it because the pass lists
+//     budgets that exist. Without an expiry a customer stays blocked by a cap
+//     they removed until the next deploy empties Redis, which is not a repair.
+//
+// So the TTL is the orphan collector, and the pass is what keeps every real cap
+// alive well inside it. The two are one mechanism: if the pass is ever removed
+// or its interval approaches this value, this TTL must go with it, or caps start
+// silently expiring again. The 1,440x margin is the safety factor on that
+// coupling, and it means the pass has to fail continuously for a day before any
+// cap lapses.
+//
+// A durable tombstone or outbox on the delete path is the complete answer, and
+// it is a bigger artefact than the window it closes: with this TTL an orphan
+// lives at most a day rather than forever.
+const hardCapRedisTTL = 24 * time.Hour
 
 // GetBudget returns the workspace budget or (nil, nil) when none is set.
 func (s *Service) GetBudget(ctx context.Context, workspaceID uuid.UUID) (*Budget, error) {
@@ -209,9 +239,9 @@ func (s *Service) GetBudget(ctx context.Context, workspaceID uuid.UUID) (*Budget
 }
 
 // SetBudget upserts the workspace's soft + hard caps (math/big.Int).
-// Validates hard >= soft via *big.Int.Cmp. On success, broadcasts the new
-// hard_cap value to Redis (key: budget:hard_cap:{ws}) so the edge-api gate
-// invalidates its cache within ttl.
+// Validates hard >= soft via *big.Int.Cmp. On success, publishes the new
+// hard_cap value to Redis (key: budget:hard_cap:{ws}), which is the only place
+// the edge-api gate can read it.
 func (s *Service) SetBudget(ctx context.Context, in SetBudgetInput) (*Budget, error) {
 	if s.workspaceCtx == nil {
 		return nil, fmt.Errorf("budgets: workspace surface not wired")
@@ -235,8 +265,10 @@ func (s *Service) SetBudget(ctx context.Context, in SetBudgetInput) (*Budget, er
 		return nil, fmt.Errorf("budgets: upsert budget: %w", err)
 	}
 
-	// Broadcast new hard_cap to edge-api cache. Redis errors are logged but
-	// non-fatal: edge-api will read-through within ttl on its next miss.
+	// Publish the new hard_cap for the edge-api gate. A Redis error is logged
+	// and non-fatal, but it is not harmless: until the next publish, or until
+	// the settlement counter republishes the cap while rebuilding this
+	// workspace's period keys, the gate sees no cap and stays pass-through.
 	if s.workspaceCtx.redis != nil {
 		key := hardCapRedisKey(in.WorkspaceID)
 		if rerr := s.workspaceCtx.redis.Set(ctx, key, b.HardCap.String(), hardCapRedisTTL).Err(); rerr != nil {

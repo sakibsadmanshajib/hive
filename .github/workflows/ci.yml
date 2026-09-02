@@ -326,6 +326,8 @@ jobs:
             path: ./apps/edge-api
           - module: control-plane
             path: ./apps/control-plane
+          - module: budgetkeys
+            path: ./packages/budgetkeys
           - module: storage
             path: ./packages/storage
           - module: sanitize

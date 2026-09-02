@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/docs"
 	edgeagentsched "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/agentsched"
@@ -578,7 +579,7 @@ func main() {
 	// resolver, then enforces the hard-cap stored in Redis (key written by the
 	// control-plane budgets service on every Set/DeleteBudget call). Soft-cap
 	// crossings are non-blocking but emit `budget_soft_cap_crossed_total`.
-	budgetGate, err := buildBudgetGate(authzClient)
+	budgetGate, err := buildBudgetGate(authzClient, edgeMetrics)
 	if err != nil {
 		log.Fatalf("failed to initialize budget gate: %v", err)
 	}
@@ -1254,22 +1255,32 @@ func resolveLiteLLMMasterKey() string {
 	return k
 }
 
+// budgetGateFailOpenMetric adapts the edge metrics counter to the gate's
+// FailOpenMetric seam. The workspace id is dropped on purpose: it rides in the
+// gate's WARN line instead, since one metric series per workspace would be
+// unbounded cardinality on the hot path.
+type budgetGateFailOpenMetric struct {
+	counter prometheus.Counter
+}
+
+func (m budgetGateFailOpenMetric) Inc(string) { m.counter.Inc() }
+
 // buildBudgetGate constructs the Phase 14 BudgetGate middleware. The gate
 // resolves the workspace by hashing the bearer token through the authz client,
 // then enforces the hard cap from Redis (key written by the control-plane
 // budgets service on every Set/DeleteBudget). Soft-cap crossings increment
 // the `budget_soft_cap_crossed_total` counter without blocking the request.
 //
-// Cache invalidation strategy: the control-plane PUSHES the latest hard_cap
-// to Redis on every upsert; the gate READS with a brief TTL so missed pushes
-// heal on the next read. The MTD spend counter is INCRed inline by the
-// control-plane settlement path keyed by `budget:mtd_spend:{ws}:YYYY-MM`.
-//
-// That last sentence describes the design, not the code: no writer for that key
-// exists anywhere in this repository, so the gate reads zero spend and never
-// blocks. Tracked in issue #1651, with the unit requirement (subunits, not
-// credits) stated in limits/budget_gate.go's package comment.
-func buildBudgetGate(authzClient *authz.Client) (*limits.BudgetGate, error) {
+// Cache invalidation strategy: the control-plane PUSHES the latest hard_cap to
+// Redis on every upsert, with no expiry, and rewrites the MTD spend counter
+// (`budget:mtd_spend:{ws}:YYYY-MM`, BDT subunits) on every settled charge from
+// budgets/mtd_counter.go. Both writers landed with issue #1651; before that the
+// counter had no writer at all and the cap expired thirty seconds after it was
+// saved, so this gate read zero spend against no cap and never blocked
+// anything. Both keys are also restated once a minute by the control-plane
+// spend-alert pass, which is what puts them back after a deploy starts Redis
+// empty.
+func buildBudgetGate(authzClient *authz.Client, edgeMetrics *proxy.EdgeMetrics) (*limits.BudgetGate, error) {
 	opt, err := redis.ParseURL(resolveRedisURL())
 	if err != nil {
 		return nil, fmt.Errorf("budget gate: parse redis URL: %w", err)
@@ -1301,6 +1312,11 @@ func buildBudgetGate(authzClient *authz.Client) (*limits.BudgetGate, error) {
 		// control-plane spendalerts cron. Phase 18 may surface a thin
 		// internal endpoint for inline soft-cap checks if hot-path needs it.
 		SoftCapResolver: nil,
+		// The gate fails open when it cannot read the cap or the counter, so
+		// this counter is the only way a sustained bypass is visible. It was a
+		// noop until issue #1651: the seam existed, nothing was ever wired to
+		// it, and a fail-open left one log line among many.
+		FailOpenMetric: budgetGateFailOpenMetric{counter: edgeMetrics.BudgetGateFailOpenTotal},
 	})
 }
 
