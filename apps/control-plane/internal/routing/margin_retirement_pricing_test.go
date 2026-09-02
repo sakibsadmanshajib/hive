@@ -346,15 +346,27 @@ func TestMarginRetirementRepricesTheNonTokenAliases(t *testing.T) {
 }
 
 // TestMarginRetirementLeavesTheFreeAliasesAlone is the negative half of the
-// sweep. hive-free and hive-free-tools are owner-set service prices on
-// zero-cost upstreams, not cost-derived figures, and dividing them by 1.4 would
-// both invent a price nobody set and break the halving relation
+// sweep, and the half worth reading. Every alias below carries a price that is
+// not derived from what its route costs, so there is no margin in it to remove:
+// dividing one by 1.4 would invent a price nobody set. hive-free and
+// hive-free-tools would additionally break the halving relation
 // free_alias_pricing_test.go checks.
 func TestMarginRetirementLeavesTheFreeAliasesAlone(t *testing.T) {
 	sql := stripSQLComments(marginRetirementMigration(t))
 	written := updateAssignments(sql, "public.model_aliases", "alias_id")
 
-	for _, alias := range []string{"hive-free", "hive-free-tools", "hive-embedding-default", "hive-web-search", "hive-web-fetch"} {
+	for _, alias := range []string{
+		"hive-free", "hive-free-tools", "hive-embedding-default", "hive-web-search", "hive-web-fetch",
+		// The three text aliases that left Groq for a free OpenRouter model on
+		// 2026-08-23 and were deliberately not repriced when they did. Their
+		// price is no longer the list rate of anything, so removing a margin
+		// from it would be a 29 percent price cut on a zero-cost upstream
+		// rather than the retirement of an inference margin. The migration
+		// header carries the full reasoning, and
+		// TestHiveFastIsPinnedToOneRouteAtItsUnchangedPrice is the DB-level
+		// guard that stops this being changed by accident.
+		"hive-small", "hive-medium", "hive-fast",
+	} {
 		if assigns, ok := written[alias]; ok {
 			for column := range assigns {
 				if strings.HasSuffix(column, "_price_credits") {
@@ -384,9 +396,6 @@ var fxFeeDefaultRe = regexp.MustCompile(`(?is)alter\s+table\s+public\.fx_snapsho
 // derivation says.
 func TestMarginRetirementPricesAreAllSmaller(t *testing.T) {
 	previous := map[string]map[string]int64{
-		"hive-small":        {"input_price_credits": 105000000, "output_price_credits": 420000000},
-		"hive-medium":       {"input_price_credits": 210000000, "output_price_credits": 840000000},
-		"hive-fast":         {"input_price_credits": 105000000, "output_price_credits": 420000000},
 		"hive-default":      {"input_price_credits": 89460000, "output_price_credits": 178920000, "cache_read_price_credits": 2982000},
 		"deepseek-v4-flash": {"input_price_credits": 89460000, "output_price_credits": 178920000, "cache_read_price_credits": 2982000, "cache_write_price_credits": 89460000},
 		"deepseek-v4-pro":   {"input_price_credits": 1570800000, "output_price_credits": 4712400000, "cache_read_price_credits": 52360000, "cache_write_price_credits": 1570800000},

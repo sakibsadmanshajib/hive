@@ -49,11 +49,11 @@ AFTER (20260902_02_retire_alias_margin_factor.sql applied)
     hive-auto          (null)        (null)        (null)       (null)
     hive-default       63900000      127800000     2130000      0
     hive-embedding-default 10000     0             (null)       (null)
-    hive-fast          75000000      300000000     10000        40000
+    hive-fast          105000000     420000000     10000        40000
     hive-free          1000000       4000000       0            0
     hive-free-tools    1000000       4000000       0            0
-    hive-medium        150000000     600000000     0            0
-    hive-small         75000000      300000000     0            0
+    hive-medium        210000000     840000000     0            0
+    hive-small         105000000     420000000     0            0
     hive-stt           0             30833333334   (null)       (null)
     hive-tts           0             22000000000   (null)       (null)
     hive-web-fetch     0             200000000000  (null)       (null)
@@ -68,11 +68,13 @@ Magnitude check, every repriced figure: before / after = 1.4 exactly.
     1570800000 / 1122000000 = 1.4
     4712400000 / 3366000000 = 1.4
     52360000   / 37400000   = 1.4
-    105000000  / 75000000   = 1.4
-    420000000  / 300000000  = 1.4
-    210000000  / 150000000  = 1.4
-    840000000  / 600000000  = 1.4
     30800000000 / 22000000000 = 1.4
+
+hive-small, hive-medium and hive-fast are unchanged above, deliberately. They
+carry a 1.4-derived figure but they left Groq for a free OpenRouter model on
+2026-08-23 and were not repriced when they did, so their price is no longer the
+list rate of anything. The migration header carries the reasoning; section 5
+below records how the first cut of this change got it wrong.
 
 hive-stt is the one row whose ratio is not exactly 1.4 (43166670000 /
 30833333334 = 1.39999999...), because the old figure was ceiled at the
@@ -163,17 +165,31 @@ TestOneDollarOfBatchCostSettlesAtOneBillionCredits (batch executor).
 Two defects found by the database and security passes over this branch's own
 diff, both fixed in the second commit and re-verified on a fresh throwaway:
 
-1. The migration's UPDATE guards used `<>` on two nullable cache columns.
+1. The first cut repriced `hive-small`, `hive-medium` and `hive-fast` at
+   Groq's list rate for gpt-oss-20b and gpt-oss-120b. All three left Groq for
+   `openrouter/dots-studio/dots-3-note-preview:free` on 2026-08-23
+   (20260823_21) and were deliberately not repriced when they did; their Groq
+   routes are `health_state = 'disabled'` today. Removing 1.4 from a price with
+   no cost basis is not the retirement of an inference margin, it is a 29
+   percent price cut on three customer-facing aliases whose upstream costs
+   zero, and the DERIVE rows would have documented a derivation against a
+   disabled route. They are out of scope now, on the hive-free precedent.
+   Caught by `TestHiveFastIsPinnedToOneRouteAtItsUnchangedPrice`, a DB-backed
+   guard that runs only in CI, which is exactly what it was written for.
+
+2. The migration's UPDATE guards used `<>` on two nullable cache columns.
    `NULL <> 2130000` evaluates to NULL, an OR chain that evaluates to NULL is
    not true, and the row would have been skipped in silence while keeping its
    old price. Now `IS DISTINCT FROM` throughout.
-2. `usdCentsToLocalPaisa` accepted any parseable rate, including zero and
+3. `usdCentsToLocalPaisa` accepted any parseable rate, including zero and
    negative ones. It now refuses a non-positive rate rather than pricing a
    purchase at nothing or at a negative amount, neither of which looks like a
    failure once it is a row.
 
 Re-verified: the whole chain re-applied from an empty database (133 of 133
-migrations executed) and the catalog read back at the same figures.
+migrations executed), the catalog read back at the figures above, and the
+DB-backed routing suite run against that database with ROUTING_TEST_DB_URL set,
+which is the suite CI failed on. It passes.
 
 
 ## 6. Test runs

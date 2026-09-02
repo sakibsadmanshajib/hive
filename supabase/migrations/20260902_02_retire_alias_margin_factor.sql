@@ -42,12 +42,6 @@
 --   that test red.
 --
 -- DERIVE| alias_id | route_id | provider_model | field | usd_per_million | credits
--- DERIVE| hive-small | route-groq-small | groq/openai/gpt-oss-20b | in | 0.075 | 75000000
--- DERIVE| hive-small | route-groq-small | groq/openai/gpt-oss-20b | out | 0.30 | 300000000
--- DERIVE| hive-medium | route-groq-medium | groq/openai/gpt-oss-120b | in | 0.15 | 150000000
--- DERIVE| hive-medium | route-groq-medium | groq/openai/gpt-oss-120b | out | 0.60 | 600000000
--- DERIVE| hive-fast | route-groq-fast | groq/openai/gpt-oss-20b | in | 0.075 | 75000000
--- DERIVE| hive-fast | route-groq-fast | groq/openai/gpt-oss-20b | out | 0.30 | 300000000
 -- DERIVE| hive-default | route-deepseek-v4-flash-default | openrouter/~deepseek/deepseek-v4-flash-latest | in | 0.0639 | 63900000
 -- DERIVE| hive-default | route-deepseek-v4-flash-default | openrouter/~deepseek/deepseek-v4-flash-latest | out | 0.1278 | 127800000
 -- DERIVE| hive-default | route-deepseek-v4-flash-default | openrouter/~deepseek/deepseek-v4-flash-latest | cache_read | 0.00213 | 2130000
@@ -62,12 +56,6 @@
 --
 --   Longhand, for a reader rather than the parser. Every product below is
 --   exact; nothing here needs the ceiling.
---     hive-small        in  0.075   x 1e9 =    75000000     (was   105000000)
---     hive-small        out 0.300   x 1e9 =   300000000     (was   420000000)
---     hive-medium       in  0.150   x 1e9 =   150000000     (was   210000000)
---     hive-medium       out 0.600   x 1e9 =   600000000     (was   840000000)
---     hive-fast         in  0.075   x 1e9 =    75000000     (was   105000000)
---     hive-fast         out 0.300   x 1e9 =   300000000     (was   420000000)
 --     hive-default      in  0.0639  x 1e9 =    63900000     (was    89460000)
 --     hive-default      out 0.1278  x 1e9 =   127800000     (was   178920000)
 --     hive-default      cr  0.00213 x 1e9 =     2130000     (was     2982000)
@@ -122,6 +110,34 @@
 --                                free_alias_pricing_test.go. Dividing these by
 --                                1.4 would break that guard and answer a
 --                                question nobody asked.
+--   hive-small, hive-medium, hive-fast
+--                                These three carry a 1.4-derived figure and are
+--                                still NOT repriced, which is the one call in
+--                                this file that needed making rather than
+--                                following. All three left Groq for a free
+--                                OpenRouter model on 2026-08-23
+--                                (20260823_21_groq_text_routes_to_openrouter_free.sql)
+--                                and were deliberately not repriced when they
+--                                did: their Groq routes are health_state
+--                                'disabled' today and every one of them serves
+--                                openrouter/dots-studio/dots-3-note-preview:free.
+--                                So their price is no longer the list rate of
+--                                anything. Dividing it by 1.4 would not remove
+--                                an inference margin, because there is no
+--                                inference cost under it to take a margin on;
+--                                it would cut the price of three customer-facing
+--                                aliases by 29 percent on an upstream that costs
+--                                zero, which is a product decision nobody made.
+--                                The hive-free precedent governs instead: a price
+--                                with no cost basis is an owner-set service
+--                                price and is left alone. Repricing them at
+--                                Groq's list rate would also have documented a
+--                                derivation against a route that is disabled,
+--                                which is a claim this file cannot support.
+--                                TestHiveFastIsPinnedToOneRouteAtItsUnchangedPrice
+--                                is the DB-level guard that says so, and it is
+--                                the reason this call was made deliberately
+--                                rather than by omission.
 --   hive-embedding-default       10000 credits per million is a placeholder
 --                                that predates the margin convention entirely
 --                                and is roughly four orders of magnitude below
@@ -176,30 +192,7 @@
 
 begin;
 
--- ─── 1. Groq text aliases ───────────────────────────────────────────────────
-
-update public.model_aliases
-   set input_price_credits  = 75000000,
-       output_price_credits = 300000000,
-       updated_at           = now()
- where alias_id = 'hive-small'
-   and (input_price_credits is distinct from 75000000 or output_price_credits is distinct from 300000000);
-
-update public.model_aliases
-   set input_price_credits  = 150000000,
-       output_price_credits = 600000000,
-       updated_at           = now()
- where alias_id = 'hive-medium'
-   and (input_price_credits is distinct from 150000000 or output_price_credits is distinct from 600000000);
-
-update public.model_aliases
-   set input_price_credits  = 75000000,
-       output_price_credits = 300000000,
-       updated_at           = now()
- where alias_id = 'hive-fast'
-   and (input_price_credits is distinct from 75000000 or output_price_credits is distinct from 300000000);
-
--- ─── 2. DeepSeek aliases, and hive-default which serves the flash model ─────
+-- ─── 1. DeepSeek aliases, and hive-default which serves the flash model ─────
 
 update public.model_aliases
    set input_price_credits      = 63900000,
@@ -235,7 +228,7 @@ update public.model_aliases
         or cache_read_price_credits is distinct from 37400000
         or cache_write_price_credits is distinct from 1122000000);
 
--- ─── 3. The two non-token aliases (display prices, per D-033) ───────────────
+-- ─── 2. The two non-token aliases (display prices, per D-033) ───────────────
 
 update public.model_aliases
    set output_price_credits = 22000000000,
@@ -249,7 +242,7 @@ update public.model_aliases
  where alias_id = 'hive-stt'
    and output_price_credits is distinct from 30833333334;
 
--- ─── 4. The FX fee default drops to 2.5 percent (D-066) ─────────────────────
+-- ─── 3. The FX fee default drops to 2.5 percent (D-066) ─────────────────────
 --
 -- The applied fee lives in Go (payments.FXFeeRate, read by fx.go), and this
 -- default is what a row written by anything else would carry. They are moved
