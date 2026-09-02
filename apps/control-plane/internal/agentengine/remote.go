@@ -66,7 +66,7 @@ func (r *Remote) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 	var out struct {
 		SessionRef string `json:"session_ref"`
 	}
-	err := r.post(ctx, "/launch", map[string]any{
+	body := map[string]any{
 		"id":           t.ID,
 		"tenant_id":    t.TenantID,
 		"user_id":      t.UserID,
@@ -77,12 +77,20 @@ func (r *Remote) Launch(ctx context.Context, t agenttask.Task) (string, error) {
 		// socket the internal token already authenticates, never a network
 		// interface, and is never logged on either side.
 		"llm_api_key": t.LLMAPIKey,
-		// The person's own attached documents (issue #1065). The launcher
-		// writes them into the sandbox's working directory before the
-		// conversation starts; nothing else can, because the sandbox holds no
-		// Hive credential and has no route to the storage they came from.
-		"attachments": launchAttachments(t.Attachments),
-	}, &out)
+	}
+	// The person's own attached documents (issue #1065). The launcher writes
+	// them into the sandbox's working directory before the conversation
+	// starts; nothing else can, because the sandbox holds no Hive credential
+	// and has no route to the storage they came from.
+	//
+	// The key is added rather than always present: a map entry holding a nil
+	// slice marshals to `"attachments": null`, which is a key an older
+	// launcher would then see on every launch. Omitting it keeps the common
+	// path byte for byte the body it always was.
+	if attachments := launchAttachments(t.Attachments); len(attachments) > 0 {
+		body["attachments"] = attachments
+	}
+	err := r.post(ctx, "/launch", body, &out)
 	if err != nil {
 		return "", err
 	}

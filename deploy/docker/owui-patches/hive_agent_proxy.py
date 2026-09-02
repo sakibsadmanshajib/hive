@@ -66,20 +66,25 @@ router = APIRouter()
 UPSTREAM_TIMEOUT_SECONDS = 30
 
 # Bodies here are a pack name, a goal, and since issue #1065 the text of the
-# documents the person attached in the composer. edge-api applies its own limit
-# on the create route (1 MiB of body over a 256 KiB cap on the attachment text);
-# this one has to clear edge-api's or a legal request would be refused here with
-# a message about the description being too long. It bounds what is forwarded,
-# not what is buffered: `await request.body()` has already read the whole body
-# by the time the check runs, which was true before this number changed and is
-# uvicorn's limit to enforce rather than this handler's.
-MAX_REQUEST_BODY_BYTES = 1024 * 1024
-
+# documents the person attached in the composer.
+#
+# The three numbers below bound what is forwarded, not what is buffered:
+# `await request.body()` has already read the whole body by the time the check
+# runs, which was true before these numbers changed and is uvicorn's limit to
+# enforce rather than this handler's.
+#
 # Kept in step with maxAttachments and maxAttachmentBytes in
 # apps/edge-api/internal/agenttask/handler.go, which is where the refusal is
 # enforced. This copy is a shape check on a rebuilt body, not a second policy.
 MAX_ATTACHMENTS = 5
 MAX_ATTACHMENT_TOTAL_BYTES = 256 * 1024
+
+# Eight times the content cap, because JSON escaping is what decides the wire
+# size: a control character encodes as \uXXXX, six bytes for one. Same
+# derivation as maxCreateBodyBytes in edge-api's handler, and it has to clear
+# edge-api's or a legal request would be refused here with a message about the
+# description being too long.
+MAX_REQUEST_BODY_BYTES = 8 * MAX_ATTACHMENT_TOTAL_BYTES
 
 # The header edge-api reads the per-user token from. Must match
 # `UpstreamAuthHeader` in apps/edge-api/internal/auth/owui_unwrap.go.

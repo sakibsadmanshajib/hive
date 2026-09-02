@@ -154,17 +154,20 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
-	t.Run("a body one byte over the 1 MiB cap is rejected", func(t *testing.T) {
+	t.Run("a body over the launch cap is rejected", func(t *testing.T) {
 		// A big string value padded to push the whole body past the
-		// MaxBytesReader(..., 1<<20) limit decode() enforces.
-		pad := strings.Repeat("a", 1<<20)
+		// MaxBytesReader(..., 2<<20) limit decode() enforces. The cap moved
+		// from 1 MiB to 2 MiB for issue #1065: a launch body now carries the
+		// person's attached documents, capped at 256 KiB of text upstream,
+		// and JSON escaping of a control character costs six bytes for one.
+		pad := strings.Repeat("a", 2<<20)
 		body := `{"pack":"` + pad + `"}`
 		req := httptest.NewRequest(http.MethodPost, "/launch", strings.NewReader(body))
 		rec := httptest.NewRecorder()
 
 		var got launchRequest
 		if ok := decode(rec, req, &got); ok {
-			t.Fatal("expected a body over the 1 MiB cap to be rejected")
+			t.Fatal("expected a body over the launch cap to be rejected")
 		}
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d", rec.Code)

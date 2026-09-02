@@ -65,6 +65,8 @@ export type CoworkAttachmentResult =
 export const isCoworkAttachable = (file: ComposerFile | null | undefined): boolean =>
 	file?.type === 'file' || file?.type === 'text';
 
+const byteLength = (value: string): number => new TextEncoder().encode(value).length;
+
 /**
  * Reduce an uploaded file's name to a bare file name, or return '' for
  * anything that is not one. The launcher refuses the same shapes, being the
@@ -79,22 +81,28 @@ export const attachmentFileName = (raw: string | null | undefined): string => {
 	if (name === '' || name === '.' || name === '..') {
 		return '';
 	}
-	if (name.length > 255) {
+	// UTF-8 bytes, not UTF-16 code units, because that is what the launcher
+	// measures. A hundred four-byte characters are 100 units and 400 bytes:
+	// counting units here would accept a name the backend then refuses, after
+	// the composer has already been cleared.
+	if (byteLength(name) > 255) {
 		return '';
 	}
 	if (name.includes('/') || name.includes('\\')) {
 		return '';
 	}
 	for (let i = 0; i < name.length; i += 1) {
-		// Control characters, NUL included, are not file names.
-		if (name.charCodeAt(i) < 0x20) {
+		// Control characters, NUL and DEL included, are not file names. DEL is
+		// listed explicitly because it sits above the C0 range and the engine
+		// refuses it too; leaving it out here would be the same
+		// accepted-then-refused split the byte count above closes.
+		const code = name.charCodeAt(i);
+		if (code < 0x20 || code === 0x7f) {
 			return '';
 		}
 	}
 	return name;
 };
-
-const byteLength = (value: string): number => new TextEncoder().encode(value).length;
 
 /**
  * Build the attachment list for a run, reading each file's extracted text.

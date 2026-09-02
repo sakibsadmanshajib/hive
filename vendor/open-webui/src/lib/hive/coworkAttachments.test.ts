@@ -47,6 +47,21 @@ describe('attachmentFileName', () => {
 		}
 	});
 
+	// The engine measures the name in UTF-8 bytes and refuses DEL as well as
+	// the C0 range. A browser check that disagreed would accept a name the
+	// backend then refuses, after the composer has already been cleared, which
+	// costs the person their message for no reason they can see.
+	it('measures the name in UTF-8 bytes, the way the engine does', () => {
+		// 100 four-byte characters: 100 UTF-16 code units, 400 UTF-8 bytes.
+		expect(attachmentFileName('\u{1F642}'.repeat(100))).toBe('');
+		// Comfortably under either count, and kept.
+		expect(attachmentFileName('\u{1F642}.txt')).toBe('\u{1F642}.txt');
+	});
+
+	it('refuses DEL, which sits above the C0 range', () => {
+		expect(attachmentFileName('a\u007fb.txt')).toBe('');
+	});
+
 	it('refuses control characters and over-long names', () => {
 		expect(attachmentFileName('a\tb.txt')).toBe('');
 		expect(attachmentFileName('a\nb.txt')).toBe('');

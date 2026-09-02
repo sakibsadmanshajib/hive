@@ -172,10 +172,16 @@ const (
 	maxAttachmentBytes = 256 << 10
 	// maxAttachmentNameBytes matches what a POSIX file name can be.
 	maxAttachmentNameBytes = 255
-	// maxCreateBodyBytes has to clear maxAttachmentBytes plus JSON escaping
-	// with room to spare, or a legal attachment would come back as malformed
-	// JSON. It matches the launcher's own /launch reader.
-	maxCreateBodyBytes = 1 << 20
+	// maxCreateBodyBytes is derived from the content cap rather than picked,
+	// because JSON escaping is what decides how much wire a legal attachment
+	// takes. A control character encodes as \uXXXX, six bytes for one, so the
+	// worst case is six times maxAttachmentBytes; eight leaves room for the
+	// names, the pack, the instructions and the quoting around all of it.
+	//
+	// Getting this wrong is not a size error, it is a wrong error: a legal
+	// attachment would come back as "invalid request body", and the person
+	// would read a malformed-JSON refusal for a document that was fine.
+	maxCreateBodyBytes = 8 * maxAttachmentBytes
 )
 
 // validateAttachments refuses anything the launcher would refuse, before a

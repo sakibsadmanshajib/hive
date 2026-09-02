@@ -220,7 +220,9 @@ func TestRemoteLaunchOmitsAttachmentsWhenThereAreNone(t *testing.T) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatalf("decode launch body: %v", err)
 	}
-	if body["attachments"] != nil {
+	// Key presence, not a nil value: `"attachments": null` and an absent key
+	// both decode to nil, and only the second is what an older launcher sees.
+	if _, ok := body["attachments"]; ok {
 		t.Fatalf("launch body carried attachments when the task had none: %s", raw)
 	}
 }

@@ -630,7 +630,13 @@ func writeSessionErr(w http.ResponseWriter, err error) {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(v); err != nil {
+	// 2 MiB, not 1: a launch body carries the person's attached documents
+	// since issue #1065, capped at 256 KiB of text by edge-api, and JSON
+	// escaping of a control character costs six bytes for one. Kept in step
+	// with maxCreateBodyBytes in apps/edge-api/internal/agenttask/handler.go
+	// and maxBodyBytes in apps/control-plane/internal/agenttask/http.go: a
+	// body one hop accepts must not be malformed JSON at the next.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(v); err != nil {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 		return false
 	}

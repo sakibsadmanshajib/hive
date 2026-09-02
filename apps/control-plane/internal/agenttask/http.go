@@ -47,10 +47,13 @@ const internalPrefix = "/internal/agent-tasks/"
 // headroom than a bare pack name; other bodies on this handler (cancel) send
 // none at all.
 // Raised from 64 KiB for issue #1065: a create request now carries the
-// person's attached documents inline, capped at 256 KiB of text by edge-api,
-// and JSON escaping sits on top of that. Matches the launcher's own /launch
-// reader, which is the next hop.
-const maxBodyBytes = 1 << 20 // 1 MiB
+// person's attached documents inline, capped at 256 KiB of text by edge-api.
+// JSON escaping sits on top of that and decides the real number: a control
+// character encodes as \uXXXX, so the worst case is six times the content cap.
+// This is edge-api's own maxCreateBodyBytes and the launcher's /launch reader,
+// and the three have to agree or a request that one hop accepts is malformed
+// JSON at the next.
+const maxBodyBytes = 2 << 20 // 2 MiB, 8x the 256 KiB attachment content cap
 
 func (h *Handler) serveInternal(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, internalPrefix), "/")
