@@ -124,6 +124,11 @@ func NewEventSyncer(repo Repository, src EventSource, cfg PollerConfig) *EventSy
 // the worst case a person waits is one of each.
 const DefaultEventSyncInterval = 2 * time.Second
 
+// eventPullTimeout bounds one read of a session's events and workspace
+// listing. See pullSessionEvents for why the transport's own timeout is not a
+// bound this code can rely on.
+const eventPullTimeout = 10 * time.Second
+
 // RunOnce performs exactly one sync pass over every active task plus the
 // tracked tasks that went terminal since the last pass. The returned error,
 // when non-nil, is loop's sole backoff signal and means ListActive itself
@@ -300,6 +305,21 @@ func (s *EventSyncer) pullTaskEvents(ctx context.Context, t Task, offset int, sk
 // above can use it too.
 func pullSessionEvents(ctx context.Context, src EventSource, logger *slog.Logger, t Task, offset int, skipFiles map[string]bool) (events []TaskEvent, next int) {
 	next = offset
+
+	// Bounded here, at the one place every caller of a session read goes
+	// through, because the client underneath has no bound worth the name:
+	// agentengine.Remote's HTTP timeout is five minutes, sized for Launch,
+	// which legitimately blocks while a cold sandbox starts. Reading what a
+	// session has done is not that, and this call now sits inside the status
+	// poller's own pass, which walks active tasks serially: unbounded, one
+	// wedged sandbox would hold every other tenant's status transition behind
+	// it for five minutes, which is precisely the shared-loop failure the
+	// poller's per-task error scoping was written to end (see RunOnce). A
+	// caller with a tighter budget still wins, since the earlier deadline is
+	// the one that fires: Service.Cancel sets three seconds, because there a
+	// person is waiting for an answer.
+	ctx, done := context.WithTimeout(ctx, eventPullTimeout)
+	defer done()
 
 	sandboxEvents, err := src.Events(ctx, t.EngineSessionRef)
 	if err != nil {

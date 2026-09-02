@@ -542,3 +542,38 @@ func countKind(events []TaskEvent, kind TaskEventKind) int {
 	}
 	return n
 }
+
+func TestEventSyncer_BoundsEverySessionRead(t *testing.T) {
+	// agentengine.Remote's HTTP client allows five minutes, sized for Launch.
+	// The flush now runs inside the status poller's pass, which walks active
+	// tasks serially, so an unbounded read would let one wedged sandbox hold
+	// every other tenant's terminal transition behind it.
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	var eventsDeadline, filesDeadline time.Duration
+	src := &fakeEventSource{
+		events: func(ctx context.Context, _ string) ([]SandboxEvent, error) {
+			if deadline, ok := ctx.Deadline(); ok {
+				eventsDeadline = time.Until(deadline)
+			}
+			return nil, nil
+		},
+		files: func(ctx context.Context, _ string) ([]WorkspaceFile, error) {
+			if deadline, ok := ctx.Deadline(); ok {
+				filesDeadline = time.Until(deadline)
+			}
+			return nil, nil
+		},
+	}
+	if err := NewEventSyncer(repo, src, PollerConfig{}).RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if eventsDeadline <= 0 || eventsDeadline > eventPullTimeout {
+		t.Fatalf("events read carried no usable deadline: %v", eventsDeadline)
+	}
+	if filesDeadline <= 0 || filesDeadline > eventPullTimeout {
+		t.Fatalf("workspace listing carried no usable deadline: %v", filesDeadline)
+	}
+}
