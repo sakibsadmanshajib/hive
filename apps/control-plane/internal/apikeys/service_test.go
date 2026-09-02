@@ -33,6 +33,10 @@ type stubRepo struct {
 	// instead of the normal lookup, simulating an infrastructural failure
 	// (pool checkout timeout, connection error) rather than a key verdict.
 	forceGetPolicyErr error
+
+	// forceBudgetWindowErr, when non-nil, is returned by GetBudgetWindow,
+	// modelling the transient read failure a shared pool produces under load.
+	forceBudgetWindowErr error
 }
 
 func newStubRepo() *stubRepo {
@@ -256,6 +260,9 @@ func (r *stubRepo) GetPolicyByTokenHash(_ context.Context, tokenHash string) (AP
 }
 
 func (r *stubRepo) GetBudgetWindow(_ context.Context, apiKeyID uuid.UUID, budgetKind string, at time.Time) (BudgetWindow, error) {
+	if r.forceBudgetWindowErr != nil {
+		return BudgetWindow{}, r.forceBudgetWindowErr
+	}
 	windowStart := time.Time{}
 	if budgetKind == "monthly" {
 		windowStart = time.Date(at.Year(), at.Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -1343,5 +1350,224 @@ func TestKeyViewHidesALimitThatIsNotEnforced(t *testing.T) {
 		if view.BudgetLimitCredits == nil || *view.BudgetLimitCredits != limit {
 			t.Fatalf("an enforced %q cap must be reported unchanged, got %#v", kind, view.BudgetLimitCredits)
 		}
+	}
+}
+
+// TestKeyViewBudgetSpendIsTheEnforcedWindowNotLifetimeSpend pins the counter a
+// percentage-of-cap surface has to divide (issue #1683).
+//
+// The two counters are written by different paths. RecordUsageFinalization
+// writes api_key_usage_rollups on every settled request; only
+// ApplyReservationDelta writes api_key_budget_windows, and it returns early
+// while the budget kind is "none". Nothing backfills the window when a cap is
+// set later, so a key that spends while uncapped and is capped afterwards has
+// a large lifetime spend and an empty window, and edge-api's CheckAccess
+// (consumed + reserved + estimated > limit) serves its next request. A view
+// that reported the lifetime figure as the amount used against the cap would
+// paint that key as refused while the gateway was still serving it.
+func TestKeyViewBudgetSpendIsTheEnforcedWindowNotLifetimeSpend(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	ctx := context.Background()
+	accountID := uuid.New()
+	actorID := uuid.New()
+	now := time.Now()
+
+	created, err := svc.CreateKey(ctx, accountID, actorID, CreateKeyInput{Nickname: "capped-later"})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	keyID := created.Key.ID
+
+	// Uncapped spend. The rollup takes it; the budget window cannot, because
+	// ApplyReservationDelta returns early for a "none" budget kind.
+	if err := svc.RecordUsageFinalization(ctx, keyID, "hive-fast", 1000, 200, 0, 0, 900, now); err != nil {
+		t.Fatalf("RecordUsageFinalization: %v", err)
+	}
+	if err := svc.ApplyReservationDelta(ctx, keyID, 0, 900, now); err != nil {
+		t.Fatalf("ApplyReservationDelta while uncapped: %v", err)
+	}
+
+	view, err := svc.GetKeyView(ctx, accountID, keyID)
+	if err != nil {
+		t.Fatalf("GetKeyView: %v", err)
+	}
+	if view.BudgetSpendCredits != nil {
+		t.Fatalf("expected no budget spend for an uncapped key, got %d", *view.BudgetSpendCredits)
+	}
+
+	limit := int64(500)
+	kind := "lifetime"
+	if _, err := svc.UpdatePolicy(ctx, accountID, actorID, keyID, UpdatePolicyInput{
+		BudgetKind:         &kind,
+		BudgetLimitCredits: &limit,
+	}); err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+
+	view, err = svc.GetKeyView(ctx, accountID, keyID)
+	if err != nil {
+		t.Fatalf("GetKeyView after capping: %v", err)
+	}
+	if view.SpendCredits != 900 {
+		t.Fatalf("expected the lifetime figure to keep the pre-cap spend, got %d", view.SpendCredits)
+	}
+	if view.BudgetSpendCredits == nil {
+		t.Fatalf("expected a budget spend figure once the key carries a cap, got nil")
+	}
+	// 900 against a 500 cap would read as 180 percent and refused. The window
+	// is empty, and the gateway agrees: it would serve this key's next request.
+	if *view.BudgetSpendCredits != 0 {
+		t.Fatalf("expected the enforced window to be empty for spend that predates the cap, got %d", *view.BudgetSpendCredits)
+	}
+
+	// A request made after the cap exists reaches the window, and reserved
+	// credits count towards the same total edge-api compares against.
+	if err := svc.ApplyReservationDelta(ctx, keyID, 0, 200, now); err != nil {
+		t.Fatalf("ApplyReservationDelta after capping: %v", err)
+	}
+	if err := svc.ApplyReservationDelta(ctx, keyID, 50, 0, now); err != nil {
+		t.Fatalf("ApplyReservationDelta (reservation): %v", err)
+	}
+
+	view, err = svc.GetKeyView(ctx, accountID, keyID)
+	if err != nil {
+		t.Fatalf("GetKeyView after post-cap usage: %v", err)
+	}
+	if view.BudgetSpendCredits == nil || *view.BudgetSpendCredits != 250 {
+		t.Fatalf("expected consumed 200 plus reserved 50, got %v", view.BudgetSpendCredits)
+	}
+
+	snapshot, err := svc.ResolveSnapshot(ctx, created.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+	if snapshot.BudgetConsumedCredits+snapshot.BudgetReservedCredits != *view.BudgetSpendCredits {
+		t.Fatalf(
+			"the view must report what enforcement reads: snapshot %d+%d, view %d",
+			snapshot.BudgetConsumedCredits,
+			snapshot.BudgetReservedCredits,
+			*view.BudgetSpendCredits,
+		)
+	}
+}
+
+// TestKeyViewBudgetSpendReadsTheKeysOwnWindowKind is the other half of the
+// guard above, which a lifetime fixture alone cannot provide.
+//
+// A lifetime window starts at the zero time whatever kind or clock is passed,
+// so hardcoding "lifetime" in place of policy.BudgetKind, or losing the .UTC()
+// on the clock, leaves every assertion in a lifetime-only test green. On a
+// monthly key the same edit reads a window_kind and window_start that
+// ApplyReservationDelta never writes for that key, so the bar reads zero
+// forever while the gateway refuses the request: issue #1683 pointed the other
+// way, and harder to notice. The snapshot cross-check at the end is what
+// catches it, because ResolveSnapshot derives its window from the policy's own
+// kind and its own clock, independently of the view.
+func TestKeyViewBudgetSpendReadsTheKeysOwnWindowKind(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	ctx := context.Background()
+	accountID := uuid.New()
+	actorID := uuid.New()
+	now := time.Now()
+
+	created, err := svc.CreateKey(ctx, accountID, actorID, CreateKeyInput{Nickname: "monthly-key"})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	keyID := created.Key.ID
+
+	limit := int64(1000)
+	kind := "monthly"
+	if _, err := svc.UpdatePolicy(ctx, accountID, actorID, keyID, UpdatePolicyInput{
+		BudgetKind:         &kind,
+		BudgetLimitCredits: &limit,
+	}); err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+
+	if err := svc.ApplyReservationDelta(ctx, keyID, 0, 200, now); err != nil {
+		t.Fatalf("ApplyReservationDelta: %v", err)
+	}
+	if err := svc.ApplyReservationDelta(ctx, keyID, 50, 0, now); err != nil {
+		t.Fatalf("ApplyReservationDelta (reservation): %v", err)
+	}
+
+	view, err := svc.GetKeyView(ctx, accountID, keyID)
+	if err != nil {
+		t.Fatalf("GetKeyView: %v", err)
+	}
+	if view.BudgetSpendCredits == nil || *view.BudgetSpendCredits != 250 {
+		t.Fatalf("expected this month's window to hold consumed 200 plus reserved 50, got %v", view.BudgetSpendCredits)
+	}
+
+	snapshot, err := svc.ResolveSnapshot(ctx, created.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+	if snapshot.BudgetConsumedCredits+snapshot.BudgetReservedCredits != *view.BudgetSpendCredits {
+		t.Fatalf(
+			"the view must read the same window enforcement reads: snapshot %d+%d, view %d",
+			snapshot.BudgetConsumedCredits,
+			snapshot.BudgetReservedCredits,
+			*view.BudgetSpendCredits,
+		)
+	}
+}
+
+// TestListKeyViewsSurvivesABudgetWindowReadFailure pins the rule that an
+// ornament on a row must not take down the page that manages the rows.
+//
+// handleListKeys turns any error out of ListKeyViews into a 500, the console's
+// getApiKeys throws on that, and ApiKeysPage has no catch around it, so a
+// transient failure on the read behind a usage bar would blank the page an
+// operator opens to revoke a leaked key. The list therefore degrades to the
+// null the field already means, and the console renders the cap with no
+// proportion beside it.
+func TestListKeyViewsSurvivesABudgetWindowReadFailure(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	ctx := context.Background()
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	created, err := svc.CreateKey(ctx, accountID, actorID, CreateKeyInput{Nickname: "still-revocable"})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	limit := int64(1000)
+	kind := "lifetime"
+	if _, err := svc.UpdatePolicy(ctx, accountID, actorID, created.Key.ID, UpdatePolicyInput{
+		BudgetKind:         &kind,
+		BudgetLimitCredits: &limit,
+	}); err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+
+	repo.forceBudgetWindowErr = errors.New("pool checkout timeout")
+
+	views, err := svc.ListKeyViews(ctx, accountID)
+	if err != nil {
+		t.Fatalf("a failed usage-bar read must not fail the list: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("expected the key to still be listed, got %d views", len(views))
+	}
+	if views[0].BudgetSpendCredits != nil {
+		t.Fatalf("expected a null proportion after a failed read, got %d", *views[0].BudgetSpendCredits)
+	}
+	if views[0].BudgetLimitCredits == nil || *views[0].BudgetLimitCredits != 1000 {
+		t.Fatalf("the cap itself must survive the failure, got %v", views[0].BudgetLimitCredits)
+	}
+
+	// The single-key path stays strict on purpose: one read for one caller,
+	// with no sibling rows to protect.
+	if _, err := svc.GetKeyView(ctx, accountID, created.Key.ID); err == nil {
+		t.Fatal("expected GetKeyView to report the read failure rather than hide it")
 	}
 }

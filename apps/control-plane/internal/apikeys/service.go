@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -94,7 +95,31 @@ func (s *Service) ListKeyViews(ctx context.Context, accountID uuid.UUID) ([]KeyV
 		if err != nil {
 			return nil, fmt.Errorf("apikeys: get lifetime spend: %w", err)
 		}
-		views = append(views, buildKeyView(key, policy, spend))
+		view := buildKeyView(key, policy, spend)
+		// One more per-key read, on top of the policy and lifetime-spend reads
+		// this loop already does, so three per row plus the list itself. A key
+		// list is a page of a customer's own keys and this is its only caller,
+		// so the row count is small; batch them if that stops being true, and
+		// note ListPolicies already exists for the policy read.
+		//
+		// Its failure is swallowed on purpose, and the rule is general rather
+		// than specific to this field: an ornament on a row must never be able
+		// to take down the page that manages the rows. handleListKeys turns any
+		// error out of here into a 500, getApiKeys throws on that, and
+		// ApiKeysPage has no catch around it, so a transient read failure on a
+		// usage bar would blank the page an operator opens to revoke a leaked
+		// key. Every other degradable read on that page already behaves this
+		// way. nil is a meaning this field already carries end to end: the
+		// console renders the cap with no proportion beside it, which is a true
+		// statement about a number that could not be read.
+		if budgetSpend, budgetErr := s.budgetSpendCredits(ctx, key.ID, policy); budgetErr != nil {
+			slog.WarnContext(ctx, "apikeys: budget window read failed, key listed without a usage proportion",
+				slog.String("key_id", key.ID.String()),
+				slog.String("err", budgetErr.Error()))
+		} else {
+			view.BudgetSpendCredits = budgetSpend
+		}
+		views = append(views, view)
 	}
 	return views, nil
 }
@@ -113,7 +138,42 @@ func (s *Service) GetKeyView(ctx context.Context, accountID, keyID uuid.UUID) (K
 	if err != nil {
 		return KeyView{}, fmt.Errorf("apikeys: get lifetime spend: %w", err)
 	}
-	return buildKeyView(key, policy, spend), nil
+	view := buildKeyView(key, policy, spend)
+	// Strict here, unlike the list above, and the difference is deliberate:
+	// this reads one key for one caller, so a failure has no sibling rows to
+	// protect and reporting it is better than hiding it.
+	view.BudgetSpendCredits, err = s.budgetSpendCredits(ctx, keyID, policy)
+	if err != nil {
+		return KeyView{}, err
+	}
+	return view, nil
+}
+
+// budgetSpendCredits reports the counter the gateway enforces against, so a
+// surface that draws a proportion of a cap divides the same numbers the
+// refusal is made from: api_key_budget_windows consumed plus reserved, summed
+// exactly as edge-api's authz.CheckAccess sums them
+// (consumed + reserved + estimated > limit).
+//
+// Deliberately not GetLifetimeSpend. That reads api_key_usage_rollups, which
+// RecordUsageFinalization writes on every settled request whether or not a cap
+// exists, while the window is only ever written by ApplyReservationDelta,
+// which returns early for a "none" budget kind. Nothing backfills the window
+// when a cap is set later, so the two counters diverge by whatever the key
+// spent before it was capped, and a console dividing the lifetime figure would
+// show a red, over-cap key that the gateway is still serving (issue #1683).
+//
+// nil means there is nothing to enforce: no budget kind, or no limit.
+func (s *Service) budgetSpendCredits(ctx context.Context, keyID uuid.UUID, policy KeyPolicy) (*int64, error) {
+	if policy.BudgetKind == "" || policy.BudgetKind == "none" || policy.BudgetLimitCredits == nil {
+		return nil, nil
+	}
+	window, err := s.repo.GetBudgetWindow(ctx, keyID, policy.BudgetKind, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("apikeys: get budget window: %w", err)
+	}
+	used := window.ConsumedCredits + window.ReservedCredits
+	return &used, nil
 }
 
 // requireBillingTenant refuses a mint for an account edge-api is guaranteed to
