@@ -44,19 +44,23 @@ func (e *SandboxEngine) Files(_ context.Context, sessionRef string) ([]controlcl
 }
 
 // finalEventsOf and finalFilesOf return sess's reap-time snapshot plus
-// whether sess has been reaped at all — the caller's signal to use it rather
-// than dial a control socket or read a bind mount that may already be gone.
-// Guarded by e.mu, same as sess.reaped and sess.terminal.
+// whether that snapshot has been captured — the caller's signal to use it
+// rather than dial a control socket or read a bind mount that may already be
+// gone. Guarded by e.mu, same as sess.reaped and sess.terminal.
+//
+// The flag is snapshotDone, NOT reaped: reap flips reaped and releases the
+// mutex before capturing, so gating on reaped handed a reader landing in that
+// window an empty list and no error. See snapshotDone's own comment.
 func (e *SandboxEngine) finalEventsOf(sess *session) ([]controlclient.Event, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return sess.finalEvents, sess.reaped
+	return sess.finalEvents, sess.snapshotDone
 }
 
 func (e *SandboxEngine) finalFilesOf(sess *session) ([]controlclient.WorkspaceFile, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return sess.finalFiles, sess.reaped
+	return sess.finalFiles, sess.snapshotDone
 }
 
 // listWorkspaceFiles lists dir's top level (name/size/mtime only), minus the

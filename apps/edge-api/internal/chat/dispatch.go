@@ -568,7 +568,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var variableSettled inference.VariableSettlement
 	if route.Pricing.IsUpstreamActual() {
 		// This alias has no catalog price. Its charge is the cost the upstream
-		// reported for this generation, times the standard margin. A cost that
+		// reported for this generation, at the credit peg and with no margin
+		// factor (D-064). A cost that
 		// is missing, unreadable or a confident zero settles at the hold rather
 		// than at nothing, which is the whole point: this is the streaming path
 		// Open WebUI uses, so it is where a silent free-serve would do the most

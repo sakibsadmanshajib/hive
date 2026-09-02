@@ -224,3 +224,67 @@ only exists once the real `SandboxEngine` is configured) — interval via
 `HIVE_AGENT_TASK_POLL_INTERVAL` (Go duration string, default 15s), bound to
 the same process-lifetime context the other background workers use so it
 stops cleanly on shutdown.
+
+## Step events reach the transcript before the terminal status (issues #1622, #1504)
+
+A run's steps are read by a follower in the chat transcript
+(`followCoworkRun`, `vendor/open-webui/src/lib/components/chat/Chat.svelte`)
+that polls `GET /v1/agent/tasks/{id}` and `.../events` every three seconds and
+**stops the moment it reads a terminal status**. So an event row written after
+the transition that made a task `succeeded` is written for nobody.
+
+Two loops therefore have an ordering relationship, not just a cadence:
+
+* `EventSyncer` pulls each active task's sandbox events and workspace listing
+  and appends them to `public.agent_task_events`. Its interval is
+  `HIVE_AGENT_TASK_EVENT_INTERVAL` (Go duration string, default
+  `DefaultEventSyncInterval`, 2s). It is deliberately not the poller's
+  interval: a status is a fact about a run that is either over or not, while a
+  step is something a person is waiting to watch happen.
+* `Poller` calls `PollerConfig.FlushEvents` (wired to `EventSyncer.FlushTask`)
+  **immediately before** it writes a terminal status. `FlushTask` reads the
+  session's event log from the beginning, so it is the reconciliation pass as
+  well as the last one; dedup on `source_event_id` makes the overlap free.
+
+Before that hook existed the two loops ran on unrelated schedules and a run
+shorter than the sync interval lost the race every time: it rendered as
+"Queued. Waiting for a sandbox." for its whole life and then as a bare summary
+with no steps at all, which is the live observation in issue #1504.
+
+Incremental pulls are what make the faster cadence affordable. The source hands
+back the conversation's whole event log on every call and `AppendEvents` issues
+one INSERT per event inside a transaction holding a per-task advisory lock, so
+re-appending the history every pass costs work that grows with the square of
+the run's length. `EventSyncer` tracks how many of a task's sandbox events it
+has already appended and writes only the tail; `FlushTask` is the one pass that
+still reads everything.
+
+Two properties of that ordering are easy to lose and are therefore written down
+rather than left in the shape of the code.
+
+**The reader closes the race from its side.** Flushing before the transition is
+necessary and not sufficient. What makes it sufficient is that `readCoworkRun`
+(`vendor/open-webui/src/lib/components/chat/Chat.svelte`) awaits `getTask`
+before `getTaskEvents`, so a reading that observes a terminal status always
+issues its events request afterwards, which is after the transition commit,
+which is after the flush commits. Collapsing those two awaits into a
+`Promise.all` reopens issue #1504 while every Go test here still passes, so the
+order is pinned from the front end by `cowork-step-chain.test.ts`.
+
+**The loop degrades in cadence, not in load.** `EventSyncer`'s loop is strictly
+serial and never overlaps its own passes: `Start` resets the timer only after
+`runPass` returns. So a large active set does not produce a thundering herd
+against the launcher, it produces a longer pass, and the effective per task
+interval drifts above the configured one with nothing reporting that it has.
+`agent_tasks_list_active()` caps at 500 rows and the demo box's quota is four
+sessions per tenant, so this is not reachable today; anyone lowering the
+interval further should know which way it bends. `NewEventSyncer` clamps to a
+500ms floor whatever the environment asks for.
+
+Three call sites flush before writing a terminal status: `Poller.pollTask` for
+a run the engine finished, `Poller.chargeFailureBudget` for one the poller gave
+up on (bounded tighter, at three seconds, since that session has already failed
+several status calls), and `Service.Cancel` for one the user stopped (also three
+seconds, because a person is waiting on the response). `ErrEngineSessionGone` is
+the one terminal path that deliberately does not flush: the engine has said it
+has no memory of the session, so there is nothing to read.

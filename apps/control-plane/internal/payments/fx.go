@@ -165,8 +165,18 @@ func (f *FXService) fetchFromXE(ctx context.Context) (string, error) {
 	return rate, nil
 }
 
-// CreateSnapshot fetches the current rate, computes the effective rate (mid * 1.05),
-// persists an FXSnapshot row, and returns it.
+// CreateSnapshot fetches the current rate, computes the effective rate
+// (mid x (1 + FXFeeRate)), persists an FXSnapshot row, and returns it.
+//
+// The multiplier is DERIVED from FXFeeRate rather than restated as a literal.
+// It used to be a hardcoded 105/100 sitting beside a stored FeeRate of "0.05",
+// so the two agreed only by coincidence and changing the fee would have moved
+// the stored rate without moving the applied one, leaving a row whose
+// effective_rate could not be reproduced from its own mid_rate and fee_rate.
+// That is the shape issue #1682 was filed about.
+//
+// The markup is folded into the rate and is never a line item (D-066). A BD
+// customer sees one rate and one local price.
 func (f *FXService) CreateSnapshot(ctx context.Context, repo Repository, accountID uuid.UUID) (FXSnapshot, error) {
 	midRate, sourceAPI, err := f.FetchUSDToBDT(ctx)
 	if err != nil {
@@ -174,12 +184,15 @@ func (f *FXService) CreateSnapshot(ctx context.Context, repo Repository, account
 	}
 
 	// Use math/big to avoid float64 corruption.
-	// effectiveRate = midRate * (105/100)
+	// effectiveRate = midRate * (1 + FXFeeRate)
 	midRat := new(big.Rat)
 	if _, ok := midRat.SetString(midRate); !ok {
 		return FXSnapshot{}, fmt.Errorf("fx: invalid mid rate value %q", midRate)
 	}
-	feeMultiplier := big.NewRat(105, 100)
+	feeMultiplier, err := markupMultiplier(FXFeeRate)
+	if err != nil {
+		return FXSnapshot{}, fmt.Errorf("fx: %w", err)
+	}
 	effectiveRat := new(big.Rat).Mul(midRat, feeMultiplier)
 
 	// Format to 6 decimal places directly from the exact rational.

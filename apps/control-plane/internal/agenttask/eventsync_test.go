@@ -3,6 +3,9 @@ package agenttask
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"strconv"
 	"strings"
 	"testing"
@@ -378,5 +381,299 @@ func TestNormalizeSourceID(t *testing.T) {
 	}
 	if normalizeSourceID("abc", "ignored") != "abc" {
 		t.Error("a short present id must pass through unchanged")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Incremental pulls (issues #1622, #1504)
+//
+// The syncer runs often enough now that a step reaches the transcript while
+// the step is still happening, which is the whole point of the change. What
+// makes that affordable is this: AppendEvents issues one INSERT per event
+// inside one transaction holding a per-task advisory lock, so re-appending
+// the run's entire history every pass and leaning on the dedup index to throw
+// it away is work that grows with the square of the run's length. It was
+// already the shape at the old cadence; at the new one it would be the reason
+// to refuse the new cadence.
+// ---------------------------------------------------------------------------
+
+func TestEventSyncer_AppendsOnlyTheStepsItHasNotStoredYet(t *testing.T) {
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	all := []SandboxEvent{
+		{ID: "e1", Kind: "ActionEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "list the workspace"},
+		{ID: "e2", Kind: "ObservationEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "AGENTS.md"},
+		{ID: "e3", Kind: "ActionEvent", ToolName: "str_replace_editor", ToolCallID: "c2", TextPreview: "write sixcap.txt"},
+	}
+	// Pass one sees the first two, pass two sees all three: the shape of a
+	// live conversation's event store, which only ever grows.
+	visible := 2
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) { return all[:visible], nil },
+		files:  func(context.Context, string) ([]WorkspaceFile, error) { return nil, nil },
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	visible = 3
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	if len(repo.appends) != 2 {
+		t.Fatalf("appends=%d, want one per pass", len(repo.appends))
+	}
+	second := repo.appends[1]
+	var sandboxIDs []string
+	for _, ev := range second {
+		if strings.HasPrefix(ev.SourceEventID, statusEventPrefix) {
+			continue // the synthetic status row rides on every pass by design
+		}
+		sandboxIDs = append(sandboxIDs, ev.SourceEventID)
+	}
+	if len(sandboxIDs) != 1 || sandboxIDs[0] != "e3" {
+		t.Fatalf("second pass appended %v, want only the step that is new since the first pass", sandboxIDs)
+	}
+}
+
+func TestEventSyncer_TerminalFlushReconcilesTheWholeRun(t *testing.T) {
+	// The incremental pull above is an optimisation over a source this
+	// process does not control, so the one pass that has to be complete, the
+	// last one, reads the run from the beginning. Dedup makes the overlap
+	// free and anything the incremental pulls missed still lands.
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	all := []SandboxEvent{
+		{ID: "e1", Kind: "ActionEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "list"},
+		{ID: "e2", Kind: "ObservationEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "ok"},
+	}
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) { return all, nil },
+		files:  func(context.Context, string) ([]WorkspaceFile, error) { return nil, nil },
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	repo.appends = nil
+	syncer.FlushTask(context.Background(), task)
+
+	if len(repo.appends) != 1 {
+		t.Fatalf("appends=%d, want one flush", len(repo.appends))
+	}
+	var ids []string
+	for _, ev := range repo.appends[0] {
+		ids = append(ids, ev.SourceEventID)
+	}
+	if len(ids) != 2 || ids[0] != "e1" || ids[1] != "e2" {
+		t.Fatalf("flush appended %v, want the whole run", ids)
+	}
+}
+
+func TestEventSyncer_FlushTaskIgnoresATaskWithNoSession(t *testing.T) {
+	repo := &fakeRepoForSync{}
+	called := false
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) {
+			called = true
+			return nil, nil
+		},
+		files: func(context.Context, string) ([]WorkspaceFile, error) { return nil, nil },
+	}
+	NewEventSyncer(repo, src, PollerConfig{}).
+		FlushTask(context.Background(), Task{ID: uuid.New(), Status: StatusQueued})
+
+	if called || len(repo.appends) != 0 {
+		t.Fatal("a task that never launched has no session to read events from")
+	}
+}
+
+func TestEventSyncer_DoesNotRewriteAWorkspaceFileThatHasNotChanged(t *testing.T) {
+	// The workspace listing arrives whole on every pass, so without this the
+	// per-pass write grows with the number of files the run produced: the same
+	// square-of-the-run cost the sandbox-event offset removes, by the other
+	// door.
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	files := []WorkspaceFile{{Name: "sixcap.txt", Size: 13, ModTime: time.Unix(1000, 0)}}
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) { return nil, nil },
+		files:  func(context.Context, string) ([]WorkspaceFile, error) { return files, nil },
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if countKind(repo.appends[0], EventFile) != 1 {
+		t.Fatalf("first pass recorded %d file events, want 1", countKind(repo.appends[0], EventFile))
+	}
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	// Nothing at all this pass, not merely no file rows: with the listing
+	// unchanged the pull is empty and the status has not moved, so the whole
+	// batch is one the dedup index would have thrown away.
+	if len(repo.appends) != 1 {
+		t.Fatalf("second pass rewrote an unchanged listing: %v", repo.appends[1:])
+	}
+
+	// A rewritten file is a different fact and still lands: same name, new
+	// size and mtime, so a new deterministic id.
+	files = []WorkspaceFile{{Name: "sixcap.txt", Size: 26, ModTime: time.Unix(2000, 0)}}
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("third pass: %v", err)
+	}
+	if len(repo.appends) != 2 || countKind(repo.appends[1], EventFile) != 1 {
+		t.Fatalf("third pass recorded %v for a rewritten file, want one file event", repo.appends[1:])
+	}
+}
+
+func countKind(events []TaskEvent, kind TaskEventKind) int {
+	n := 0
+	for _, ev := range events {
+		if ev.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+func TestEventSyncer_BoundsEverySessionRead(t *testing.T) {
+	// agentengine.Remote's HTTP client allows five minutes, sized for Launch.
+	// The flush now runs inside the status poller's pass, which walks active
+	// tasks serially, so an unbounded read would let one wedged sandbox hold
+	// every other tenant's terminal transition behind it.
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	var eventsDeadline, filesDeadline time.Duration
+	src := &fakeEventSource{
+		events: func(ctx context.Context, _ string) ([]SandboxEvent, error) {
+			if deadline, ok := ctx.Deadline(); ok {
+				eventsDeadline = time.Until(deadline)
+			}
+			return nil, nil
+		},
+		files: func(ctx context.Context, _ string) ([]WorkspaceFile, error) {
+			if deadline, ok := ctx.Deadline(); ok {
+				filesDeadline = time.Until(deadline)
+			}
+			return nil, nil
+		},
+	}
+	if err := NewEventSyncer(repo, src, PollerConfig{}).RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if eventsDeadline <= 0 || eventsDeadline > eventPullTimeout {
+		t.Fatalf("events read carried no usable deadline: %v", eventsDeadline)
+	}
+	if filesDeadline <= 0 || filesDeadline > eventPullTimeout {
+		t.Fatalf("workspace listing carried no usable deadline: %v", filesDeadline)
+	}
+}
+
+func TestEventSyncer_StillRecordsWorkspaceFilesWhenTheEventReadFails(t *testing.T) {
+	// The two reads hit different surfaces, so one failing does not make the
+	// other's answer worthless. Returning early on the event read meant a
+	// terminal flush could publish a status with none of the run's files
+	// recorded (raised in review on PR #1709).
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) {
+			return nil, errors.New("control socket is not answering")
+		},
+		files: func(context.Context, string) ([]WorkspaceFile, error) {
+			return []WorkspaceFile{{Name: "sixcap.txt", Size: 14, ModTime: time.Unix(1000, 0)}}, nil
+		},
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(repo.appends) != 1 || countKind(repo.appends[0], EventFile) != 1 {
+		t.Fatalf("a failed event read dropped the workspace listing: %v", repo.appends)
+	}
+
+	// And the offset did not move, so the events this pass could not read are
+	// read again rather than skipped.
+	if syncer.offsets[task.ID] != 0 {
+		t.Fatalf("offset advanced past events that were never read: %d", syncer.offsets[task.ID])
+	}
+}
+
+func TestEventSyncer_SkipsTheWriteWhenNothingChanged(t *testing.T) {
+	// Every row in that batch is already stored, so the write is a
+	// transaction, an advisory lock, a MAX(seq) aggregate and one INSERT the
+	// dedup index is guaranteed to reject. Cheap to skip and worth skipping at
+	// this cadence (raised in review on PR #1709).
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	// Two sandbox events that both map to nothing, so the pull is empty while
+	// the offset still has somewhere to move: the case a naive early return
+	// would re-read for the rest of the run.
+	sandbox := []SandboxEvent{
+		{ID: "s1", Kind: "SystemPromptEvent"},
+		{ID: "s2", Kind: "ConversationStateUpdateEvent"},
+	}
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) { return sandbox, nil },
+		files:  func(context.Context, string) ([]WorkspaceFile, error) { return nil, nil },
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if len(repo.appends) != 1 {
+		t.Fatalf("first pass appends=%d, want the initial status row to land", len(repo.appends))
+	}
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if len(repo.appends) != 1 {
+		t.Fatalf("second pass wrote a batch the dedup index would have thrown away: %v", repo.appends[1:])
+	}
+	// The bookkeeping still moved, or those two unmappable events are re-read
+	// on every pass for the rest of the run.
+	if syncer.offsets[task.ID] != len(sandbox) {
+		t.Fatalf("offset=%d, want %d", syncer.offsets[task.ID], len(sandbox))
+	}
+
+	// A status change still writes, on a pull that is still empty.
+	moved := task
+	moved.Status = StatusSucceeded
+	repo.listActive = []Task{moved}
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("third pass: %v", err)
+	}
+	if len(repo.appends) != 2 {
+		t.Fatalf("a status transition was not recorded: appends=%d", len(repo.appends))
+	}
+}
+
+func TestNewEventSyncer_ClampsAnAbsurdInterval(t *testing.T) {
+	// HIVE_AGENT_TASK_EVENT_INTERVAL reaches the constructor unvalidated, and
+	// 50ms would put the launcher under twenty paging reads a second per
+	// active task. Nothing else rate limits this loop.
+	s := NewEventSyncer(&fakeRepoForSync{}, &fakeEventSource{}, PollerConfig{Interval: 50 * time.Millisecond})
+	if s.interval != minEventSyncInterval {
+		t.Fatalf("interval=%v, want the %v floor", s.interval, minEventSyncInterval)
 	}
 }

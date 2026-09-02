@@ -120,9 +120,9 @@ func TestNormalizeEmbeddings(t *testing.T) {
 		"usage":{"prompt_tokens":5,"total_tokens":5}
 	}`
 
-	normalized, usage, err := normalizeEmbeddings([]byte(input), "hive-embedding-default")
+	normalized, usage, err := NormalizeEmbeddings([]byte(input), "hive-embedding-default")
 	if err != nil {
-		t.Fatalf("normalizeEmbeddings failed: %v", err)
+		t.Fatalf("NormalizeEmbeddings failed: %v", err)
 	}
 
 	var resp EmbeddingsResponse
@@ -162,9 +162,9 @@ func TestNormalizeEmbeddings_ModelAliasReplaced(t *testing.T) {
 		"usage":{"prompt_tokens":3,"total_tokens":3}
 	}`
 
-	normalized, _, err := normalizeEmbeddings([]byte(input), "hive-fast-embed")
+	normalized, _, err := NormalizeEmbeddings([]byte(input), "hive-fast-embed")
 	if err != nil {
-		t.Fatalf("normalizeEmbeddings failed: %v", err)
+		t.Fatalf("NormalizeEmbeddings failed: %v", err)
 	}
 
 	// Ensure provider route handle is not present in output.

@@ -29,6 +29,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/batches"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/catalog"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/chat"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/embeddings"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/files"
@@ -143,9 +144,11 @@ func main() {
 	authorizer := authz.NewAuthorizer(authzClient, limiter, authz.WithFailOpen(failOpen))
 
 	// Open WebUI authenticates its own upstream calls with OWUI_SHIM_KEY alone
-	// (model listing, document-RAG embeddings, text-to-speech). All three fail
-	// silently or with a misleading invalid-key error when that key does not
-	// resolve, so probe it here and keep probing. See watchOWUIShimKey.
+	// (model listing, text-to-speech and speech-to-text; its embeddings now
+	// carry a per-user token too, see issue #1696 at the /v1/embeddings wiring
+	// below). All of them fail silently or with a misleading invalid-key error
+	// when that key does not resolve, so probe it here and keep probing. See
+	// watchOWUIShimKey.
 	go watchOWUIShimKey(rootCtx, authzClient, os.Getenv("OWUI_SHIM_KEY"), owuiShimKeyProbeInterval)
 
 	// Initialize Prometheus metrics registry for edge-api.
@@ -195,7 +198,34 @@ func main() {
 	mux.Handle("/v1/chat/completions", openAIChatHandler)
 	mux.Handle("/v1/completions", inferenceHandler)
 	mux.Handle("/v1/responses", inferenceHandler)
-	mux.Handle("/v1/embeddings", inferenceHandler)
+
+	// Embeddings are JWT-aware for the same reason chat completions are, and
+	// for one more (issue #1696). Open WebUI's Python retrieval path posts
+	// here for every web search index, every document ingest and every
+	// retrieval query, authenticated with OWUI_SHIM_KEY, so all of that spend
+	// used to settle against one shared platform account: invisible in the
+	// customer's own usage, and out of reach of the per-tenant budget. The
+	// unwrap middleware now requires a per-user token on this path and
+	// rewrites the request onto it, and this handler is what serves the
+	// result, because inference.Orchestrator can only resolve an "hk_" key.
+	// An API-key caller is unaffected and still takes the right-hand branch.
+	sessionEmbeddingsHandler := embeddings.NewHandler(embeddings.Deps{
+		SelectRoute: func(ctx context.Context, aliasID string) (inference.SelectRouteResult, error) {
+			return routingClient.SelectRoute(ctx, inference.SelectRouteInput{
+				AliasID:        aliasID,
+				NeedEmbeddings: true,
+			})
+		},
+		Dispatch:   litellmClient.Embeddings,
+		Accounting: accountingClient,
+		// Same resolver session chat and RAG chat settle through, so all three
+		// JWT surfaces read one definition of what a tenant settles against.
+		// A nil pool makes ResolveState answer ErrNoPool, which sessionbilling
+		// refuses on, so a deployment with no database serves no embeddings
+		// rather than serving them free.
+		Billing: &metering.PGBillingAccountResolver{Pool: dbPool},
+	})
+	mux.Handle("/v1/embeddings", jwtAwareChatHandler(sessionEmbeddingsHandler, inferenceHandler))
 
 	// Anthropic Messages surface: POST /v1/messages and POST /v1/messages/count_tokens.
 	// The APIKeyNormalizer rewrites x-api-key to Authorization: Bearer so the
@@ -1448,13 +1478,19 @@ type shimKeyResolver interface {
 // WebUI's own upstream calls, or nil when it can.
 //
 // OWUI_SHIM_KEY is expected to be a real minted Hive API key. Open WebUI
-// presents it, and nothing else, on the upstream calls that carry no
-// signed-in user: the bodyless GET /v1/models the model picker is built from,
-// document-RAG embeddings, and text-to-speech. A key that does not resolve
-// breaks all three, and every one of those failures is either invisible (an
-// empty picker issues no request at all) or reported to the customer as a
-// generic invalid-key error that names no cause. This probe is the signal
-// that names it.
+// presents it on the upstream calls that carry no signed-in user: the bodyless
+// GET /v1/models the model picker is built from, and audio (text-to-speech and
+// speech-to-text). A key that does not resolve breaks them, and every one of
+// those failures is either invisible (an empty picker issues no request at all)
+// or reported to the customer as a generic invalid-key error that names no
+// cause. This probe is the signal that names it.
+//
+// Embeddings used to be on that list and are not any more (issue #1696). They
+// still present the shim key on Authorization, which is what gates the carrier
+// header, but the principal they are billed and audited under is now the
+// signed-in user's, so the shim key resolving is necessary for them rather than
+// sufficient. The probe is unchanged: a key that does not resolve still breaks
+// them, so it still belongs in the list of things this failure takes down.
 //
 // Its predicate must stay at least as strict as the request path's, or the
 // probe becomes a false green. It was exactly that in issue #717: it read
@@ -1487,7 +1523,7 @@ func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 	// account_not_provisioned, so minting a replacement key cannot help: the
 	// account itself has to be mapped to a tenant.
 	if _, err := snapshot.TenantUUID(); err != nil {
-		return fmt.Errorf("%w, so /v1/models, document RAG embeddings and text-to-speech all answer "+
+		return fmt.Errorf("%w, so /v1/models, chat embeddings and audio all answer "+
 			"403 account_not_provisioned for it. A new key will NOT help: map the account by running "+
 			"apps/control-plane/cmd/backfill-tenants against the same database, or re-run "+
 			"scripts/seed-owui-e2e-user.py, which provisions the mapping for the account it mints on", err)
@@ -1558,7 +1594,7 @@ func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 		if !reported || state != lastState {
 			switch state {
 			case owuiShimKeyHealthy:
-				log.Printf("owui: OWUI_SHIM_KEY resolves to an active Hive API key on a tenant-provisioned account; Open WebUI model listing, document RAG embeddings, and text-to-speech can authenticate")
+				log.Printf("owui: OWUI_SHIM_KEY resolves to an active Hive API key on a tenant-provisioned account; Open WebUI model listing, chat embeddings and audio can authenticate")
 			case owuiShimKeyTransient:
 				// Transient: the control plane could not be reached in time,
 				// not a verdict that the key is bad. No "mint a replacement"
@@ -1566,7 +1602,7 @@ func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 				// the failure this branch exists to prevent.
 				log.Printf("owui: WARN OWUI_SHIM_KEY probe could not reach the control plane (transient, will retry next interval): %v. This is NOT a sign the key is invalid -- do not rotate it over this alone", err)
 			default:
-				log.Printf("owui: ERROR OWUI_SHIM_KEY is unusable: %v. Open WebUI's model picker will be empty and its document RAG embeddings and text-to-speech will fail with a generic invalid-key error. Mint a replacement with scripts/seed-owui-e2e-user.py, which updates .env and Open WebUI's persisted config together, then restart open-webui", err)
+				log.Printf("owui: ERROR OWUI_SHIM_KEY is unusable: %v. Open WebUI's model picker will be empty and its chat embeddings and audio will fail with a generic invalid-key error. Mint a replacement with scripts/seed-owui-e2e-user.py, which updates .env and Open WebUI's persisted config together, then restart open-webui", err)
 			}
 			reported = true
 			lastState = state

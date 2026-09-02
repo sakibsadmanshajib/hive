@@ -1,0 +1,108 @@
+Issue #1696 attribution proof, captured 2026-09-02T16:16:48Z
+
+Substrate. A throwaway Postgres with all 132 migrations applied by
+scripts/ci-throwaway-db.sh from supabase/migrations, so the catalog and the
+ledger schema are the real ones. control-plane and edge-api are built from
+source: edge-api twice, once from origin/main (the BEFORE binary) and once
+from this branch (the AFTER binary), both against the same database. Two
+stand-ins and only two: a LiteLLM that answers /v1/embeddings with
+prompt_tokens 1500, and an HTTPS JWKS the real Supabase validator fetches
+and verifies. Nothing about attribution is stubbed.
+
+Fixture. Two funded, billable tenants: the searching customer and a separate
+platform account that owns OWUI_SHIM_KEY, each granted 1,000,000,000 credits
+(1 USD at the D-046 peg). The searching user's JWT deliberately carries NO
+tenant_id claim, which is the shape Open WebUI's SSO tokens actually have,
+so the tenant is resolved through the real OWUI-scoped tenant fallback.
+
+Price. hive-embedding-default, catalog input price 10,000 credits per
+million tokens, read from public.model_aliases by the migration chain. 1500
+tokens is therefore exactly 15 credits, and 15 is what every leg below is
+checked against.
+
+Balances are read straight out of public.credit_ledger_entries with the same
+SQL apps/control-plane/internal/ledger/repository.go GetBalance runs.
+
+=== 0. baseline ===
+     label      | posted_credits | reserved_credits 
+----------------+----------------+------------------
+ searching user |      999999970 |                0
+ OWUI shim      |      999999985 |                0
+(2 rows)
+
+
+=== 1. BEFORE, edge-api built from origin/main ===
+POST /v1/embeddings with Authorization: Bearer <OWUI_SHIM_KEY> and no carrier
+header, which is byte for byte what the chat container sends today.
+HTTP 200
+     label      | posted_credits | reserved_credits 
+----------------+----------------+------------------
+ searching user |      999999970 |                0
+ OWUI shim      |      999999970 |                0
+(2 rows)
+
+Verdict: served, and the 15 credits came off the PLATFORM account. The
+customer who searched is untouched. That is issue #1696.
+
+=== 2. AFTER, edge-api built from this branch, same request, still no carrier ===
+HTTP 401
+     label      | posted_credits | reserved_credits 
+----------------+----------------+------------------
+ searching user |      999999970 |                0
+ OWUI shim      |      999999970 |                0
+(2 rows)
+
+Verdict: refused. Neither balance moves, so there is no fallback to the
+platform account left on this path.
+
+=== 3. AFTER, the request the patched chat container sends ===
+Authorization: Bearer <OWUI_SHIM_KEY> plus X-Hive-Upstream-Auth carrying the
+searching user's own token.
+HTTP 200
+     label      | posted_credits | reserved_credits 
+----------------+----------------+------------------
+ searching user |      999999955 |                0
+ OWUI shim      |      999999970 |                0
+(2 rows)
+
+Verdict: served, and the 15 credits came off the SEARCHING CUSTOMER. The
+platform account is exactly where leg 1 left it.
+
+=== 4. every ledger entry these three legs wrote, in order ===
+      who       |     entry_type      | credits_delta 
+----------------+---------------------+---------------
+ searching user | grant               |    1000000000
+ OWUI shim      | grant               |    1000000000
+ searching user | reservation_hold    |     -10000000
+ searching user | usage_charge        |           -15
+ searching user | reservation_release |      10000000
+ OWUI shim      | reservation_hold    |     -10000000
+ OWUI shim      | usage_charge        |           -15
+ OWUI shim      | reservation_release |      10000000
+ searching user | reservation_hold    |     -10000000
+ searching user | usage_charge        |           -15
+ searching user | reservation_release |      10000000
+ OWUI shim      | reservation_hold    |     -10000000
+ OWUI shim      | usage_charge        |           -15
+ OWUI shim      | reservation_release |      10000000
+ searching user | reservation_hold    |     -10000000
+ searching user | usage_charge        |           -15
+ searching user | reservation_release |      10000000
+(17 rows)
+
+
+=== 5. usage_events, which is what a customer's own usage page reads ===
+      who       |     event_type      |  endpoint  |      model_alias       |   status    | hive_credit_delta | input_tokens | output_tokens 
+----------------+---------------------+------------+------------------------+-------------+-------------------+--------------+---------------
+ searching user | reservation_created | embeddings | hive-embedding-default | dispatching |                 0 |            0 |             0
+ searching user | completed           | embeddings | hive-embedding-default | completed   |               -15 |         1500 |             0
+ OWUI shim      | reservation_created | embeddings | hive-embedding-default | dispatching |                 0 |            0 |             0
+ OWUI shim      | completed           | embeddings | hive-embedding-default | completed   |               -15 |         1500 |             0
+ searching user | reservation_created | embeddings | hive-embedding-default | dispatching |                 0 |            0 |             0
+ searching user | completed           | embeddings | hive-embedding-default | completed   |               -15 |         1500 |             0
+ OWUI shim      | reservation_created | embeddings | hive-embedding-default | dispatching |                 0 |            0 |             0
+ OWUI shim      | completed           | embeddings | hive-embedding-default | completed   |               -15 |         1500 |             0
+ searching user | reservation_created | embeddings | hive-embedding-default | dispatching |                 0 |            0 |             0
+ searching user | completed           | embeddings | hive-embedding-default | completed   |               -15 |         1500 |             0
+(10 rows)
+

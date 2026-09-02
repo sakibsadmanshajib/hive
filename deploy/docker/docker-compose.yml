@@ -684,6 +684,15 @@ services:
       # The daemon keeps that privilege question off this container entirely:
       # it runs as an ordinary host user with no added capabilities.
       HIVE_AGENT_ENGINE_SOCKET: ${HIVE_AGENT_ENGINE_SOCKET:-}
+      # How often a running task's sandbox is asked what it has done since the
+      # last pass, which is what makes a run's steps appear in the transcript
+      # while it works (issues #1622, #1504). Mapped, unlike its sibling
+      # HIVE_AGENT_TASK_POLL_INTERVAL, because it is the knob most likely to
+      # need turning against a real load: the loop is serial, so raising the
+      # active-task count degrades the effective cadence rather than
+      # overloading anything, and this is how an operator slows it down
+      # without a code change. Clamped to a 500ms floor in NewEventSyncer.
+      HIVE_AGENT_TASK_EVENT_INTERVAL: ${HIVE_AGENT_TASK_EVENT_INTERVAL:-2s}
       # The five path variables below only apply when control-plane itself
       # runs as a bare host process next to an Apptainer install (no compose
       # topology in this repo does). They are still forwarded so that
@@ -1509,10 +1518,14 @@ services:
       # ("hk_" prefix, row in api_keys) on its own dedicated billing account,
       # never an arbitrary `openssl rand` string, because OWUI's own upstream
       # calls that carry no per-user token authenticate as this key and nothing
-      # else: the bodyless GET /v1/models behind the model picker, document-RAG
-      # embeddings (RAG_OPENAI_API_KEY below), and text-to-speech. An
-      # unregistered or revoked value breaks all three, and the only report is
-      # an empty picker plus a generic invalid-key error. edge-api logs
+      # else: the bodyless GET /v1/models behind the model picker, and audio
+      # (text-to-speech and speech-to-text). Embeddings still PRESENT this key,
+      # which is what gates the X-Hive-Upstream-Auth carrier, but they are
+      # BILLED to the signed-in user rather than to this account (issue #1696,
+      # see RAG_OPENAI_API_KEY below), so the key resolving is necessary for
+      # them rather than sufficient. An unregistered or revoked value breaks all
+      # of them, and the only report is an empty picker plus a generic
+      # invalid-key error. edge-api logs
       # `owui: ERROR OWUI_SHIM_KEY is unusable: ...` at startup and every five
       # minutes when that happens. Mint one with scripts/seed-owui-e2e-user.py,
       # passing a deployment-specific --account-slug.
@@ -1590,10 +1603,18 @@ services:
       # id. "text-embedding-3-small" is not in the catalog and every document
       # upload failed alias resolution: the value this line carried between
       # 2026-05-18 and 2026-07-26 was still persisted on the demo box long after
-      # this default was corrected, which is issue #722. OWUI's own embedding
-      # calls carry no request body metadata, so they cannot be unwrapped to a
-      # per-user JWT: OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for
-      # this path to authenticate at all (see scripts/seed-owui-e2e-user.py).
+      # this default was corrected, which is issue #722. OWUI_SHIM_KEY must be a
+      # real minted "hk_" Hive API key for this path to authenticate at all (see
+      # scripts/seed-owui-e2e-user.py).
+      #
+      # It is no longer what the embedding is BILLED to, which is issue #1696.
+      # OWUI's embedding calls carry no request body metadata, so the per-user
+      # token cannot be unwrapped from the body the way a chat completion's is;
+      # deploy/docker/owui-patches/hive_embed_attribution.py puts it on the
+      # X-Hive-Upstream-Auth header instead, which edge-api honours only when
+      # Authorization is exactly this key. So the shim key still authenticates
+      # the container, and the signed-in user is who pays. A call that cannot
+      # resolve a user is refused at both ends rather than charged here.
       RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
       # Chat upload limits (#1405, #1428). Both are persistent config, so both
       # are reconciled by owui-patches/hive_rag_env_config.py for the same

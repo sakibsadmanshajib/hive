@@ -35,11 +35,21 @@ type fakeRepository struct {
 	failTransitionErr error
 	appendedEvents    [][]agenttask.TaskEvent
 	eventsByID        map[uuid.UUID][]agenttask.TaskEvent
+
+	// atTransition is the event list this repository held for a task at the
+	// instant its status was last written. It exists because the ordering is
+	// the defect in issues #1622 and #1504: the events do land eventually
+	// either way, and reading them after the fact would pass over a chain
+	// that publishes a terminal status first and the steps describing the run
+	// afterwards, which is a run the transcript renders as a blank box.
+	atTransition map[uuid.UUID][]agenttask.TaskEvent
 }
 
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
-		eventsByID: make(map[uuid.UUID][]agenttask.TaskEvent), tasks: make(map[uuid.UUID]agenttask.Task)}
+		eventsByID:   make(map[uuid.UUID][]agenttask.TaskEvent),
+		atTransition: make(map[uuid.UUID][]agenttask.TaskEvent),
+		tasks:        make(map[uuid.UUID]agenttask.Task)}
 }
 
 func (f *fakeRepository) Create(_ context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string, projectID uuid.UUID) (agenttask.Task, error) {
@@ -101,6 +111,7 @@ func (f *fakeRepository) Transition(_ context.Context, tenantID, userID, id uuid
 	}
 	t.ErrorMessage = errMsg
 	f.tasks[id] = t
+	f.atTransition[id] = append([]agenttask.TaskEvent(nil), f.eventsByID[id]...)
 	return t, nil
 }
 
@@ -801,12 +812,43 @@ func TestService_Cancel_UnknownTaskReturnsNotFound(t *testing.T) {
 	}
 }
 
-func (f *fakeRepository) AppendEvents(_ context.Context, _ agenttask.Task, events []agenttask.TaskEvent) error {
+func (f *fakeRepository) AppendEvents(_ context.Context, task agenttask.Task, events []agenttask.TaskEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.appendedEvents = append(f.appendedEvents, events)
+	// Stored per task as well, with the same source-id dedup and monotonic
+	// seq the real repository gives them, so a test can ask what a reader
+	// would have seen at a given moment.
+	seen := make(map[string]bool, len(f.eventsByID[task.ID]))
+	for _, ev := range f.eventsByID[task.ID] {
+		if ev.SourceEventID != "" {
+			seen[ev.SourceEventID] = true
+		}
+	}
+	for _, ev := range events {
+		if ev.SourceEventID != "" && seen[ev.SourceEventID] {
+			continue
+		}
+		if ev.SourceEventID != "" {
+			seen[ev.SourceEventID] = true
+		}
+		ev.Seq = int64(len(f.eventsByID[task.ID]) + 1)
+		f.eventsByID[task.ID] = append(f.eventsByID[task.ID], ev)
+	}
 	return nil
 }
 
+// eventsAtTransition returns the events this repository held when id's status
+// was last written. See the atTransition field.
+func (f *fakeRepository) eventsAtTransition(id uuid.UUID) []agenttask.TaskEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]agenttask.TaskEvent(nil), f.atTransition[id]...)
+}
+
 func (f *fakeRepository) ListEvents(_ context.Context, _, _ uuid.UUID, id uuid.UUID, afterSeq int64, limit int) ([]agenttask.TaskEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	all := f.eventsByID[id]
 	var out []agenttask.TaskEvent
 	for _, ev := range all {
@@ -815,4 +857,52 @@ func (f *fakeRepository) ListEvents(_ context.Context, _, _ uuid.UUID, id uuid.U
 		}
 	}
 	return out, nil
+}
+
+// A cancelled run is the second writer of a terminal status, and the
+// invariant the poller upholds has to hold here too (issues #1622, #1504,
+// raised in review on PR #1709). The steps a run took before somebody stopped
+// it are the record of how far it got, and the transcript stops following the
+// instant it reads `cancelled`.
+func TestService_Cancel_StoresTheRunsStepsBeforeItPublishesTheCancellation(t *testing.T) {
+	repo := newFakeRepository()
+	task, err := repo.Create(context.Background(), uuid.New(), uuid.New(), agenttask.PackKnowledgeWork, "", uuid.Nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	task, err = repo.Transition(context.Background(), task.TenantID, task.UserID, task.ID,
+		agenttask.StatusRunning, "session-1", "", "")
+	if err != nil {
+		t.Fatalf("Transition: %v", err)
+	}
+	src := &scriptedEventSource{events: multiStepRun()}
+	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithEventSource(src),
+		agenttask.WithTaskCredentials(newFakeCredentials()))
+
+	if _, err := svc.Cancel(context.Background(), task.TenantID, task.UserID, task.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	svc.WaitIdle()
+
+	stored := repo.eventsAtTransition(task.ID)
+	if len(stored) < len(multiStepRun()) {
+		t.Fatalf("the cancellation was published with %d steps stored, want the run's %d",
+			len(stored), len(multiStepRun()))
+	}
+}
+
+func TestService_Cancel_WithNoEventSourceStillCancels(t *testing.T) {
+	// A deployment with no engine wired has no events to flush and must not
+	// be prevented from cancelling by their absence.
+	repo := newFakeRepository()
+	task, _ := repo.Create(context.Background(), uuid.New(), uuid.New(), agenttask.PackKnowledgeWork, "", uuid.Nil)
+	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+
+	got, err := svc.Cancel(context.Background(), task.TenantID, task.UserID, task.ID)
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if got.Status != agenttask.StatusCancelled {
+		t.Fatalf("status=%q want cancelled", got.Status)
+	}
 }
