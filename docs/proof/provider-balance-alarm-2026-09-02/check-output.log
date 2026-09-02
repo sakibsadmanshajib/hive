@@ -24,3 +24,35 @@ FATAL: could not read the OpenRouter balance after 1 attempt(s). Last error: /cr
 
 This is a failure to READ the balance, not a healthy balance. It is reported as a failure because a monitor that goes green when it could not reach the API asserts a state nothing verified.
 exit=1
+
+=== 5. The alarm's delivery, proved on GitHub Actions rather than locally ===
+    Label gated runs of .github/workflows/provider-balance-watch.yml on pull request #1731,
+    each one reading the real OpenRouter account. Both halves of the alert channel are
+    exercised, because a check whose notification does not arrive is the failure this
+    change exists to remove.
+
+    Run 33662109196 (label provider-balance-test:simulate-low), conclusion failure:
+      Cache not found for input keys: provider-balance-state-33662109196, provider-balance-state-
+      simulating a shortfall: runway threshold raised to 100000 days
+      LOW: the OpenRouter balance is 1.46 USD, under the 2.00 USD floor.
+      1.46 USD remaining of 10.00 purchased (8.54 spent). Burn 0.004 USD/day ... runway 382.3 days.
+      Cache saved with key: provider-balance-state-33662109196
+      opened the tracking issue
+      -> filed issue #1732, titled "the OpenRouter balance is low or unreadable",
+         labelled priority:critical, demo-surface, money-path, authored by app/github-actions.
+
+    Run 33662109465 (same labels, immediately after), conclusion failure:
+      tracking issue #1732 is already open, not commenting again
+      -> deduplication works, and the author match on app/github-actions is confirmed
+         against a real bot filed issue rather than assumed.
+
+    Run 33662230066 (label provider-balance-test:simulate-healthy), conclusion success:
+      simulating recovery: thresholds lowered under the real balance, to prove the tracking
+      issue gets closed
+      OK: 1.46 USD remaining of 10.00 purchased (8.54 spent). ... Threshold 0.001 days, floor 0.00 USD.
+      -> issue #1732 closed at 2026-09-02T17:37:45Z with a recovery comment, so a stale open
+         issue cannot swallow the next alert.
+
+    An earlier run on the same pull request was correctly SKIPPED, before the
+    run-provider-balance-watch label was present, which is the job level gate behaving as
+    designed rather than an accident.
