@@ -333,8 +333,8 @@ describe('the cowork row infers rather than asks', () => {
 describe('sending in cowork mode starts a run instead of a completion', () => {
 	const chat = readComponent('../components/chat/Chat.svelte');
 
-	it('sends whatever override is pending and otherwise lets the server infer (#1623)', () => {
-		expect(chat).toContain('createTask(localStorage.token, $composerPack, userPrompt)');
+	it('sends whatever override is pending, lets the server infer, and carries the files (#1623, #1065)', () => {
+		expect(chat).toContain('createTask(localStorage.token, $composerPack, userPrompt, attachments)');
 		expect(chat).not.toContain('packForMode');
 	});
 
@@ -353,7 +353,7 @@ describe('sending in cowork mode starts a run instead of a completion', () => {
 
 	it('branches on the mode inside the one submit handler both composers call', () => {
 		expect(chat).toContain("if ($composerMode === 'cowork')");
-		expect(chat).toContain('await submitCoworkRun(userPrompt)');
+		expect(chat).toContain('await submitCoworkRun(userPrompt, coworkAttachments, _files)');
 	});
 
 	it('renders the run through the ordinary chat machinery, not a parallel one', () => {
@@ -695,11 +695,13 @@ describe('the run turn follows the detail endpoint, not the task list', () => {
 		expect(chat).toContain('turn.statusHistory');
 	});
 
-	it('keeps the three behaviours #1193 review fixed', () => {
-		// The navigation guard, resuming every pending run rather than the first,
-		// and the clean refusal when files are attached in Cowork mode.
+	it('keeps the two behaviours #1193 review fixed that still apply', () => {
+		// The navigation guard and resuming every pending run rather than the
+		// first. The third, a clean refusal when files are attached in Cowork
+		// mode, is retired by #1065: Work mode carries documents now, so the
+		// blanket refusal is gone and the narrower one it became is pinned in
+		// coworkAttachments.test.ts instead.
 		expect(chat).toContain('if ($chatId !== _chatId) {');
 		expect(chat).toContain('for (const pending of pendingTurns)');
-		expect(chat).toContain('Attachments are not supported in Work mode yet');
 	});
 });

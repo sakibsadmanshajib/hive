@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -153,17 +154,20 @@ func TestDecode(t *testing.T) {
 		}
 	})
 
-	t.Run("a body one byte over the 1 MiB cap is rejected", func(t *testing.T) {
+	t.Run("a body over the launch cap is rejected", func(t *testing.T) {
 		// A big string value padded to push the whole body past the
-		// MaxBytesReader(..., 1<<20) limit decode() enforces.
-		pad := strings.Repeat("a", 1<<20)
+		// MaxBytesReader(..., 2<<20) limit decode() enforces. The cap moved
+		// from 1 MiB to 2 MiB for issue #1065: a launch body now carries the
+		// person's attached documents, capped at 256 KiB of text upstream,
+		// and JSON escaping of a control character costs six bytes for one.
+		pad := strings.Repeat("a", 2<<20)
 		body := `{"pack":"` + pad + `"}`
 		req := httptest.NewRequest(http.MethodPost, "/launch", strings.NewReader(body))
 		rec := httptest.NewRecorder()
 
 		var got launchRequest
 		if ok := decode(rec, req, &got); ok {
-			t.Fatal("expected a body over the 1 MiB cap to be rejected")
+			t.Fatal("expected a body over the launch cap to be rejected")
 		}
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400, got %d", rec.Code)
@@ -192,7 +196,14 @@ func TestWriteJSON(t *testing.T) {
 
 func TestMessageTypesRoundTripJSON(t *testing.T) {
 	t.Run("launchRequest", func(t *testing.T) {
-		want := launchRequest{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(), Pack: "knowledge-work-pack", Instructions: "write a memo", BearerJWT: "secret-jwt"}
+		want := launchRequest{
+			ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+			Pack: "knowledge-work-pack", Instructions: "write a memo", BearerJWT: "secret-jwt",
+			// Issue #1065. The document the person attached has to survive the
+			// hop as its own field: this is the seam where a value that was set
+			// upstream quietly stops existing.
+			Attachments: []launchAttachment{{Name: "inventory.txt", Content: "QAFILE7731"}},
+		}
 		raw, err := json.Marshal(want)
 		if err != nil {
 			t.Fatalf("Marshal: %v", err)
@@ -201,7 +212,8 @@ func TestMessageTypesRoundTripJSON(t *testing.T) {
 		if err := json.Unmarshal(raw, &got); err != nil {
 			t.Fatalf("Unmarshal: %v", err)
 		}
-		if got != want {
+		// reflect.DeepEqual rather than ==: launchRequest carries a slice now.
+		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("round trip mismatch: got %+v, want %+v", got, want)
 		}
 	})
