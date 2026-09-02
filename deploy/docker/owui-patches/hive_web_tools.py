@@ -47,8 +47,18 @@ uses refused the payload outright (OpenRouter 404 "No endpoints found that
 support tool use", Groq free tier 429 over a 6,000 token per minute ceiling).
 Turning native back on without removing them would reproduce that failure
 exactly. Two specifications under `webtools.MaxDescriptorBytes` (1200 bytes) is
-what makes native affordable, so the builtin set is dropped unless a deployment
-names an entry in HIVE_OWUI_BUILTIN_TOOLS, which is empty by default.
+what makes native affordable, so the builtin set is dropped.
+
+What is NOT dropped, because dropping it would strand a live feature that has
+no other delivery mechanism once native is on: `view_skill` and `execute_code`
+(SELF_GATED_TOOL_NAMES, which upstream registers only on a turn that asked for
+them), the knowledge tools on a turn carrying documents upstream stopped
+injecting (KNOWLEDGE_TOOL_NAMES), and anything a deployment names in
+HIVE_OWUI_BUILTIN_TOOLS, which is empty by default. None of these puts a
+specification on an ordinary chat request.
+
+A turn this module cannot serve at all goes back to the legacy path rather than
+staying on a native path with nothing on it; see `prefer_legacy`.
 """
 
 from __future__ import annotations
@@ -134,8 +144,40 @@ KNOWLEDGE_TOOL_NAMES = frozenset(
     }
 )
 
-# Set to "false" to advertise nothing at all, which restores the behaviour
-# before this module existed without needing to rebuild the image.
+# Upstream builtins that upstream itself already gates per turn, and that are
+# the ONLY delivery mechanism for a live feature once function calling is
+# native. Kept unconditionally, which costs nothing on an ordinary turn because
+# `get_builtin_tools` registers neither unless that turn asked for it.
+#
+#   view_skill    Registered only when `__skill_ids__` is non empty. Under
+#                 native, utils/middleware.py stops inlining a selected or
+#                 default skill's content into the system message and emits an
+#                 `<available_skills>` manifest of ids instead, pushing the id
+#                 onto view_skill_ids and expecting the model to open the body
+#                 through this tool. Dropped, a user who selects a skill gets a
+#                 system message naming skills the model has no way to read,
+#                 and only an @-mentioned skill still works. Skills are a live
+#                 Hive feature: three image patches carry their grants and
+#                 tenant scoping, and compose sets
+#                 USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS.
+#
+#   execute_code  Registered only when `features.code_interpreter` is set on
+#                 the turn, the feature is enabled globally and the model
+#                 allows it. utils/middleware.py skips the legacy XML prompt
+#                 injection whenever function calling is not legacy precisely
+#                 because this tool is meant to be attached instead, so
+#                 dropping it leaves the composer's code interpreter toggle
+#                 enabled at every gate and wired to nothing.
+#
+# Both are per turn upstream, so neither adds a byte to a chat that did not ask
+# for it, and neither is on the payload budget this module exists to defend.
+SELF_GATED_TOOL_NAMES = frozenset({"view_skill", "execute_code"})
+
+# Set to "false" to turn this module off entirely: no Hive tools advertised,
+# and upstream's own tool set left exactly as upstream resolved it. Paired with
+# `prefer_legacy` below, which puts such a turn back on Open WebUI's legacy
+# path, so the switch restores the behaviour that preceded this module rather
+# than a state with no web search on any path at all.
 ENABLED_ENV = "HIVE_WEB_TOOLS_ENABLED"
 
 # How long a fetched descriptor list is reused. The specifications are compiled
@@ -151,6 +193,20 @@ SEARCH_TIMEOUT_SECONDS = 30
 FETCH_TIMEOUT_SECONDS = 90
 DESCRIPTOR_TIMEOUT_SECONDS = 10
 
+# How many tool calls may hold a worker thread at once, process wide.
+#
+# `asyncio.to_thread` runs on the event loop's default ThreadPoolExecutor,
+# which is min(32, cpu + 4) workers and is shared with every other
+# `to_thread` and `run_in_executor` caller in Open WebUI. A fetch holds one of
+# those workers for up to FETCH_TIMEOUT_SECONDS, so without a bound, three
+# fetches a turn times enough concurrent users starves the pool and the damage
+# shows up as unrelated slowness elsewhere in the process rather than as a slow
+# tool call. This caps the share this module can take.
+#
+# ponytail: a fixed count, not a fraction of the executor. Raise it, or make it
+# an environment knob, only if a real deployment is measured waiting on it.
+MAX_CONCURRENT_CALLS = 8
+
 # Fixed messages handed to the model when a call cannot be made at all. None
 # names an internal service or address, matching the gateway's own rule for
 # these two tools (criterion B11).
@@ -163,6 +219,7 @@ MSG_NO_TURN = "This tool could not be used because the turn identifier is missin
 
 _descriptor_cache: dict[str, Any] = {"fetched_at": 0.0, "specs": []}
 _descriptor_lock = asyncio.Lock()
+_call_slots = asyncio.Semaphore(MAX_CONCURRENT_CALLS)
 
 
 def enabled(environ=None) -> bool:
@@ -365,6 +422,18 @@ def _render_fetch(payload: dict) -> str:
     `[BEGIN UNTRUSTED WEB CONTENT <token>]` fence, and they are passed through
     untouched. Rewrapping or stripping them here would break the one property
     the fence has: a page cannot close a fence whose token it has never seen.
+
+    NOTHING page controlled is emitted outside that fence, which is why the
+    envelope's `title` and `final_url` are not rendered at all. Both are
+    written by the fetched page: the title is its own `<title>`, capped at 300
+    runes of single line text of the attacker's choosing, and the final URL is
+    wherever its redirect chain ended. Put above the fence, as the first lines
+    the model reads, they are exactly the "text outside the fence addressing
+    the model as its operator" the fence exists to deny, and closing the fence
+    was never required to get there. Nothing is lost by dropping them: the
+    model already holds the URL it asked for, and upstream's citation for a
+    fetch is built from that same argument (`tool_params['url']` in
+    get_citation_source_from_tool_result), not from anything in this string.
     """
     status = payload.get("status")
     if status == "error":
@@ -373,16 +442,12 @@ def _render_fetch(payload: dict) -> str:
     if status != "ok" or not isinstance(parts, list) or not parts:
         return _error("That page returned no readable content.", "empty")
 
-    header = []
-    if payload.get("title"):
-        header.append(str(payload["title"]))
-    final_url = payload.get("final_url") or payload.get("url")
-    if final_url:
-        header.append(str(final_url))
     body = "\n\n".join(str(part.get("text", "")) for part in parts if isinstance(part, dict))
     if payload.get("truncated"):
+        # Hive's own sentence, and the only text here that is not either the
+        # gateway's fence or the page's fenced content.
         body += "\n\n[This page was longer than the retrieval budget; the parts above are the relevant excerpts.]"
-    return "\n".join(header + ["", body]) if header else body
+    return body
 
 
 async def _call_tool(request, user, metadata, tool: str, body: dict, timeout_seconds: int) -> dict | str:
@@ -426,9 +491,11 @@ async def _call_tool(request, user, metadata, tool: str, body: dict, timeout_sec
         "Content-Type": "application/json",
     }
     try:
-        _status, payload = await asyncio.to_thread(
-            _request, "POST", f"{base}/tools/{tool}", headers, body, timeout_seconds
-        )
+        # Bounded, because the thread this takes is the process's, not ours.
+        async with _call_slots:
+            _status, payload = await asyncio.to_thread(
+                _request, "POST", f"{base}/tools/{tool}", headers, body, timeout_seconds
+            )
     except Exception:
         # No exception text in what the model sees. A urllib error message
         # carries the request URL, and that URL names an internal service.
@@ -528,6 +595,13 @@ def override_instruction(features, tools) -> str:
 
     Off, nothing is added and the model decides alone. On, it is told the user
     asked for live results. Neither state can remove the tools.
+
+    On a turn where no Hive tool could be attached at all, this returns "" and
+    the toggle would be inert. It is not left that way: `prefer_legacy` puts
+    exactly those turns back on Open WebUI's legacy path before anything reads
+    the value, and there the globe drives upstream's own search handler as it
+    always did. The two functions are the two halves of one rule, which is that
+    a control the user can see always does something.
     """
     if not isinstance(features, dict) or not features.get("web_search"):
         return ""
@@ -555,17 +629,59 @@ def has_stranded_knowledge(model, metadata) -> bool:
     return bool(((model.get("info") or {}).get("meta") or {}).get("knowledge"))
 
 
+async def prefer_legacy(model, environ=None) -> bool:
+    """Whether this turn must run on Open WebUI's own legacy function calling.
+
+    True whenever Hive's web tools cannot be put on the turn at all, which has
+    exactly three causes: the kill switch, an alias whose routes report no tool
+    support, and a gateway that would not serve the specifications.
+
+    On such a turn native function calling buys nothing and costs the globe
+    toggle. Every call site of `chat_web_search_handler` in utils/middleware.py
+    is gated on `function_calling == 'legacy'`, so under native, with no
+    web_search tool to offer either, pressing the globe does nothing at all and
+    the interface gives no sign. Downgrading the turn instead restores the
+    behaviour this deployment had before any of this existed: the toggle runs
+    Open WebUI's own search, and an alias that cannot serve tools is never sent
+    a tool specification in the first place.
+
+    It is called above the first read of `function_calling`, so the whole
+    handler agrees on one answer. Reading the descriptors here costs nothing
+    extra: they are cached for DESCRIPTOR_TTL_SECONDS and `select_tools` reads
+    the same cache later in the same turn.
+    """
+    environ = os.environ if environ is None else environ
+    if not enabled(environ) or not tool_capable(model):
+        return True
+    return not await descriptors(environ)
+
+
 async def select_tools(request, tools_dict, model, metadata, user, environ=None) -> dict:
     """The tool set this deployment advertises for one chat turn.
 
     Upstream builtins out (see the module docstring for the measured payload
     cost that froze this deployment on the legacy path), Hive's two web tools in
-    when the alias can serve them. Returns a new dict; the caller's own is not
+    when the alias can serve them. Three exceptions survive the drop, and every
+    one of them is a builtin that is the only way a live feature reaches the
+    model under native function calling: SELF_GATED_TOOL_NAMES, which upstream
+    already registers per turn, KNOWLEDGE_TOOL_NAMES on a turn carrying
+    documents upstream stopped injecting, and anything a deployment named in
+    HIVE_OWUI_BUILTIN_TOOLS. Returns a new dict; the caller's own is not
     mutated.
     """
     environ = os.environ if environ is None else environ
     source = tools_dict if isinstance(tools_dict, dict) else {}
-    keep = set(kept_builtin_names(environ))
+
+    if not enabled(environ):
+        # Off means off. Upstream's tool set is left exactly as upstream
+        # resolved it, and `prefer_legacy` has already put this turn back on
+        # the legacy path, where upstream builds no builtins anyway. Dropping
+        # builtins here as well would leave the switch producing a turn with no
+        # tools on any path, which is neither of the two states it exists to
+        # choose between.
+        return dict(source)
+
+    keep = set(kept_builtin_names(environ)) | SELF_GATED_TOOL_NAMES
     if has_stranded_knowledge(model, metadata):
         keep |= KNOWLEDGE_TOOL_NAMES
     selected = {
@@ -574,7 +690,7 @@ async def select_tools(request, tools_dict, model, metadata, user, environ=None)
         if not (isinstance(entry, dict) and entry.get("type") == "builtin" and name not in keep)
     }
 
-    if not enabled(environ) or not tool_capable(model):
+    if not tool_capable(model):
         return selected
 
     specs = await descriptors(environ)

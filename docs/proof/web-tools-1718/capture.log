@@ -62,15 +62,37 @@ variable and never printed; every token in this file is a placeholder.
   --- the module is present ---
   25866 Sep  2 17:32 /app/backend/open_webui/utils/hive_web_tools.py
 
-  Line 2820 sits at the handler's own indentation, which is the property
+  Line 2820 is the selection call. Line 249 is the citation normalisation, in
+  the first statement of get_citation_source_from_tool_result.
+
+  CORRECTION, and it is a correction of this log's own prose rather than of
+  anything it captured. This paragraph originally read that line 2820 "sits at
+  the handler's own indentation, which is the property
   apply_web_tools_patch.assert_unconditional exists to hold: no flag, role or
-  toggle can gate it. Line 249 is the citation normalisation, in the first
-  statement of get_citation_source_from_tool_result.
+  toggle can gate it". That was wrong. The call sits inside upstream's own
+  `if payload_tools is None:` branch, which is where tools_dict exists at all,
+  so it is conditional on the caller not having supplied its own tools, and
+  comparing indentation could never have detected a second condition added
+  beside that one. The assertion is now assert_selection_gate, which parses the
+  patched module and fails unless the chain of statements enclosing the call is
+  exactly that one `if`. The claim and the check now say the same thing, and
+  scripts/test_owui_web_tools.py proves the check by wrapping the call in a
+  second condition and requiring the assertion to fire.
 
   The image built at all, which is itself part of the evidence: the build step
-  asserts the marker count is exactly 3 and greps for both spliced statements,
-  so an anchor that moved would have failed the build rather than shipping an
-  image with no web tools.
+  asserts the marker count and greps for the spliced statements, so an anchor
+  that moved would have failed the build rather than shipping an image with no
+  web tools.
+
+  This capture was taken from an image built before the review fixes below, so
+  two of its numbers have since moved on purpose and are left as recorded
+  rather than edited to match: the marker count is now 4, not 3, because a
+  fourth edit downgrades a turn that cannot carry the web tools to Open WebUI's
+  legacy path, and execute_code is no longer among the builtins dropped in
+  section 3, because dropping it left the composer's code interpreter toggle
+  wired to nothing. Section 3's "three upstream builtins handed in" therefore
+  now keeps one of the three. Re-capturing against a rebuilt image is part of
+  the live run this log's closing note says is still outstanding.
 
 ---------------------------------------------------------------------------
 3. The shipped image, against the running gateway, registers exactly the two.

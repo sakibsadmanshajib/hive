@@ -295,12 +295,22 @@ RUN python3 /tmp/apply_chat_system_prompt_patch.py \
 # HIVE_DEFAULT_FUNCTION_CALLING=native affordable: the builtin set is 12089
 # bytes and 3144 Groq prompt tokens per request, which is why this deployment
 # was pinned to the legacy path in the first place (see docker-compose.yml).
+# Four of those builtins survive the drop, all of them per turn upstream and
+# all of them the only way a live feature reaches the model under native:
+# view_skill, execute_code, and the knowledge tools on a turn carrying
+# documents. Dropping any of them leaves a control the interface still offers
+# wired to nothing.
+#
+# A turn that cannot carry the web tools at all is downgraded to the legacy
+# path instead of left on a native one with nothing on it, so the globe toggle
+# and the HIVE_WEB_TOOLS_ENABLED kill switch both keep meaning what they say.
 COPY deploy/docker/owui-patches/hive_web_tools.py /app/backend/open_webui/utils/hive_web_tools.py
 COPY deploy/docker/owui-patches/apply_web_tools_patch.py /tmp/apply_web_tools_patch.py
 RUN python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_web_tools.py').read_text())" \
     && python3 /tmp/apply_web_tools_patch.py \
-    && test "$(grep -c '# hive (#1718)' /app/backend/open_webui/utils/middleware.py)" -eq 3 \
+    && test "$(grep -c '# hive (#1718)' /app/backend/open_webui/utils/middleware.py)" -eq 4 \
     && grep -q 'tools_dict = await _hive_select_tools' /app/backend/open_webui/utils/middleware.py \
+    && grep -q 'await _hive_prefer_legacy(model)' /app/backend/open_webui/utils/middleware.py \
     && grep -q "'web_search': 'search_web'" /app/backend/open_webui/utils/middleware.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/middleware.py').read_text())"
 

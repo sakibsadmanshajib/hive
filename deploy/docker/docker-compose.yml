@@ -1577,10 +1577,20 @@ services:
       # specification back on every chat request, so it is a payload budget
       # decision, not a feature flag.
       HIVE_OWUI_BUILTIN_TOOLS: ${OWUI_BUILTIN_TOOLS:-}
-      # Set false to advertise no Hive web tools at all, restoring the state
-      # before issue #1718 without rebuilding the image. Kept as a kill switch
+      # Set false to advertise no Hive web tools at all. Kept as a kill switch
       # for the live box, not as a per user setting: the point of #1718 is that
       # no toggle decides whether a model is told these tools exist.
+      #
+      # It restores the state before #1718 on its own, and that takes both
+      # halves of the patch to be true. Advertising nothing is only the first:
+      # under native function calling utils/middleware.py skips
+      # chat_web_search_handler entirely, so a deployment that switched the
+      # tools off and changed nothing else would have no web search on any
+      # path and a globe toggle wired to nothing, which is worse than either
+      # state this switch chooses between. So the patch also downgrades such a
+      # turn to the legacy path, where the globe drives Open WebUI's own search
+      # exactly as it did before, and it leaves upstream's own builtin tool set
+      # alone rather than dropping it. Off means off, not half off.
       HIVE_WEB_TOOLS_ENABLED: ${OWUI_WEB_TOOLS_ENABLED:-true}
       # These four are persistent config in Open WebUI: normally the value here
       # is only a first-boot seed and Open WebUI's own database wins forever

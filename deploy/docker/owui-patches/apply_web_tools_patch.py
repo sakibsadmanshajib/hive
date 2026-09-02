@@ -10,7 +10,7 @@ inert. Every assertion below is written to fail the IMAGE BUILD loudly if an
 anchor moves, rather than to let the splice quietly not apply, which is the one
 failure mode a patch of this shape has.
 
-Three edits, all inside utils/middleware.py.
+Four edits, all inside utils/middleware.py.
 
 1. `process_chat_payload`, immediately above `if tools_dict:`. Replaces the
    resolved tool set with `hive_web_tools.select_tools(...)`, which drops
@@ -22,12 +22,18 @@ Three edits, all inside utils/middleware.py.
    line lower it would advertise Hive's tools without registering them, and the
    model's tool call would come back "Tool not found".
 
-   It is spliced UNCONDITIONALLY at the handler's own indentation. The builtin
-   injection directly above it is gated on `use_builtin_tools`, which requires a
-   session id, non legacy function calling AND a model capability flag; hanging
-   Hive's tools off that gate would make three unrelated conditions able to
-   silently disable them, which is how #776 shipped inert. `assert_unconditional`
-   below is what stops that.
+   Its ONLY gate is upstream's own `if payload_tools is None:`, the branch that
+   skips all server side tool resolution when the caller supplied an explicit
+   `tools` key. That gate is deliberate: a request that brought its own tools
+   has opted out, and `tools_dict` does not even exist outside it. Nothing
+   else may gate it. The builtin injection directly above it is gated on
+   `use_builtin_tools`, which requires a session id, non legacy function
+   calling AND a model capability flag; hanging Hive's tools off that gate
+   would make three unrelated conditions able to silently disable them, which
+   is how #776 shipped inert. `assert_selection_gate` below parses the patched
+   module and fails unless the chain of statements enclosing the call is
+   exactly that one `if`, so a second condition added at the same indentation
+   fails the image build instead of quietly narrowing the feature.
 
 2 and 3. The citation gate in the native tool loop. Upstream extracts citation
    sources only for tools it recognises BY NAME, and Hive's names are not
@@ -38,6 +44,19 @@ Three edits, all inside utils/middleware.py.
    the two names to the gate; edit 3 normalises them onto upstream's names in
    the first statement of the extractor, so every parsing branch that already
    exists is reused rather than duplicated.
+
+4. Earlier in the same handler, above the first statement that reads
+   `params.function_calling`. A turn Hive's web tools cannot be attached to at
+   all (the kill switch, an alias whose routes report no tool support, or a
+   gateway that would not serve the specifications) is put back on Open WebUI's
+   legacy path. Without it, such a turn sits on the native path carrying no
+   tools, and every call site of `chat_web_search_handler` is gated on legacy,
+   so the globe toggle becomes a visible control wired to nothing and the kill
+   switch removes web search from the product instead of restoring what
+   preceded this feature. Position matters as much as it does for edit 1: the
+   downgrade has to happen before the folder knowledge branch reads the value,
+   or one turn would answer the question two different ways and a folder's
+   files would be stranded between the two.
 
 The transforms live in `patch()` so scripts/test_owui_web_tools.py can run the
 real thing against the vendored copy of the pinned image's middleware.py. PR CI
@@ -110,6 +129,39 @@ INSERT = (
 """
 )
 
+# Anchor 4: the first thing process_chat_payload does after resolving which
+# model this turn actually runs on (arena wrappers pick a sub-model above it).
+# Everything below it that branches on function calling has to see one answer,
+# and the folder knowledge branch a few lines down is the first such reader.
+LEGACY_ANCHOR = '    # Folder "Project" handling\n'
+
+DOWNGRADE_CALL = "    if form_data.get('tools') is None and await _hive_prefer_legacy(model):\n"
+
+# The first read of the value the downgrade writes. Asserted to come after it,
+# because a downgrade applied later would leave one turn answering the question
+# two ways.
+FIRST_FUNCTION_CALLING_READ = ".get('function_calling')"
+
+LEGACY_INSERT = (
+    f"""    {MARKER}: a turn Hive's web tools cannot be put on runs on Open
+    # WebUI's own legacy path rather than on a native one with nothing on it.
+    # Three causes, one shape: the HIVE_WEB_TOOLS_ENABLED kill switch, an alias
+    # whose routes report no tool support, and a gateway that would not serve
+    # the specifications. Native buys such a turn nothing and costs it the
+    # globe toggle, since every call site of chat_web_search_handler below is
+    # gated on legacy; downgrading restores exactly what this deployment did
+    # before the web tools existed. `form_data.get('tools')` is the same
+    # snapshot `payload_tools` takes a few dozen lines down, read early because
+    # this has to run above the first branch on function calling.
+    from open_webui.utils.hive_web_tools import prefer_legacy as _hive_prefer_legacy
+
+"""
+    + DOWNGRADE_CALL
+    + """        metadata.setdefault('params', {})['function_calling'] = 'legacy'
+
+"""
+)
+
 # Anchor 2: the citation gate's own list of recognised tool names.
 CITATION_GATE = "                                'search_web',\n"
 CITATION_GATE_PATCHED = (
@@ -149,26 +201,71 @@ def handler_body(text: str) -> str:
     return text[start:end]
 
 
-def assert_unconditional(body: str) -> None:
-    """Fail unless the Hive selection runs on every request to this handler.
+# The one gate the selection is allowed to sit behind, as upstream writes it.
+ONLY_PERMITTED_GATE = "payload_tools is None"
+
+
+def selection_gates(text: str) -> list:
+    """The statements enclosing the Hive selection call, outermost first.
+
+    Rendered as source: an `if` becomes its test, anything else becomes its
+    node type, so an unexpected `try` or `for` is as visible as an unexpected
+    condition.
+    """
+    tree = ast.parse(text)
+    handler = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "process_chat_payload"
+        ),
+        None,
+    )
+    assert handler is not None, "process_chat_payload is gone from middleware.py"
+
+    def walk(body, chain):
+        for node in body:
+            # The assignment itself, never a compound statement that merely
+            # contains it: unparsing an `if` yields its whole block, which
+            # would report the call as sitting outside its own gate.
+            if isinstance(node, ast.Assign) and "_hive_select_tools(" in ast.unparse(node.value):
+                return chain
+            for field in ("body", "orelse", "finalbody", "handlers"):
+                inner = getattr(node, field, None)
+                if isinstance(inner, list) and inner:
+                    found = walk(inner, chain + [node])
+                    if found is not None:
+                        return found
+        return None
+
+    chain = walk(handler.body, [])
+    assert chain is not None, "the hive web tool selection is not in process_chat_payload"
+    return [ast.unparse(node.test) if isinstance(node, ast.If) else type(node).__name__ for node in chain]
+
+
+def assert_selection_gate(text: str) -> None:
+    """Fail unless the selection's only gate is upstream's own `payload_tools`.
 
     The guard #776 did not have. Its mechanism was real code that a deployment
-    flag switched off, and every test it shipped with still passed. Any future
-    edit that puts this call behind a flag, a role check or a capability branch
-    trips this, because the statement would no longer sit at the handler's own
-    indentation level.
+    flag switched off, and every test it shipped with still passed.
+
+    What is pinned is the exact chain of statements the call sits inside, taken
+    from the parsed module rather than from its indentation. `payload_tools is
+    None` is upstream's own branch for "the caller did not supply tools", and
+    it is where `tools_dict` exists at all; the earlier version of this check
+    compared indentation, which cannot tell that branch apart from a second
+    condition added beside it. Anything else in the chain, at any depth, fails
+    the image build: no toggle, flag, role or capability may decide whether a
+    model is told these tools exist.
     """
-    for line in body.splitlines(keepends=True):
-        if line.lstrip().startswith("tools_dict = await _hive_select_tools("):
-            assert line == CALL, (
-                "the hive web tool selection is indented deeper than the "
-                "handler body, so something now gates it. It must run for "
-                "every chat request: the whole point of issue #1718 is that no "
-                "toggle, flag or user setting decides whether a model is told "
-                "these tools exist."
-            )
-            return
-    raise AssertionError("the hive web tool selection is not in process_chat_payload")
+    gates = selection_gates(text)
+    assert gates == [ONLY_PERMITTED_GATE], (
+        "the hive web tool selection is gated on something other than "
+        f"`{ONLY_PERMITTED_GATE}`: {gates}. It must run for every chat request "
+        "whose tools this deployment resolves, because the whole point of "
+        "issue #1718 is that no toggle, flag or user setting decides whether a "
+        "model is told these tools exist."
+    )
 
 
 def patch(text: str) -> str:
@@ -194,6 +291,19 @@ def patch(text: str) -> str:
         "process_chat_payload no longer builds form_data['tools'] from "
         "tools_dict, so the specifications would never reach the model -- "
         "upstream open-webui source shifted, patch needs updating"
+    )
+    assert text.count(LEGACY_ANCHOR) == 1, (
+        "the folder handling anchor is not present exactly once -- upstream "
+        "open-webui source shifted, patch needs updating"
+    )
+    assert LEGACY_ANCHOR in body, (
+        "the folder handling anchor is not inside process_chat_payload's own "
+        "body -- upstream open-webui source shifted, patch needs updating"
+    )
+    assert "    payload_tools = form_data.get('tools', None)" in body, (
+        "process_chat_payload no longer snapshots the caller's own tools as "
+        "payload_tools, which is the condition the downgrade reads early -- "
+        "patch needs updating"
     )
     assert "    features = form_data.pop('features', None) or {}\n" in body, (
         "process_chat_payload no longer resolves `features`, which the toggle "
@@ -228,15 +338,21 @@ def patch(text: str) -> str:
     )
 
     patched = text.replace(ANCHOR, INSERT + ANCHOR, 1)
+    patched = patched.replace(LEGACY_ANCHOR, LEGACY_INSERT + LEGACY_ANCHOR, 1)
     patched = patched.replace(CITATION_GATE, CITATION_GATE_PATCHED, 1)
     patched = patched.replace(CITATION_HEAD, CITATION_HEAD_PATCHED, 1)
 
     patched_body = handler_body(patched)
-    assert_unconditional(patched_body)
+    assert_selection_gate(patched)
     assert patched_body.index(CALL) < patched_body.index(ANCHOR), (
         "the selection must run before the branch that publishes the tool set, "
         "or the request carries the tools upstream resolved rather than the "
         "ones this deployment decided on"
+    )
+    assert patched_body.index(DOWNGRADE_CALL) < patched_body.index(FIRST_FUNCTION_CALLING_READ), (
+        "the legacy downgrade runs after something has already branched on "
+        "function calling, so one turn would answer that question two "
+        "different ways"
     )
     ast.parse(patched)  # never write a middleware.py that cannot be imported
     return patched
