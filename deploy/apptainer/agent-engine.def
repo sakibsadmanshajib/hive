@@ -73,7 +73,19 @@ From: nikolaik/python-nodejs:python3.14-nodejs24-bookworm
     # earlier by openhands-sdk). Re-assert both vendored packages' floors
     # (openhands-sdk: litellm>=1.84.1; openhands-agent-server: openai>=2.33,
     # <3) here so the final resolved environment satisfies both.
-    python3 -m pip install --no-cache-dir "litellm>=1.84.1" "openai>=2.33.0,<3"
+    #
+    # fastmcp is on this line for the same reason and is not optional: it is
+    # openhands-sdk's own dependency (fastmcp>=3.0.0), the --no-deps install
+    # above skipped it, and openhands-agent-server does not depend on it, so
+    # nothing else in this file installs it deliberately. What ends up present
+    # instead is fastmcp-slim, pulled in transitively, and its client support
+    # now lives behind an extra: importing openhands.sdk then dies with
+    # "FastMCP client support is not installed", the agent-server never binds
+    # its port, and every task fails with the control socket never becoming
+    # ready. That is what a fresh rebuild of this image produced on 2026-09-02
+    # (CI job "Capture token deltas from a live sandbox"); the images built
+    # before that predate the split and hid it.
+    python3 -m pip install --no-cache-dir "litellm>=1.84.1" "openai>=2.33.0,<3" "fastmcp>=3.0.0"
 
     # browser-use (from the block above) dropped its own playwright
     # dependency as of the 0.13.x line: it now drives Chromium over CDP via
