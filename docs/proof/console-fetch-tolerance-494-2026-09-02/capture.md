@@ -156,3 +156,47 @@ notify address, and the create form is back. This is what makes 04 evidence
 rather than a coincidence: the form returns the moment the list can be read,
 so its absence in 04 is caused by the failed read and not by this change having
 broken the form.
+
+---
+
+# Review round three, same day
+
+Captures 06 and 07 cover the blocking item review called the worst of the four:
+`checkout/return` told a payer "We could not find that purchase" when the
+payment service was merely unreachable. Someone reading that page has just
+paid.
+
+Same harness and same running server for both frames. Only the fixture's
+checkout-intent status changes between them.
+
+| capture | checkout-intent endpoint | expected meaning |
+| --- | --- | --- |
+| 06 | `503` | the status could not be read |
+| 07 | `404` | this purchase is genuinely not theirs, or does not exist |
+
+## 06 payment status unreadable
+
+`We could not check your purchase`, with "This is a problem reading the payment
+status, not a statement about your payment. If it went through, the credits
+appear on the billing page once it is confirmed."
+
+```text
+body contains "could not check your purchase"     -> true
+body contains "could not find that purchase"      -> false
+body contains "not a statement about your payment" -> true
+```
+
+## 07 genuinely not found, control
+
+Same server, fixture answering 404. The page returns to `We could not find that
+purchase`.
+
+```text
+body contains "could not find that purchase"  -> true
+body contains "could not check your purchase" -> false
+```
+
+This pair is what makes 06 a real distinction rather than a renamed error
+state: the two causes now render different pages, and the 404 wording is
+unchanged. 403 deliberately renders identically to 404, so the page still
+cannot be used to probe for intent ids belonging to other accounts.
