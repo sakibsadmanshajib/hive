@@ -1,5 +1,5 @@
 import { test } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import path from "node:path";
 
 // Visual proof of the signed-in chat surface, run as a spec so that the session
@@ -23,9 +23,16 @@ import path from "node:path";
 // guard a real spec to see, gives the capture its session through the ordinary
 // dependency mechanism, and leaves the script runnable by hand.
 //
-// execFileSync rather than an import, for the same reason owui.setup.ts spawns
-// its two in-container installers: the child is an .mjs module in another app,
-// and spawning it needs no declaration file and no allowJs.
+// A spawned child rather than an import, for the same reason owui.setup.ts
+// spawns its two in-container installers: the child is an .mjs module in
+// another app, and running it needs no declaration file and no allowJs.
+//
+// Awaited spawn, never the sync form. A synchronous child blocks the Playwright
+// worker's event loop, which stops the timeout below from firing at all while
+// the capture runs, and PR #838 found a test recorded as passed at 30194 ms
+// under a 30000 ms timeout for exactly that reason
+// (tools/lint-no-sync-child-process-in-tests.mjs). stdio is inherited so the
+// capture log reaches the run log live, which is where a failure is read.
 test("signed-in chat surface, captured", async () => {
   // The capture waits up to 180 seconds for a provider to finish streaming, on
   // top of a page load and three full-page screenshots. The default 60 second
@@ -33,9 +40,13 @@ test("signed-in chat surface, captured", async () => {
   // instead of the provider's own failure.
   test.setTimeout(360_000);
 
-  execFileSync(
-    "node",
-    [path.resolve(__dirname, "..", "capture-chat-proof.mjs")],
-    { stdio: "inherit", timeout: 330_000 },
-  );
+  const script = path.resolve(__dirname, "..", "capture-chat-proof.mjs");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("node", [script], { stdio: "inherit" });
+    child.on("error", reject);
+    child.on("close", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`capture-chat-proof.mjs exited with code ${code} signal ${signal}`));
+    });
+  });
 });
