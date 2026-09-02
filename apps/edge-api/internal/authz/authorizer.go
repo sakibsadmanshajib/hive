@@ -303,12 +303,35 @@ func rateLimitMessage(result LimitResult) string {
 	case "token_limit_exceeded":
 		return fmt.Sprintf("Rate limit reached for tokens. Limit: %d per minute.%s", result.TokenLimit, resetClause(result))
 	case "session_limit_exceeded":
-		return "You have used all of your session allowance. Hive measures a session over a rolling five hour window." + resetClause(result)
+		return windowMessage(result.Session,
+			"You have used all of your session allowance. Hive measures a session over a rolling five hour window.",
+			"is larger than the %d%% of your session allowance that is left. Hive measures a session over a rolling five hour window.",
+		) + resetClause(result)
 	case "weekly_limit_exceeded":
-		return "You have used all of your weekly allowance. It restores in full on your account's weekly reset." + resetClause(result)
+		return windowMessage(result.Weekly,
+			"You have used all of your weekly allowance. It restores in full on your account's weekly reset.",
+			"is larger than the %d%% of your weekly allowance that is left. It restores in full on your account's weekly reset.",
+		) + resetClause(result)
 	default:
 		return "Rate limit reached for your current usage window." + resetClause(result)
 	}
+}
+
+// windowMessage distinguishes an exhausted allowance from one that simply
+// cannot fit this request.
+//
+// Both refuse, and saying "you have used all of your allowance" for the second
+// is false: a caller with most of the window left, sending one request larger
+// than the remainder, would be told they had spent everything and would go
+// looking for usage that is not there. Seen live during the issue #1725 proof
+// capture, where a first request against a fresh window refused with nothing
+// consumed at all.
+func windowMessage(window WindowState, exhausted string, oversizedFormat string) string {
+	remaining := window.RemainingPercent()
+	if !window.Configured || remaining <= 0 {
+		return exhausted
+	}
+	return "This request " + fmt.Sprintf(oversizedFormat, remaining)
 }
 
 // resetClause renders the reset instant, in UTC and in RFC3339, plus a
@@ -386,7 +409,11 @@ func RateLimitHeaders(result LimitResult) map[string]string {
 		headers["x-ratelimit-limit-requests"] = strconv.Itoa(result.RequestLimit)
 		headers["x-ratelimit-remaining-requests"] = strconv.Itoa(maxInt(result.RequestRemaining, 0))
 	}
-	if result.RequestResetSeconds > 0 {
+	// Only when a per-minute request limit is the thing being reported. This
+	// header names the requests-per-minute window, and a long-window refusal
+	// used to fill it with a reset four hours out, which reads as a per-minute
+	// limiter that has lost its mind.
+	if result.RequestLimit > 0 && result.RequestResetSeconds > 0 {
 		headers["x-ratelimit-reset-requests"] = strconv.Itoa(result.RequestResetSeconds)
 	}
 	if result.TokenLimit > 0 {

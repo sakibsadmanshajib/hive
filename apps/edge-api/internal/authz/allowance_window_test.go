@@ -273,3 +273,57 @@ func TestRefusalNamesWindowAndReset(t *testing.T) {
 		t.Fatalf("body limit_window %q, want %q", body.Error.Window, ratewindows.Session)
 	}
 }
+
+// TestRefusalDistinguishesOversizedFromExhausted guards a defect found live
+// during the issue #1725 proof capture: a first request against a completely
+// unused window refused with "you have used all of your session allowance",
+// because the request alone was larger than the allowance. A customer told
+// they had spent everything, with a bar reading zero percent beside it, goes
+// looking for usage that does not exist.
+func TestRefusalDistinguishesOversizedFromExhausted(t *testing.T) {
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(time.Hour)
+
+	exhausted := rateLimitMessage(LimitResult{
+		Reason:  "session_limit_exceeded",
+		Window:  ratewindows.Session,
+		ResetAt: reset,
+		Session: WindowState{Configured: true, Limit: 1000, Used: 1000, Remaining: 0, ResetAt: reset},
+	})
+	if !strings.Contains(exhausted, "used all of your session allowance") {
+		t.Fatalf("an exhausted window does not say so: %q", exhausted)
+	}
+
+	oversized := rateLimitMessage(LimitResult{
+		Reason:  "session_limit_exceeded",
+		Window:  ratewindows.Session,
+		ResetAt: reset,
+		Session: WindowState{Configured: true, Limit: 1000, Used: 100, Remaining: 900, ResetAt: reset},
+	})
+	if strings.Contains(oversized, "used all") {
+		t.Fatalf("a window with 90 percent left claims it is spent: %q", oversized)
+	}
+	if !strings.Contains(oversized, "90%") {
+		t.Fatalf("the oversized-request refusal does not say how much is left: %q", oversized)
+	}
+}
+
+// TestLongWindowRefusalDoesNotForgeAPerMinuteHeader guards the second defect
+// the same capture surfaced: a session refusal filled x-ratelimit-reset-requests,
+// which names the requests-per-minute window, with a reset four hours out.
+func TestLongWindowRefusalDoesNotForgeAPerMinuteHeader(t *testing.T) {
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
+	headers := RateLimitHeaders(LimitResult{
+		Reason:              "session_limit_exceeded",
+		Window:              ratewindows.Session,
+		ResetAt:             now.Add(4 * time.Hour),
+		RequestResetSeconds: 14400,
+		Session:             WindowState{Configured: true, Limit: 1000, Used: 1000, ResetAt: now.Add(4 * time.Hour), ResetSeconds: 14400},
+	})
+	if headers["x-ratelimit-limit-requests"] != "" || headers["x-ratelimit-reset-requests"] != "" {
+		t.Fatalf("a long-window refusal forged per-minute request headers: %v", headers)
+	}
+	if headers["retry-after"] != "14400" {
+		t.Fatalf("retry-after %q, want 14400", headers["retry-after"])
+	}
+}
