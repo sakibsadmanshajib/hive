@@ -126,6 +126,7 @@
 		settleRunSteps,
 		type RunStep
 	} from '$lib/hive/coworkMode';
+	import { PROJECT_CHAT_KEY, withProjectFiles } from '$lib/hive/projects/projects';
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
@@ -254,6 +255,9 @@
 	// Chat Input
 	let prompt = '';
 	let chatFiles = [];
+	// The project this conversation belongs to, read off the chat blob at load
+	// time. Resolved into the request's files on every send (#1358).
+	let hiveProjectId: string | null = null;
 	let files = [];
 	let params = {};
 
@@ -1547,6 +1551,7 @@
 		};
 
 		chatFiles = [];
+		hiveProjectId = null;
 		params = {};
 		taskIds = null;
 		chatTasks = [];
@@ -1704,6 +1709,7 @@
 
 				params = structuredClone(chatContent?.params ?? {});
 				chatFiles = structuredClone(chatContent?.files ?? []);
+				hiveProjectId = chatContent?.[PROJECT_CHAT_KEY] ?? null;
 
 				// Load tasks from chat-level DB field
 				chatTasks = chat?.tasks ?? [];
@@ -2835,6 +2841,11 @@
 		);
 		// Remove duplicates
 		files = files.filter((item, index, array) => array.findIndex((i) => equal(i, item)) === index);
+
+		// The project's own documents, resolved from the binding rather than
+		// from anything persisted on the chat: the prune above deletes a chat
+		// level attachment no message references (#1358).
+		files = withProjectFiles(files, hiveProjectId);
 
 		scrollToBottom();
 		eventTarget.dispatchEvent(

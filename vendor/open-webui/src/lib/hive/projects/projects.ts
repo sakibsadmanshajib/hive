@@ -290,6 +290,50 @@ export const removeFileFromProject = async (
 };
 
 /* ------------------------------------------------------------------ *
+ * Delivering the project's files to a conversation
+ * ------------------------------------------------------------------ */
+
+/** One entry of a chat completion request's `files` array. */
+export interface ChatRequestFile {
+	type: string;
+	id: string;
+	[key: string]: unknown;
+}
+
+/**
+ * Put the project's document scope on an outgoing chat request (issue #1358).
+ *
+ * `{ type: 'collection', id }` is the item Open WebUI's own retrieval already
+ * understands: `get_sources_from_items` in
+ * backend/open_webui/retrieval/utils.py resolves it to the collection's files
+ * and applies the caller's read access check before any of them are searched.
+ * A project IS a collection on this backend, per the header above, so binding
+ * needs no new retrieval path and no new permission: this is byte for byte the
+ * item the composer's plus menu produces when the same project is attached by
+ * hand, and it therefore reaches exactly the same documents and no others.
+ *
+ * A reference rather than a list of file ids, deliberately. The claim the
+ * project page makes is that its files reach EVERY conversation in the
+ * project, which includes conversations that already existed when a file was
+ * uploaded; the collection is resolved on each request, so a file added later
+ * is included, while a snapshot taken at bind time would not be.
+ *
+ * Called at request assembly rather than written onto the chat blob, also
+ * deliberately: Chat.svelte prunes chat level files down to those some message
+ * in the branch references before it builds the request, so an attachment
+ * persisted at chat creation time is deleted before it is ever sent.
+ */
+export const withProjectFiles = <T extends ChatRequestFile>(
+	files: T[],
+	projectId: string | null | undefined
+): (T | ChatRequestFile)[] => {
+	if (!projectId) return files;
+	// Already on the turn, because the person attached it by hand.
+	if (files.some((file) => file?.id === projectId)) return files;
+	return [...files, { type: 'collection', id: projectId }];
+};
+
+/* ------------------------------------------------------------------ *
  * Conversations bound to the project
  * ------------------------------------------------------------------ */
 

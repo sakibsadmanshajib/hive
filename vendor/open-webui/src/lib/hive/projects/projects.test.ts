@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -12,7 +16,8 @@ import {
 	listProjects,
 	removeFileFromProject,
 	resolveProjectConversations,
-	updateProject
+	updateProject,
+	withProjectFiles
 } from './projects';
 
 /*
@@ -21,6 +26,9 @@ import {
  * against the real tree inside the image build (npm run test:frontend), so it
  * must stay free of any import a bare vitest cannot resolve.
  */
+
+const here = dirname(fileURLToPath(import.meta.url));
+const chatSource = readFileSync(resolve(here, '../../components/chat/Chat.svelte'), 'utf8');
 
 const json = (body: unknown) =>
 	new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -252,5 +260,68 @@ describe('projects data layer', () => {
 	it('exposes PROJECT_CHAT_KEY namespaced for blob safety', () => {
 		expect(PROJECT_CHAT_KEY).toBe('hiveProject');
 		expect(new ProjectError('x').name).toBe('ProjectError');
+	});
+});
+
+/* ------------------------------------------------------------------ *
+ * Issue #1358: the project's files must reach the model, not just the
+ * project page.
+ * ------------------------------------------------------------------ */
+
+describe('a project bound chat carries the project scope into its request', () => {
+	it('attaches the project as a retrievable collection when the chat is bound', () => {
+		// This is the state a project bound conversation is actually in at send
+		// time. Chat.svelte prunes chatFiles down to the files some message in
+		// the branch references (Chat.svelte, sendMessageSocket), so a chat that
+		// was merely created inside a project reaches this point with nothing:
+		// an attachment written onto the chat blob at creation time is deleted
+		// before it is ever sent. The binding has to be resolved here instead.
+		expect(withProjectFiles([], 'proj-1')).toEqual([{ type: 'collection', id: 'proj-1' }]);
+	});
+
+	it('keeps the turn\'s own attachments alongside the project', () => {
+		const uploaded = { type: 'file', id: 'f1', name: 'invoice.pdf' };
+		expect(withProjectFiles([uploaded], 'proj-1')).toEqual([
+			uploaded,
+			{ type: 'collection', id: 'proj-1' }
+		]);
+	});
+
+	it('leaves an unbound chat exactly as it was, same array', () => {
+		const files = [{ type: 'file', id: 'f1' }];
+		expect(withProjectFiles(files, null)).toBe(files);
+		expect(withProjectFiles(files, '')).toBe(files);
+	});
+
+	it('does not attach the project twice when it is already on the turn', () => {
+		// The person can attach the same project by hand from the plus menu.
+		const manual = { type: 'collection', id: 'proj-1', name: 'Tax 2026' };
+		expect(withProjectFiles([manual], 'proj-1')).toEqual([manual]);
+	});
+
+	it('sends a reference rather than a snapshot, so a file added later still arrives', () => {
+		// The whole claim on ProjectDetail.svelte is that files land in EVERY
+		// conversation in the project, including conversations that already
+		// existed when the file was uploaded. A collection id is resolved to its
+		// current file set by the retrieval layer on every request, so this
+		// holds; a list of file ids captured at bind time would not.
+		const attached = withProjectFiles([], 'proj-1');
+		expect(attached[0]).not.toHaveProperty('collection_names');
+		expect(Object.keys(attached[0])).toEqual(['type', 'id']);
+	});
+});
+
+describe('Chat.svelte actually reads the binding it is handed', () => {
+	it('loads the project marker off the chat blob and clears it on a new chat', () => {
+		expect(chatSource).toContain('hiveProjectId = chatContent?.[PROJECT_CHAT_KEY] ?? null');
+		expect(chatSource).toContain('hiveProjectId = null');
+	});
+
+	it('resolves the binding at request assembly, where every entry point passes', () => {
+		// sendMessageSocket is the one function submitPrompt, regeneration and
+		// continue all reach, and `files` is the field it puts on the wire. A
+		// call anywhere earlier would be pruned away again.
+		const assembly = chatSource.slice(chatSource.indexOf('const sendMessageSocket'));
+		expect(assembly).toContain('files = withProjectFiles(files, hiveProjectId)');
 	});
 });
