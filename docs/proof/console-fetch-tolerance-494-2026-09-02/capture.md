@@ -106,3 +106,47 @@ body contains "Northwind Analytics"               -> true
 body contains ledger rows ("Usage charge")        -> true
 only /alert threshold/i match                     -> <label>Alert threshold</label>
 ```
+
+---
+
+# Review round two, same day
+
+Captures 04 and 05 cover the blocker raised in review: billing/alerts collapsed
+a failed `listSpendAlerts` to `[]`, which both claimed "No spend alerts
+configured yet" about an account that may have several and emptied
+`existingThresholds`, the form's only duplicate check.
+
+Same harness as above, same running server for both frames. The fixture's
+spend-alert endpoint answers 503 for 04 and 200 for 05; nothing else changes
+and the server is not restarted between them.
+
+| capture | tree | spend-alerts endpoint |
+| --- | --- | --- |
+| 04 | `fix/494-console-fetch-tolerance` @ f2ae65432 | `503` |
+| 05 | `fix/494-console-fetch-tolerance` @ f2ae65432 | `200` |
+
+## 04 alerts unreadable
+
+The page renders. "Active alerts" reads "We could not read your spend alerts
+just now. Refresh to try again." rather than "No spend alerts configured yet",
+and the create form is withheld: its duplicate check is the existing threshold
+list, so offering it against a list nobody believes would let a customer create
+a second alert at a threshold they already have, under a UI that says it
+prevents that.
+
+Asserted rather than eyeballed:
+
+```
+body contains "could not read your spend alerts"  -> true
+body contains "No spend alerts configured yet"    -> false
+create form present in the DOM                    -> false
+page intact (heading + workspace name)            -> true
+```
+
+## 05 alerts readable, control
+
+Same server, fixture restored. "1 alert active", the 80% row renders with its
+notify address, and the create form is back. This is what makes 04 evidence
+rather than a coincidence: the form returns the moment the list can be read,
+so its absence in 04 is caused by the failed read and not by this change having
+broken the form.
