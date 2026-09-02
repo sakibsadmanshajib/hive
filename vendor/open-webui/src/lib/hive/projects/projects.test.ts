@@ -317,6 +317,14 @@ describe('Chat.svelte actually reads the binding it is handed', () => {
 		expect(chatSource).toContain('hiveProjectId = null');
 	});
 
+	it('clears the binding before the next chat is read, not only where it is set', () => {
+		// A chat whose blob does not load never reaches the assignment, so a
+		// reset that lives only there leaves the previous conversation's
+		// project attached to the next one.
+		const load = chatSource.slice(chatSource.indexOf('const loadChat = async'));
+		expect(load.slice(0, load.indexOf('const chatContent'))).toContain('hiveProjectId = null');
+	});
+
 	it('resolves the binding at request assembly, where every entry point passes', () => {
 		// sendMessageSocket is the one function submitPrompt, regeneration and
 		// continue all reach, and `files` is the field it puts on the wire. A

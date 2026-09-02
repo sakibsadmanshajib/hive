@@ -1665,6 +1665,10 @@
 
 	const loadChat = async () => {
 		chatId.set(chatIdProp);
+		// Cleared before the incoming chat's blob is read, not only inside the
+		// branch that reads it: a chat whose blob fails to load would otherwise
+		// inherit the previous conversation's project (#1358).
+		hiveProjectId = null;
 
 		if ($temporaryChatEnabled) {
 			temporaryChatEnabled.set(false);
