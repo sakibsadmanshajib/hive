@@ -527,37 +527,40 @@ jobs:
           PGPASSWORD: postgres
         run: |
           set -euo pipefail
-          psql --no-psqlrc -qX -v ON_ERROR_STOP=1 <<'SQL'
-          BEGIN;
+          # -c strings rather than a heredoc. A heredoc terminator has to sit at
+          # column zero, and every line inside a YAML block scalar is indented,
+          # so `SQL` never matched: psql swallowed the assertions below as part
+          # of its own input and the step failed with a bare exit code 3 naming
+          # nothing (run 33679175160). Two statements, two calls, each failing
+          # on its own.
+          psql --no-psqlrc -qX -v ON_ERROR_STOP=1 -c "
+            INSERT INTO public.tenant_model_visibility (tenant_id, alias_id, visible)
+            SELECT t.id, a.alias_id, true
+            FROM public.tenants t
+            CROSS JOIN (VALUES ('hive-free')) AS a(alias_id)
+            WHERE t.slug = 'owui-e2e'
+            ON CONFLICT (tenant_id, alias_id) DO UPDATE
+              SET visible = true, updated_at = now();"
 
-          INSERT INTO public.tenant_model_visibility (tenant_id, alias_id, visible)
-          SELECT t.id, a.alias_id, true
-          FROM public.tenants t
-          CROSS JOIN (VALUES ('hive-free')) AS a(alias_id)
-          WHERE t.slug = 'owui-e2e'
-          ON CONFLICT (tenant_id, alias_id) DO UPDATE
-            SET visible = true, updated_at = now();
+          psql --no-psqlrc -qX -v ON_ERROR_STOP=1 -c "
+            INSERT INTO public.credit_ledger_entries
+              (account_id, entry_type, credits_delta, idempotency_key, metadata)
+            SELECT tba.account_id, 'grant', 1000000000000::bigint,
+                   'chat-proof-grant-' || tba.account_id::text,
+                   jsonb_build_object('source', 'chat-visual-proof')
+            FROM public.tenant_billing_accounts tba
+            JOIN public.tenants t ON t.id = tba.tenant_id
+            WHERE t.slug = 'owui-e2e'
+            ON CONFLICT DO NOTHING;"
 
-          INSERT INTO public.credit_ledger_entries
-            (account_id, entry_type, credits_delta, idempotency_key, metadata)
-          SELECT tba.account_id, 'grant', 1000000000000::bigint,
-                 'chat-proof-grant-' || tba.account_id::text,
-                 jsonb_build_object('source', '.github/workflows/chat-visual-proof.yml')
-          FROM public.tenant_billing_accounts tba
-          JOIN public.tenants t ON t.id = tba.tenant_id
-          WHERE t.slug = 'owui-e2e'
-          ON CONFLICT (idempotency_key) DO NOTHING;
-
-          COMMIT;
-          SQL
           # Asserted, not assumed: both statements are silent when they match no
-          # row, and the failure would surface a quarter of an hour later as a
-          # picker with no free alias in it.
+          # row, and the failure would otherwise surface a quarter of an hour
+          # later as a picker with no free alias in it.
           visible=$(psql --no-psqlrc -qtAX -c "SELECT count(*) FROM public.tenant_model_visibility v JOIN public.tenants t ON t.id = v.tenant_id WHERE t.slug = 'owui-e2e' AND v.alias_id = 'hive-free' AND v.visible")
           credits=$(psql --no-psqlrc -qtAX -c "SELECT coalesce(sum(credits_delta), 0) FROM public.credit_ledger_entries e JOIN public.tenant_billing_accounts tba ON tba.account_id = e.account_id JOIN public.tenants t ON t.id = tba.tenant_id WHERE t.slug = 'owui-e2e'")
           echo "hive-free visibility rows: $visible, credit balance: $credits"
           if [ "$visible" != "1" ]; then
-            echo "::error::the run tenant holds no visible=true row for hive-free, so the picker will offer only paid aliases"
+            echo "::error::the run tenant holds no visible=true row for hive-free, so the picker would offer only paid aliases"
             exit 1
           fi
           if [ "$credits" = "0" ]; then
