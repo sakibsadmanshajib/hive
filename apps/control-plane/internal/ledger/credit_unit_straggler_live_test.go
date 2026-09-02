@@ -30,9 +30,11 @@ import (
 //     unstamped row from BEFORE the boundary is one the scan missed, and an
 //     unstamped row from after it is simply a writer that does not stamp.
 //   - payment_intents: the rescale scaled every row and stamped NONE of them
-//     (its step 6 has no metadata clause at all), so the pre-boundary rows are
-//     the correctly scaled ones and only a post-boundary unstamped row can be
-//     an old-binary straggler.
+//     (its step 6 has no metadata clause at all), so the older rows are the
+//     correctly scaled ones and a candidate sits in a band around the boundary:
+//     an hour on either side, covering a row inserted while that transaction
+//     ran (outside its snapshot, never scaled) and a row an old binary wrote
+//     during the recreate that followed.
 //
 // public.credit_unit_straggler_candidates is the corrected detector, and these
 // suites hold both populations side by side in one database so that a view
@@ -225,6 +227,12 @@ func TestStragglerDetectorInvertsTheBoundaryForPaymentIntents_Live(t *testing.T)
 	// today, and NOT a candidate.
 	insertPaymentIntent(t, pool, accountID, 9_990_000_000, boundary.Add(-30*24*time.Hour), nil)
 
+	// Inserted by another session while the rescale transaction was running:
+	// outside its snapshot, so step 6 never scaled it, and it carries a
+	// created_at just UNDER the marker. Pre-boundary and still a candidate,
+	// which is why this arm is a band rather than "everything after".
+	raced := insertPaymentIntent(t, pool, accountID, 84_276, boundary.Add(-30*time.Minute), nil)
+
 	// Written by an old binary during the container recreate window: after the
 	// boundary, unstamped, and therefore genuinely ambiguous.
 	straggler := insertPaymentIntent(t, pool, accountID, 999_000, boundary.Add(2*time.Minute), nil)
@@ -238,7 +246,19 @@ func TestStragglerDetectorInvertsTheBoundaryForPaymentIntents_Live(t *testing.T)
 	// false positive and the detector would stop meaning zero.
 	insertPaymentIntent(t, pool, accountID, 250_000_000, boundary.Add(72*time.Hour), nil)
 
-	requireOnlyCandidate(t, candidates(t, pool, accountID), "payment_intents", straggler)
+	got := candidates(t, pool, accountID)
+	if len(got) != 2 {
+		t.Fatalf("detector selected %d rows, want the raced insert and the recreate-window straggler: %+v", len(got), got)
+	}
+	selected := map[uuid.UUID]bool{got[0].RowID: true, got[1].RowID: true}
+	if !selected[raced] || !selected[straggler] {
+		t.Fatalf("detector selected %+v, want %s (raced insert) and %s (recreate window)", got, raced, straggler)
+	}
+	for _, c := range got {
+		if c.SourceTable != "payment_intents" {
+			t.Fatalf("unexpected source table %q in %+v", c.SourceTable, got)
+		}
+	}
 }
 
 // TestStragglerDetectorWithoutABoundaryOpensUp_Live holds the failure mode

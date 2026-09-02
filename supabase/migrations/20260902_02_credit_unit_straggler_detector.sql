@@ -34,9 +34,11 @@
 --     payment_intents
 --       20260823_40 scaled every intent and stamped NONE of them (its step 6
 --       has no metadata clause at all), so on this table the pre-boundary
---       unstamped rows are the correctly scaled ones, and only an unstamped row
---       written inside the recreate window that FOLLOWS the boundary can be an
---       old-binary straggler.
+--       unstamped rows are the correctly scaled ones, and a candidate is one
+--       written in a BAND around the boundary: an hour either side, covering
+--       both a row inserted by another session while that migration's
+--       transaction ran (outside its snapshot, so never scaled) and a row an
+--       old binary wrote during the container recreate that followed.
 --
 --   The one genuinely ambiguous window is the container recreate that follows a
 --   migration: old binaries keep serving for seconds to minutes after COMMIT
@@ -122,18 +124,26 @@ SELECT 'payment_intents'::text,
   CROSS JOIN boundary b
  WHERE i.credits <> 0
    AND NOT (i.metadata ? 'credit_unit')
-   -- Bounded at both ends, like the ledger arm and for the same reason. The
-   -- lower bound is what makes this table's rule the inverse of the ledger's;
-   -- the upper bound is this file's own argument applied to itself. An
+   -- A BAND AROUND the boundary, not everything after it.
+   --
+   -- The upper bound is this file's own argument applied to itself: an
    -- unstamped intent written days later is a writer that does not stamp, not
    -- an old unit, and leaving it a permanent candidate would rebuild the false
    -- positive this migration exists to remove, on the other table.
+   --
+   -- The lower bound is one hour BEFORE the boundary rather than the boundary
+   -- itself, because 20260823_40's step 6 scaled the rows visible to ITS
+   -- snapshot. An intent inserted by another session while that transaction ran
+   -- carries a created_at just under the marker and was never scaled. Reading
+   -- everything pre-boundary as "scaled, therefore fine" would hide exactly
+   -- that row, which is the same shape of unevidenced claim this issue is
+   -- about. The band keeps it visible; the backfill below leaves it alone.
    AND (b.applied_at IS NULL
-        OR (i.created_at > b.applied_at
+        OR (i.created_at > b.applied_at - interval '1 hour'
             AND i.created_at <= b.applied_at + interval '1 hour'));
 
 COMMENT ON VIEW public.credit_unit_straggler_candidates IS
-    'Rows that MIGHT still be denominated in the pre-rescale credit unit (1 USD = 100,000 credits), for migration 20260823_40. A row appears here only if its own table says it could be old: unstamped and written at or before public.credit_unit_rescale.applied_at (plus one hour of container-recreate window) for credit_ledger_entries and credit_reservation_events, which the rescale stamped as it scaled; unstamped and written INSIDE that one hour window after the boundary for payment_intents, which the rescale scaled without stamping any of them, so its pre-boundary rows are the correctly scaled ones. Both arms end at the same instant: an unstamped row written later than that is a writer that does not stamp, on either table. Zero rows is the expected state. THERE IS NO BLANKET REMEDY: a hit is a candidate, not a verdict, and multiplying it by 10,000 without first reconciling that one account against public.credit_ledger_entries is how issue #1704 nearly inflated 221 billion credits of real grants. Reconcile per account, in the shape apps/control-plane/internal/payments/invoices/rescale_repair.go uses: ask the ledger what the figure is worth, refuse to write anything the ledger does not support, and correct one row at a time under a guard pinning the value you read. An empty result from a database with no marker row is impossible by construction: the boundary subquery yields NULL there and every unstamped row becomes a candidate.';
+    'Rows that MIGHT still be denominated in the pre-rescale credit unit (1 USD = 100,000 credits), for migration 20260823_40. A row appears here only if its own table says it could be old: unstamped and written at or before public.credit_unit_rescale.applied_at (plus one hour of container-recreate window) for credit_ledger_entries and credit_reservation_events, which the rescale stamped as it scaled; unstamped and written within one hour EITHER SIDE of the boundary for payment_intents, which the rescale scaled without stamping any of them, so its older rows are the correctly scaled ones while a row inserted during that transaction was outside its snapshot and never scaled at all. Both arms end at the same instant: an unstamped row written later than that is a writer that does not stamp, on either table. Zero rows is the expected state. THERE IS NO BLANKET REMEDY: a hit is a candidate, not a verdict, and multiplying it by 10,000 without first reconciling that one account against public.credit_ledger_entries is how issue #1704 nearly inflated 221 billion credits of real grants. Reconcile per account, in the shape apps/control-plane/internal/payments/invoices/rescale_repair.go uses: ask the ledger what the figure is worth, refuse to write anything the ledger does not support, and correct one row at a time under a guard pinning the value you read. An empty result from a database with no marker row is impossible by construction: the boundary subquery yields NULL there and every unstamped row becomes a candidate.';
 
 do $lockdown$
 begin
@@ -188,13 +198,17 @@ BEGIN
     -- intent that existed then was scaled. The legacy value is the same one the
     -- rescale wrote on the ledger rows it scaled, and it is the honest reading
     -- of these: rescaled from the old unit, not native to the new one.
+    -- An hour of clearance, not up to the boundary itself: an intent inserted
+    -- by another session while that migration's transaction ran was outside its
+    -- snapshot and never scaled, and stamping it legacy would assert a rescale
+    -- that never touched it. Rows in that last hour stay detector candidates.
     UPDATE public.payment_intents
        SET metadata = metadata || jsonb_build_object(
                'credit_unit', 'legacy-1usd-100k-credits',
                'credit_unit_stamped_by', '20260902_02_credit_unit_straggler_detector.sql')
      WHERE credits <> 0
        AND NOT (metadata ? 'credit_unit')
-       AND created_at <= boundary;
+       AND created_at <= boundary - interval '1 hour';
     GET DIAGNOSTICS stamped = ROW_COUNT;
     RAISE NOTICE 'stamped % pre-rescale payment intents as legacy-1usd-100k-credits', stamped;
 END
