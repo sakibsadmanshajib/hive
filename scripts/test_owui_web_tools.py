@@ -1008,7 +1008,22 @@ def test_the_deployment_actually_gets_native_function_calling() -> None:
         "the deploy workflow does not force native function calling, so the "
         "box's own .env decides and the tools never reach a model"
     )
-    assert 'OWUI_WEB_TOOLS_ENABLED: "true"' in workflow
+    # And the opposite for the kill switch, which is why it is asserted here
+    # rather than beside the line above. Forcing OWUI_WEB_TOOLS_ENABLED in the
+    # workflow would win over the box's .env in exactly the same way, and that
+    # is the one value an operator would set to turn the feature off in an
+    # incident. Compose already defaults it to true, so forcing it buys
+    # nothing and costs the switch.
+    assert 'OWUI_WEB_TOOLS_ENABLED: "true"' not in workflow, (
+        "the deploy workflow forces the web tools kill switch on, so an "
+        "operator setting OWUI_WEB_TOOLS_ENABLED=false on the box cannot turn "
+        "the feature off"
+    )
+    compose = COMPOSE.read_text(encoding="utf-8")
+    assert "HIVE_WEB_TOOLS_ENABLED: ${OWUI_WEB_TOOLS_ENABLED:-true}" in compose, (
+        "with the workflow no longer forcing it, compose's default is the only "
+        "thing turning the feature on"
+    )
 
 
 def test_a_refusal_reaches_the_model_as_its_own_reason() -> None:

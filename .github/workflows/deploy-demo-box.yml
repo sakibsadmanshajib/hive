@@ -267,7 +267,14 @@ env:
   # Proof that it reached the container:
   #   docker compose exec open-webui env | grep HIVE_DEFAULT_FUNCTION_CALLING
   OWUI_DEFAULT_FUNCTION_CALLING: "native"
-  OWUI_WEB_TOOLS_ENABLED: "true"
+  # OWUI_WEB_TOOLS_ENABLED is deliberately NOT set here, and the reasoning
+  # above does not extend to it. That variable is the documented kill switch
+  # (.env.example), compose already defaults it to true
+  # (HIVE_WEB_TOOLS_ENABLED: ${OWUI_WEB_TOOLS_ENABLED:-true}), and the box's
+  # own .env predates the variable, so forcing it here would change nothing
+  # today while permanently overriding the one value an operator would set to
+  # turn the feature off in an incident. A switch the deployment cannot honour
+  # is worse than no switch.
   # Issue #1602: same reasoning as SEARXNG_SECRET above. Open WebUI's compose
   # fallback (WEBUI_SECRET_KEY:-hive-local-webui-secret) is a dev convenience
   # only, and it is a value committed in the repo, so it must never be what

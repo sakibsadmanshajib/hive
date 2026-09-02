@@ -311,7 +311,7 @@ def assert_selection_gate(text: str) -> None:
 
 
 def patch(text: str) -> str:
-    """Return middleware.py with all three edits applied."""
+    """Return middleware.py with all four edits applied."""
     assert MARKER not in text, f"{MARKER} is already present -- patch applied twice"
 
     body = handler_body(text)
