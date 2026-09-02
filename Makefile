@@ -42,6 +42,7 @@ test-scripts:
 	python3 scripts/test_owui_skill_group_grants.py
 	python3 scripts/test_owui_skill_tenant_scope.py
 	python3 scripts/test_owui_task_upstream_auth.py
+	python3 scripts/test_owui_web_tools.py
 	python3 scripts/owui-promote-instance-admin.py --self-check
 	python3 scripts/classify-upstream-refusal.py --selfcheck
 	python3 scripts/extract-sdk-failures.py --selfcheck

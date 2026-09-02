@@ -601,11 +601,17 @@ def main() -> int:
     # has already shipped one live admin bypass by relaxing an auth check
     # (#1511, fixed in 9916c6ec5).
     unwrap = UNWRAP_GO.read_text(encoding="utf-8")
+    # The arms may GROW: issue #1718 added the two charged web tool routes for
+    # the same reason the agent arm exists, so a shim-key call with no user
+    # token is refused rather than billed to the shim account. What must not
+    # change is that /v1/chat/completions stays unconditional, which is the
+    # relaxation this check exists to catch.
     check(
         'func requiresPerUserAuth(path string) bool {\n'
         '\treturn path == "/v1/chat/completions" ||\n'
         '\t\tpath == "/v1/agent/tasks" ||\n'
-        '\t\tstrings.HasPrefix(path, "/v1/agent/tasks/")\n'
+        '\t\tstrings.HasPrefix(path, "/v1/agent/tasks/") ||\n'
+        '\t\tstrings.HasPrefix(path, "/v1/tools/")\n'
         "}" in unwrap,
         "edge-api still requires a per-user token on /v1/chat/completions "
         "unconditionally: this fix supplies the credential, it does not widen "

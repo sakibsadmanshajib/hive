@@ -369,10 +369,22 @@ func hasShimAuthorization(header, shimKey string) bool {
 //
 // The agent arm is a prefix rather than an exact list because the subtree
 // carries a task id: /v1/agent/tasks/{id} and /v1/agent/tasks/{id}/cancel.
+//
+// The web tool arm (issue #1718) is a prefix for a different reason: it must
+// cover both call routes and must NOT cover GET /v1/tools, the descriptor
+// list, which sits one level up and so does not match this prefix. The two
+// calls are charged, 100,000 credits for a search and 200,000 for a fetch,
+// settled against whichever principal edge-api resolves; running them under
+// the shim principal would bill one account for every customer's searches and
+// attribute none of them. The list costs nothing and carries no tenant data,
+// so it stays reachable under the shim key alone, which is what lets the chat
+// container read the specifications once per process rather than once per
+// signed-in user.
 func requiresPerUserAuth(path string) bool {
 	return path == "/v1/chat/completions" ||
 		path == "/v1/agent/tasks" ||
-		strings.HasPrefix(path, "/v1/agent/tasks/")
+		strings.HasPrefix(path, "/v1/agent/tasks/") ||
+		strings.HasPrefix(path, "/v1/tools/")
 }
 
 // normalizeUpstreamAuth reduces a carried credential to a bare token,

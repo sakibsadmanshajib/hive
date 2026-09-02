@@ -262,14 +262,46 @@ RUN python3 /tmp/apply_rag_env_config_patch.py \
 # routed upstream provider applies. This consumes the `hive.chat.system_prompt`
 # row the reconcile directly above writes from HIVE_CHAT_SYSTEM_PROMPT, and
 # prepends it to the request's system message. Runs immediately after that
-# reconcile so the writer and its only reader stay adjacent; no other patch in
-# this file writes utils/middleware.py. Same fail-loud posture as the patches
-# above, and the patch's own assertions pin the position that makes the prompt
-# survive the native tool-call restore.
+# reconcile so the writer and its only reader stay adjacent. Same fail-loud
+# posture as the patches above, and the patch's own assertions pin the position
+# that makes the prompt survive the native tool-call restore.
+#
+# One other patch in this file writes utils/middleware.py, the web tools splice
+# directly below. The two touch different regions and neither anchor sits
+# inside the other's insert, so the order between them does not matter; both
+# assert their own anchors, so a future collision fails this build rather than
+# silently applying one of the two.
 COPY deploy/docker/owui-patches/apply_chat_system_prompt_patch.py /tmp/apply_chat_system_prompt_patch.py
 RUN python3 /tmp/apply_chat_system_prompt_patch.py \
     && test "$(grep -c '# hive (#1596)' /app/backend/open_webui/utils/middleware.py)" -eq 1 \
     && grep -q "await Config.get('hive.chat.system_prompt')" /app/backend/open_webui/utils/middleware.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/middleware.py').read_text())"
+
+# issue #1718: web_search and web_fetch reach a model at all.
+#
+# The Go side has had the tool specifications since #1656 and the charged
+# endpoints since #1695, and neither had a caller: Descriptors() was never
+# serialised into a request and /v1/tools/web_search was never POSTed to. Chat
+# could reach live information only through Open WebUI's own Python SearXNG
+# integration, behind the globe toggle a user had to remember to press.
+#
+# This splice attaches the specifications, fetched from edge-api's own
+# GET /v1/tools so there is no second copy to drift, to every request whose
+# alias reports hive_capabilities.tools, and registers callables that POST to
+# the two charged endpoints. Upstream's existing native tool loop executes
+# them and feeds the result back into the turn; no second loop is added.
+#
+# It also drops upstream's 21 builtin tool specifications. That is what makes
+# HIVE_DEFAULT_FUNCTION_CALLING=native affordable: the builtin set is 12089
+# bytes and 3144 Groq prompt tokens per request, which is why this deployment
+# was pinned to the legacy path in the first place (see docker-compose.yml).
+COPY deploy/docker/owui-patches/hive_web_tools.py /app/backend/open_webui/utils/hive_web_tools.py
+COPY deploy/docker/owui-patches/apply_web_tools_patch.py /tmp/apply_web_tools_patch.py
+RUN python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_web_tools.py').read_text())" \
+    && python3 /tmp/apply_web_tools_patch.py \
+    && test "$(grep -c '# hive (#1718)' /app/backend/open_webui/utils/middleware.py)" -eq 3 \
+    && grep -q 'tools_dict = await _hive_select_tools' /app/backend/open_webui/utils/middleware.py \
+    && grep -q "'web_search': 'search_web'" /app/backend/open_webui/utils/middleware.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/middleware.py').read_text())"
 
 COPY deploy/docker/owui-patches/apply_web_search_ratelimit_patch.py /tmp/apply_web_search_ratelimit_patch.py

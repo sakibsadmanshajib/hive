@@ -920,6 +920,11 @@ func registerAudioVoicesRoute(mux httpMux) {
 // route that ships with no support-matrix entry turns that test red instead
 // of only failing at boot on the deployed box.
 func registerWebToolRoutes(mux httpMux, webToolsHandler http.Handler) {
+	// GET /v1/tools, the descriptor list the chat shim reads (issue #1718).
+	// Registered alongside the two call routes rather than in its own family
+	// because it is the same handler and the same package; what it must never
+	// be is a second copy of the specifications living in the front end.
+	mux.Handle("/v1/tools", webToolsHandler)
 	mux.Handle("/v1/tools/"+webtools.ToolWebSearch, webToolsHandler)
 	mux.Handle("/v1/tools/"+webtools.ToolWebFetch, webToolsHandler)
 }
