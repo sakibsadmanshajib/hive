@@ -232,6 +232,12 @@ func TestStragglerDetectorInvertsTheBoundaryForPaymentIntents_Live(t *testing.T)
 	// The current binary stamps at creation (payments.Service.InitiateCheckout).
 	insertPaymentIntent(t, pool, accountID, 10_000_000_000, boundary.Add(72*time.Hour), map[string]any{"credit_unit": CreditUnitV2})
 
+	// Unstamped, but written days after the recreate window closed: a writer
+	// that does not stamp, exactly like the seven ledger grants, and not a
+	// candidate. Without the arm's upper bound this row would be a permanent
+	// false positive and the detector would stop meaning zero.
+	insertPaymentIntent(t, pool, accountID, 250_000_000, boundary.Add(72*time.Hour), nil)
+
 	requireOnlyCandidate(t, candidates(t, pool, accountID), "payment_intents", straggler)
 }
 
