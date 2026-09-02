@@ -32,14 +32,24 @@
 --   tell afterwards which of the two moved a price.
 --
 -- WORKED DERIVATION
---   Machine-checked. The DERIVE rows below are parsed by
---   TestMarginRetirementPricesMatchProviderRates in
---   apps/control-plane/internal/routing/margin_retirement_pricing_test.go,
---   which recomputes every credit figure from the rate beside it in exact
---   math/big rational arithmetic, cross-checks each rate against the committed
---   provider snapshot, and asserts the SQL below writes that figure into that
---   column of that alias row. Editing a price without editing its rate turns
---   that test red.
+--   Machine-checked, by four tests in
+--   apps/control-plane/internal/routing/margin_retirement_pricing_test.go that
+--   parse the DERIVE rows below:
+--
+--     TestMarginRetirementPricesCarryNoMarginFactor
+--       recomputes every credit figure from the rate beside it in exact
+--       math/big rational arithmetic, and separately refuses a figure that is
+--       still the rate times 1.4.
+--     TestMarginRetirementRatesMatchTheProviderSnapshot
+--       cross-checks each rate against the committed provider snapshot, so a
+--       rate change cannot be folded into a margin change unnoticed.
+--     TestMarginRetirementFiguresLandOnTheirOwnAliasRow
+--       asserts the SQL below writes that figure into that column of that
+--       alias row, rather than merely containing the digits somewhere.
+--     TestMarginRetirementCoversEveryRepricedAlias
+--       fails on a price this file writes with no DERIVE row behind it.
+--
+--   Editing a price without editing its rate turns the first two red.
 --
 -- DERIVE| alias_id | route_id | provider_model | field | usd_per_million | credits
 -- DERIVE| hive-default | route-deepseek-v4-flash-default | openrouter/~deepseek/deepseek-v4-flash-latest | in | 0.0639 | 63900000
