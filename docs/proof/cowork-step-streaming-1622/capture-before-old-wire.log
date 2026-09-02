@@ -1,0 +1,58 @@
+[+  0.57s] capture start, wire=old, label=before-old-wire
+[+  8.80s] signed in, url=http://127.0.0.1:3423/
+[+ 12.15s] shot 01-composer
+[+ 13.07s] composer switched to Work
+[+ 13.25s] shot 02-work-mode
+[+ 14.04s] shot 03-brief-typed
+[+ 14.49s] composer submitted the run
+[+ 15.73s] t+1.2s transcript shows 0 step line(s): []
+[+ 17.24s] t+2.7s transcript shows 0 step line(s): []
+[+ 18.75s] t+4.3s transcript shows 0 step line(s): []
+[+ 20.26s] t+5.8s transcript shows 0 step line(s): []
+[+ 21.80s] t+7.3s transcript shows 0 step line(s): []
+[+ 23.31s] t+8.8s transcript shows 0 step line(s): []
+[+ 24.82s] t+10.3s transcript shows 0 step line(s): []
+[+ 26.33s] t+11.8s transcript shows 0 step line(s): []
+[+ 26.43s] shot 04-running-8
+[+ 27.94s] t+13.4s transcript shows 0 step line(s): []
+[+ 29.45s] t+15.0s transcript shows 0 step line(s): []
+[+ 30.96s] t+16.5s transcript shows 0 step line(s): []
+[+ 32.47s] t+18.0s transcript shows 0 step line(s): []
+[+ 33.98s] t+19.5s transcript shows 0 step line(s): []
+[+ 35.49s] t+21.0s transcript shows 0 step line(s): []
+[+ 35.58s] shot 04-running-14
+[+ 35.32s] t+20.8s transcript shows 0 step line(s): []
+[+ 36.83s] t+22.3s transcript shows 0 step line(s): []
+[+ 38.34s] t+23.8s transcript shows 0 step line(s): []
+[+ 39.84s] t+25.3s transcript shows 0 step line(s): []
+[+ 41.35s] t+26.9s transcript shows 0 step line(s): []
+[+ 42.87s] t+28.4s transcript shows 0 step line(s): []
+[+ 44.38s] t+29.9s transcript shows 0 step line(s): []
+[+ 45.89s] t+31.4s transcript shows 0 step line(s): []
+[+ 47.40s] t+32.9s transcript shows 0 step line(s): []
+[+ 48.91s] t+34.4s transcript shows 0 step line(s): []
+[+ 50.42s] t+35.9s transcript shows 0 step line(s): []
+[+ 51.93s] t+37.4s transcript shows 0 step line(s): []
+[+ 52.05s] shot 04-running-26
+[+ 53.56s] t+39.1s transcript shows 0 step line(s): []
+[+ 55.08s] t+40.6s transcript shows 0 step line(s): []
+[+ 56.59s] t+42.1s transcript shows 0 step line(s): []
+[+ 58.20s] shot 05-finished
+[+ 58.20s] --- summary ---
+[+ 58.20s] most step lines on screen at once: 0
+[+ 58.20s] samples during the run that showed any step: 0 of 11
+[+ 58.20s] final step lines: []
+[+ 58.20s] --- agent API calls the front end made ---
+  14489 POST /tasks
+  17576 GET /tasks/{id} -> queued
+  17585 GET /events?after_seq=0 -> 0
+  20700 GET /tasks/{id} -> running
+  20718 GET /events?after_seq=0 -> 0
+  23844 GET /tasks/{id} -> running
+  23855 GET /events?after_seq=0 -> 0
+  26969 GET /tasks/{id} -> running
+  26978 GET /events?after_seq=0 -> 0
+  30067 GET /tasks/{id} -> running
+  30075 GET /events?after_seq=0 -> 0
+  33169 GET /tasks/{id} -> succeeded
+  33178 GET /events?after_seq=0 -> 0

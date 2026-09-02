@@ -1,0 +1,58 @@
+[+  0.27s] capture start, wire=new, label=before-new-wire
+[+  7.50s] signed in, url=http://127.0.0.1:3423/
+[+ 10.57s] shot 01-composer
+[+ 11.44s] composer switched to Work
+[+ 11.54s] shot 02-work-mode
+[+ 12.23s] shot 03-brief-typed
+[+ 12.69s] composer submitted the run
+[+ 13.93s] t+1.2s transcript shows 0 step line(s): []
+[+ 15.44s] t+2.7s transcript shows 0 step line(s): []
+[+ 16.96s] t+4.3s transcript shows 0 step line(s): []
+[+ 18.47s] t+5.8s transcript shows 0 step line(s): []
+[+ 19.98s] t+7.3s transcript shows 0 step line(s): []
+[+ 21.49s] t+8.8s transcript shows 0 step line(s): []
+[+ 23.01s] t+10.3s transcript shows 1 step line(s): ["Using bash: list the workspace"]
+[+ 24.52s] t+11.8s transcript shows 1 step line(s): ["Using bash: list the workspace"]
+[+ 24.68s] shot 04-running-8
+[+ 26.18s] t+13.5s transcript shows 1 step line(s): ["Using str_replace_editor: write sixcap.txt"]
+[+ 27.69s] t+15.0s transcript shows 1 step line(s): ["Using str_replace_editor: write sixcap.txt"]
+[+ 29.22s] t+16.5s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 30.73s] t+18.0s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 32.24s] t+19.5s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 31.96s] t+19.3s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 32.05s] shot 04-running-14
+[+ 33.57s] t+20.9s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 35.08s] t+22.4s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 36.59s] t+23.9s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 38.10s] t+25.4s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 39.61s] t+26.9s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 41.12s] t+28.4s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 42.63s] t+29.9s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 44.14s] t+31.4s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 45.66s] t+33.0s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 47.17s] t+34.5s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 48.68s] t+36.0s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 50.19s] t+37.5s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 50.31s] shot 04-running-26
+[+ 51.82s] t+39.1s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 53.33s] t+40.6s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 54.85s] t+42.1s transcript shows 1 step line(s): ["Workspace file: sixcap.txt"]
+[+ 56.44s] shot 05-finished
+[+ 56.44s] --- summary ---
+[+ 56.44s] most step lines on screen at once: 1
+[+ 56.44s] samples during the run that showed any step: 5 of 11
+[+ 56.44s] final step lines: ["Workspace file: sixcap.txt"]
+[+ 56.44s] --- agent API calls the front end made ---
+  12687 POST /tasks
+  15783 GET /tasks/{id} -> queued
+  15791 GET /events?after_seq=0 -> 0
+  18883 GET /tasks/{id} -> running
+  18896 GET /events?after_seq=0 -> 0
+  22031 GET /tasks/{id} -> running
+  22041 GET /events?after_seq=0 -> 1
+  25142 GET /tasks/{id} -> running
+  25151 GET /events?after_seq=1 -> 2
+  28246 GET /tasks/{id} -> running
+  28257 GET /events?after_seq=3 -> 2
+  31350 GET /tasks/{id} -> succeeded
+  31358 GET /events?after_seq=5 -> 1

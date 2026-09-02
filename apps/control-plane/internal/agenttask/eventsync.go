@@ -252,15 +252,33 @@ func (s *EventSyncer) syncTask(ctx context.Context, t Task) {
 // (it reads from zero and skips nothing), so there is no shared mutable state
 // between the two callers and nothing here needs a lock.
 func (s *EventSyncer) FlushTask(ctx context.Context, t Task) {
-	if t.EngineSessionRef == "" {
-		return // never launched, so there is no session to read
+	flushTaskEvents(ctx, s.repo, s.src, s.logger, t)
+}
+
+// flushTaskEvents is the shared body of that flush, because there are TWO
+// writers of a terminal status and the invariant has to hold for both: the
+// poller, for a run the engine finished, and Service.Cancel, for one the user
+// stopped. A guarantee that holds on one of them is not a guarantee, and a
+// cancelled run whose steps were recorded afterwards is the same blank box
+// this change is about.
+//
+// Never able to stop a terminal status from being written: a nil source, a
+// task that never launched, an unreadable session and a failed append all
+// return quietly. A run whose outcome is known and unwritten is worse than a
+// run with missing steps.
+func flushTaskEvents(ctx context.Context, repo Repository, src EventSource, logger *slog.Logger, t Task) {
+	if src == nil || t.EngineSessionRef == "" {
+		return
 	}
-	events, _ := s.pullTaskEvents(ctx, t, 0, nil)
+	if logger == nil {
+		logger = slog.Default()
+	}
+	events, _ := pullSessionEvents(ctx, src, logger, t, 0, nil)
 	if len(events) == 0 {
 		return
 	}
-	if err := s.repo.AppendEvents(ctx, t, events); err != nil {
-		s.logger.WarnContext(ctx, "agenttask: final event flush failed",
+	if err := repo.AppendEvents(ctx, t, events); err != nil {
+		logger.WarnContext(ctx, "agenttask: final event flush failed",
 			"task_id", t.ID, "error", err)
 	}
 }
@@ -275,11 +293,17 @@ func (s *EventSyncer) FlushTask(ctx context.Context, t Task) {
 // terminal command and file write produced. Every failure here logs against
 // t alone; the caller still gets whatever partial slice was built.
 func (s *EventSyncer) pullTaskEvents(ctx context.Context, t Task, offset int, skipFiles map[string]bool) (events []TaskEvent, next int) {
+	return pullSessionEvents(ctx, s.src, s.logger, t, offset, skipFiles)
+}
+
+// pullSessionEvents is that pull with no syncer attached, so the shared flush
+// above can use it too.
+func pullSessionEvents(ctx context.Context, src EventSource, logger *slog.Logger, t Task, offset int, skipFiles map[string]bool) (events []TaskEvent, next int) {
 	next = offset
 
-	sandboxEvents, err := s.pullSandboxEvents(ctx, t.EngineSessionRef)
+	sandboxEvents, err := src.Events(ctx, t.EngineSessionRef)
 	if err != nil {
-		s.logger.WarnContext(ctx, "agenttask: event sync pull failed",
+		logger.WarnContext(ctx, "agenttask: event sync pull failed",
 			"task_id", t.ID, "error", err)
 		return events, next
 	}
@@ -296,9 +320,9 @@ func (s *EventSyncer) pullTaskEvents(ctx context.Context, t Task, offset int, sk
 		}
 	}
 
-	files, ferr := s.src.Files(ctx, t.EngineSessionRef)
+	files, ferr := src.Files(ctx, t.EngineSessionRef)
 	if ferr != nil {
-		s.logger.WarnContext(ctx, "agenttask: workspace listing failed",
+		logger.WarnContext(ctx, "agenttask: workspace listing failed",
 			"task_id", t.ID, "error", ferr)
 		return events, next
 	}
@@ -401,18 +425,6 @@ func fileEvent(f WorkspaceFile) TaskEvent {
 		Kind:          EventFile,
 		Payload:       payload,
 	}
-}
-
-// pullSandboxEvents pages through the source's search endpoint until it
-// reports exhaustion or maxSyncPages is hit.
-func (s *EventSyncer) pullSandboxEvents(ctx context.Context, sessionRef string) ([]SandboxEvent, error) {
-	var all []SandboxEvent
-	page, err := s.src.Events(ctx, sessionRef)
-	if err != nil {
-		return nil, err
-	}
-	all = append(all, page...)
-	return all, nil
 }
 
 // mapSandboxEvent translates one normalized sandbox event into our six-kind

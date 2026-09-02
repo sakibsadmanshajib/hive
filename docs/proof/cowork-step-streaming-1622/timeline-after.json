@@ -1,0 +1,204 @@
+[
+  {
+    "at": 1.2,
+    "lines": []
+  },
+  {
+    "at": 2.7,
+    "lines": []
+  },
+  {
+    "at": 4.2,
+    "lines": []
+  },
+  {
+    "at": 5.7,
+    "lines": []
+  },
+  {
+    "at": 7.2,
+    "lines": []
+  },
+  {
+    "at": 8.8,
+    "lines": []
+  },
+  {
+    "at": 10.3,
+    "lines": [
+      "Using bash: list the workspace"
+    ]
+  },
+  {
+    "at": 11.8,
+    "lines": [
+      "Using bash: list the workspace"
+    ]
+  },
+  {
+    "at": 13.4,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Using str_replace_editor: write sixcap.txt"
+    ]
+  },
+  {
+    "at": 14.9,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Using str_replace_editor: write sixcap.txt"
+    ]
+  },
+  {
+    "at": 16.4,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 17.9,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 18.7,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 19.1,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 20.8,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 22.3,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 23.8,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 25.3,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 26.8,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 28.3,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 29.8,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 31.3,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 32.9,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 34.4,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 35.9,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 37.4,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 39,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 40.6,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  },
+  {
+    "at": 42.1,
+    "lines": [
+      "Used bash: AGENTS.md",
+      "Used str_replace_editor: wrote 13 bytes",
+      "Workspace file: sixcap.txt"
+    ]
+  }
+]

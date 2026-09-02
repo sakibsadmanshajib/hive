@@ -858,3 +858,51 @@ func (f *fakeRepository) ListEvents(_ context.Context, _, _ uuid.UUID, id uuid.U
 	}
 	return out, nil
 }
+
+// A cancelled run is the second writer of a terminal status, and the
+// invariant the poller upholds has to hold here too (issues #1622, #1504,
+// raised in review on PR #1709). The steps a run took before somebody stopped
+// it are the record of how far it got, and the transcript stops following the
+// instant it reads `cancelled`.
+func TestService_Cancel_StoresTheRunsStepsBeforeItPublishesTheCancellation(t *testing.T) {
+	repo := newFakeRepository()
+	task, err := repo.Create(context.Background(), uuid.New(), uuid.New(), agenttask.PackKnowledgeWork, "", uuid.Nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	task, err = repo.Transition(context.Background(), task.TenantID, task.UserID, task.ID,
+		agenttask.StatusRunning, "session-1", "", "")
+	if err != nil {
+		t.Fatalf("Transition: %v", err)
+	}
+	src := &scriptedEventSource{events: multiStepRun()}
+	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithEventSource(src),
+		agenttask.WithTaskCredentials(newFakeCredentials()))
+
+	if _, err := svc.Cancel(context.Background(), task.TenantID, task.UserID, task.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	svc.WaitIdle()
+
+	stored := repo.eventsAtTransition(task.ID)
+	if len(stored) < len(multiStepRun()) {
+		t.Fatalf("the cancellation was published with %d steps stored, want the run's %d",
+			len(stored), len(multiStepRun()))
+	}
+}
+
+func TestService_Cancel_WithNoEventSourceStillCancels(t *testing.T) {
+	// A deployment with no engine wired has no events to flush and must not
+	// be prevented from cancelling by their absence.
+	repo := newFakeRepository()
+	task, _ := repo.Create(context.Background(), uuid.New(), uuid.New(), agenttask.PackKnowledgeWork, "", uuid.Nil)
+	svc := agenttask.NewService(repo, &fakeEngine{}, agenttask.WithTaskCredentials(newFakeCredentials()))
+
+	got, err := svc.Cancel(context.Background(), task.TenantID, task.UserID, task.ID)
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if got.Status != agenttask.StatusCancelled {
+		t.Fatalf("status=%q want cancelled", got.Status)
+	}
+}
