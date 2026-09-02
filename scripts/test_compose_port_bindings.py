@@ -61,13 +61,16 @@ def published(path):
 
 def main():
     failures = []
+    used = set()
     checked = 0
     for path in COMPOSE:
         for service, entry in published(path):
             checked += 1
             if entry.startswith("127.0.0.1:") or entry.startswith("[::1]:"):
                 continue
-            if entry in ALLOWED.get(f"{path.name}:{service}", set()):
+            key = f"{path.name}:{service}"
+            if entry in ALLOWED.get(key, set()):
+                used.add((key, entry))
                 continue
             failures.append(
                 f"{path.name}: service {service!r} publishes {entry!r} on every "
@@ -76,6 +79,19 @@ def main():
             )
 
     assert checked >= 10, f"parsed only {checked} port entries; the parser is broken"
+
+    # An allowlist entry that stops matching is dead, and a dead entry would go
+    # on excusing that service/port pair if somebody re-widened it later. Say so
+    # rather than failing: the caddy-console entry goes stale the moment PR #1749
+    # merges, and a hard failure there would redden main on merge order alone.
+    for key, entries in sorted(ALLOWED.items()):
+        for entry in sorted(entries):
+            if (key, entry) not in used:
+                print(
+                    f"WARN stale allowlist entry {key} {entry!r}: no longer present, "
+                    "delete it from ALLOWED",
+                    file=sys.stderr,
+                )
 
     if failures:
         for failure in failures:

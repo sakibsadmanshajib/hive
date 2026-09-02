@@ -33,6 +33,11 @@
 # plain single-checkout dev setup keep the exact "hive" project name they
 # have always had.
 #
+# Run this AFTER copying any .env into the worktree, never before: a later
+# `cp <somewhere>/.env .env` overwrites the COMPOSE_PROJECT_NAME line written
+# below, the worktree silently rejoins project "hive", and the next
+# `docker compose up` recreates the canonical checkout's containers.
+#
 # Usage:
 #   scripts/set-compose-project-name.sh          write the isolation files
 #   scripts/set-compose-project-name.sh --check  verify no live collision,
