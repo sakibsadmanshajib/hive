@@ -1,4 +1,4 @@
-import { CREDITS_PER_USD, formatCredits } from "@/lib/format/credits";
+import { CREDITS_PER_USD, formatCreditDigits } from "@/lib/format/credits";
 
 // Re-exported for the callers that have always imported the credit unit
 // from this module. It now lives in lib/format/credits.ts, next to the
@@ -7,51 +7,29 @@ import { CREDITS_PER_USD, formatCredits } from "@/lib/format/credits";
 export { CREDITS_PER_USD };
 
 /**
- * Which unit a price cell renders in. Both units share one absence policy,
- * because "deliberately free", "variable by design" and "we could not read
- * the price" mean the same three things whichever unit the number is in.
+ * Catalog prices are quoted in Hive credits per million metered tokens, and
+ * in nothing else.
+ *
+ * This module used to carry formatUsdFromCredits and render every rate as US
+ * dollars, with the model detail page printing the dollar figure and the
+ * credit integer for the same rate side by side. That pairing published the
+ * credit peg outright: two renderings of one quantity are a conversion table.
+ * The owner ruling recorded as .wolf/decisions.md D-070 removed currency from
+ * every surface except an invoice, and a published rate a customer compares
+ * against their own credit spend is exactly the surface the ruling is about.
+ *
+ * A rate is a whole number of credits, so there is no precision policy left
+ * to get wrong. The old formatter needed one: at two decimals a real cache
+ * read rate of 2,982,000 credits per million printed "$0.00", so it carried a
+ * per-value significant-digit rule to keep a non-zero price from reading as
+ * free. An integer count cannot round to zero.
+ *
+ * Digits without the unit word, because every caller states the unit once for
+ * a whole column or a whole tile ("Input / 1M credits") rather than repeating
+ * it in each cell of a price table.
  */
-export type PriceUnit = "usd" | "credits";
-
-/**
- * Render a credit rate as US dollars without ever rounding a real price down
- * to zero.
- *
- * The precision is chosen per value rather than fixed at two decimals. A
- * two-decimal render prints `$0.00` for a cache-read rate of 2,982,000
- * credits per million ($0.002982, the corrected DeepSeek flash rate from
- * `20260825_02_deepseek_cache_read_price_correction.sql`), and a price that
- * looks free is a worse lie than the raw integer this replaces.
- *
- * The rule: keep three significant digits, never fewer than two decimals, and
- * never more than nine. Nine is not a taste call, it is the exact width of
- * the unit: one credit is 1e-9 USD, so nine decimals renders ANY integer
- * credit rate as a non-zero figure. `$0.00` is therefore unreachable for a
- * non-zero price, which is the invariant the tests pin.
- *
- * Locale is pinned to en-US rather than routed through `intlTag`. The unit is
- * US dollars on every surface, and `bn-BD` renders the same amount as
- * `US$0.20`, which reads as a second currency next to the `$0.20` the model
- * pages this mirrors print. Grouping separators only appear above $1,000,
- * which no per-million token rate in the catalog approaches.
- */
-export function formatUsdFromCredits(credits: number): string {
-  if (!Number.isFinite(credits) || credits === 0) {
-    return "$0";
-  }
-  const usd = credits / CREDITS_PER_USD;
-  const magnitude = Math.floor(Math.log10(Math.abs(usd)));
-  const maximumFractionDigits = Math.min(9, Math.max(2, 2 - magnitude));
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits,
-  }).format(usd);
-}
-
-function renderPrice(credits: number, unit: PriceUnit): string {
-  return unit === "credits" ? formatCredits(credits) : formatUsdFromCredits(credits);
+function renderPrice(credits: number): string {
+  return formatCreditDigits(credits);
 }
 
 /**
@@ -60,26 +38,22 @@ function renderPrice(credits: number, unit: PriceUnit): string {
  *
  *   - A number, zero included, is a published rate. Zero means the dimension is
  *     deliberately not charged (hive-default publishes exactly that for cache
- *     write), so it prints as "$0" and never as an absence. A customer reading
- *     zero is reading a decision.
+ *     write), so it prints as "0" and never as an absence. A customer
+ *     reading zero is reading a decision.
  *   - Null on an `upstream_actual` alias is the design: the price is variable
  *     per request and there genuinely is no per-million rate to publish.
  *   - Null on a `fixed` alias means the lookup came back empty. Calling that
  *     "Variable" would dress a broken decode up as a pricing model on the one
  *     screen a customer opens to check what a model costs.
- *
- * `unit` changes only how a real number is drawn. It cannot turn an absence
- * into a number or a number into an absence.
  */
 export function formatModelPrice(
   credits: number | null,
   pricingMode: string,
-  unit: PriceUnit = "usd",
 ): string {
   if (credits === null) {
     return pricingMode === "upstream_actual" ? "Variable" : "Unknown";
   }
-  return renderPrice(credits, unit);
+  return renderPrice(credits);
 }
 
 /**
@@ -95,12 +69,11 @@ export function formatModelPrice(
 export function formatCachePrice(
   credits: number | null,
   pricingMode: string,
-  unit: PriceUnit = "usd",
 ): string {
   if (credits === null) {
     return pricingMode === "upstream_actual" ? "Variable" : "—";
   }
-  return renderPrice(credits, unit);
+  return renderPrice(credits);
 }
 
 /**
@@ -109,23 +82,18 @@ export function formatCachePrice(
  * halves go through formatModelPrice, so a variable-price alias reads
  * "Variable / Variable" rather than borrowing a number from the other side.
  */
-export function formatInOutPrice(
-  pricing: {
-    input_price_credits: number | null;
-    output_price_credits: number | null;
-    pricing_mode: string;
-  },
-  unit: PriceUnit = "usd",
-): string {
+export function formatInOutPrice(pricing: {
+  input_price_credits: number | null;
+  output_price_credits: number | null;
+  pricing_mode: string;
+}): string {
   const input = formatModelPrice(
     pricing.input_price_credits,
     pricing.pricing_mode,
-    unit,
   );
   const output = formatModelPrice(
     pricing.output_price_credits,
     pricing.pricing_mode,
-    unit,
   );
-  return `${input} / ${output}`;
+  return input + " / " + output;
 }

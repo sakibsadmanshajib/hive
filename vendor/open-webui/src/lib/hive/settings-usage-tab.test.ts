@@ -6,8 +6,7 @@ import { readable } from 'svelte/store';
 
 import SettingsUsage from './SettingsUsage.svelte';
 import {
-	formatUsdBalanceFromCredits,
-	formatUsdFromCredits,
+	formatCreditAmount,
 	type CreditBalance,
 	type CreditSnapshot
 } from './credits';
@@ -215,7 +214,7 @@ describe('Usage tab wiring in the settings modal', () => {
 });
 
 describe('Usage tab, rendered', () => {
-	it('puts each money figure in its own labelled row', () => {
+	it('puts each credit figure in its own labelled row', () => {
 		// The mutation this exists to catch: swap the two figures so the
 		// balance row shows today spend and vice versa. Every source-level
 		// assertion in this file stays green through that swap; this one does
@@ -229,37 +228,44 @@ describe('Usage tab, rendered', () => {
 		const balanceRow = html.slice(balanceLabel, todayLabel);
 		const todayRow = html.slice(todayLabel);
 
-		expect(balanceRow).toContain(formatUsdBalanceFromCredits(AVAILABLE_CREDITS));
-		expect(balanceRow).not.toContain(formatUsdFromCredits(USAGE_TODAY_CREDITS));
-		expect(todayRow).toContain(formatUsdFromCredits(USAGE_TODAY_CREDITS));
-		expect(todayRow).not.toContain(formatUsdBalanceFromCredits(AVAILABLE_CREDITS));
+		expect(balanceRow).toContain(formatCreditAmount(AVAILABLE_CREDITS));
+		expect(balanceRow).not.toContain(formatCreditAmount(USAGE_TODAY_CREDITS));
+		expect(todayRow).toContain(formatCreditAmount(USAGE_TODAY_CREDITS));
+		expect(todayRow).not.toContain(formatCreditAmount(AVAILABLE_CREDITS));
 	});
 
 	it('keeps each figure in the slot its own test id names', () => {
 		const html = renderUsage(snapshotFixture());
 		expect(valueForTestId(html, 'usage-available-credits')).toBe(
-			formatUsdBalanceFromCredits(AVAILABLE_CREDITS)
+			formatCreditAmount(AVAILABLE_CREDITS)
 		);
 		expect(valueForTestId(html, 'usage-today-credits')).toBe(
-			formatUsdFromCredits(USAGE_TODAY_CREDITS)
+			formatCreditAmount(USAGE_TODAY_CREDITS)
 		);
 	});
 
-	it('never renders a bare credit integer, the defect a customer once read as 9,789,478,244', () => {
+	it('renders no currency figure at all, on either row', () => {
+		// The guard for issue #1694: this tab rendered both figures in US
+		// dollars, which is the disclosure the owner ruling (D-070) removes.
+		// Written against the whole rendered pane rather than the two known
+		// slots, so a third figure added later in dollars fails here too.
 		const html = renderUsage(snapshotFixture());
+		expect(html).not.toMatch(/[$\u09F3\u20AC\u00A3\u00A5]|USD|BDT/);
+		// The bare ungrouped integer stays absent: the figures are grouped and
+		// carry their unit, which is what the customer who once read
+		// "9,789,478,244" with no unit at all was missing.
 		expect(html).not.toContain(String(AVAILABLE_CREDITS));
 		expect(html).not.toContain(String(USAGE_TODAY_CREDITS));
+		expect(html).toContain('12,496,364,207 credits');
+		expect(html).toContain('340,000,000 credits');
 	});
 
 	it('flags an empty balance rather than printing a bare zero', () => {
-		// Two decimals, which is what the balance formatter renders for an
-		// exact zero and what the console prints for the same account. The
-		// point of the assertion is unchanged: an empty balance is a real,
-		// readable dollar figure beside the badge, never a bare 0 and never a
-		// blank.
+		// The point of the assertion is unchanged: an empty balance is a real,
+		// readable figure beside the badge, never a bare 0 and never a blank.
 		const html = renderUsage(snapshotFixture({ available_credits: 0 }));
 		expect(html).toContain('Out of credits');
-		expect(valueForTestId(html, 'usage-available-credits')).toBe('$0.00');
+		expect(valueForTestId(html, 'usage-available-credits')).toBe('0 credits');
 	});
 
 	it('flags a low balance below the shared threshold', () => {

@@ -110,21 +110,21 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
     },
     {
       key: "input",
-      header: "Input / 1M",
+      header: "Input credits / 1M",
       numeric: true,
       align: "right",
       cell: (row) => formatModelPrice(row.pricing.input_price_credits, row.pricing.pricing_mode),
     },
     {
       key: "output",
-      header: "Output / 1M",
+      header: "Output credits / 1M",
       numeric: true,
       align: "right",
       cell: (row) => formatModelPrice(row.pricing.output_price_credits, row.pricing.pricing_mode),
     },
     {
       key: "cache_read",
-      header: "Cache read / 1M",
+      header: "Cache read credits / 1M",
       numeric: true,
       align: "right",
       cell: (row) =>
@@ -135,7 +135,7 @@ export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
     },
     {
       key: "cache_write",
-      header: "Cache write / 1M",
+      header: "Cache write credits / 1M",
       numeric: true,
       align: "right",
       cell: (row) =>

@@ -325,8 +325,9 @@ describe("ApiKeyCreateForm limit cadence feedback", () => {
   it("states the bound that will be enforced, not the field's name", () => {
     render(<ApiKeyCreateForm {...formProps} />);
     expect(summary()).toContain("No credit limit");
-    fireEvent.change(limitField(), { target: { value: "10" } });
-    expect(summary()).toContain("$10.00");
+    fireEvent.change(limitField(), { target: { value: "10,000,000,000" } });
+    expect(summary()).toContain("10,000,000,000 credits");
+    expect(summary()).not.toMatch(/[$৳€£¥]|USD|BDT/);
     expect(summary()).toContain("spent in total");
     fireEvent.change(cadenceField(), { target: { value: "monthly" } });
     expect(summary()).toContain("current calendar month");
@@ -368,7 +369,7 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "capped" } });
-    fireEvent.change(limitField(), { target: { value: "12.34" } });
+    fireEvent.change(limitField(), { target: { value: "12,340,000,000" } });
     fireEvent.click(submitButton());
     await screen.findByTestId("created-api-key-secret");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -379,7 +380,8 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
       budget_kind: "lifetime",
       budget_limit_credits: 12_340_000_000,
     });
-    expect(limitCell()).toContain("$12.34");
+    expect(limitCell()).toContain("12,340,000,000 credits");
+    expect(limitCell()).not.toMatch(/[$৳€£¥]|USD|BDT/);
     expect(limitCell()).toContain("never resets");
   });
 
@@ -388,7 +390,7 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<ApiKeyCreateForm {...formProps} />);
     fireEvent.change(nicknameInput(), { target: { value: "monthly-capped" } });
-    fireEvent.change(limitField(), { target: { value: "10.00" } });
+    fireEvent.change(limitField(), { target: { value: "10000000000" } });
     fireEvent.change(cadenceField(), { target: { value: "monthly" } });
     fireEvent.click(submitButton());
     await screen.findByTestId("created-api-key-secret");
@@ -408,7 +410,7 @@ describe("ApiKeyCreateForm credit limit on the wire", () => {
     fireEvent.change(limitField(), { target: { value: "-5" } });
     fireEvent.click(submitButton());
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("positive dollar amount");
+    expect(alert.textContent).toContain("positive number of credits");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

@@ -6,8 +6,7 @@
 		creditsDismissed,
 		dismissCredits,
 		fetchCreditBalance,
-		formatUsdBalanceFromCredits,
-		formatUsdFromCredits,
+		formatCreditAmount,
 		type CreditBalance
 	} from './credits';
 
@@ -73,8 +72,8 @@
 			{:else}
 				<span>
 					{$i18n.t("You've used {{used}} today · {{remaining}} remaining", {
-						used: formatUsdFromCredits(balance?.usage_today_credits ?? 0),
-						remaining: formatUsdBalanceFromCredits(balance?.available_credits ?? 0)
+						used: formatCreditAmount(balance?.usage_today_credits ?? 0),
+						remaining: formatCreditAmount(balance?.available_credits ?? 0)
 					})}
 				</span>
 			{/if}

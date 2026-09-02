@@ -1,82 +1,85 @@
 /**
- * The dollar-to-credits conversion behind the New Key modal's credit limit.
+ * The credit-limit input behind the New Key modal.
  *
  * This is a money path, not a formatting helper: whatever integer comes out of
  * here is written to `api_key_policies.budget_limit_credits` and is the exact
  * number `apps/edge-api/internal/authz.CheckAccess` compares every subsequent
  * request against. A value that is off by one credit is a wrong enforcement
  * ceiling, and a value that silently becomes null is an uncapped key on an
- * account that believes it is capped. Neither had a test before this file.
+ * account that believes it is capped.
  *
- * The invariant pinned here: for a customer-typed amount D dollars,
- * usdToCreditsInput returns exactly D * 1e9 as an integer, or null. It never
+ * The field took US dollars and multiplied by 1e9 until issue #1694. It takes
+ * credits now, because the cap renders in the keys table beside a
+ * credit-denominated spend figure and its own bar, and a dollar cap next to a
+ * credit figure for the same key publishes the credit peg (owner ruling,
+ * .wolf/decisions.md D-070). The stored unit did not change.
+ *
+ * The invariant pinned here: for a customer-typed credit count C,
+ * parseCreditLimitInput returns exactly C as an integer, or null. It never
  * returns a number that is not exactly the amount typed, and it never returns
  * zero or a negative, because the budget check treats those as caps that
  * refuse every request rather than as an absent cap.
  */
 import { describe, expect, it } from "vitest";
 
-import { usdToCreditsInput } from "@/lib/api-keys";
+import { parseCreditLimitInput } from "@/lib/api-keys";
 import { CREDITS_PER_USD } from "@/lib/format/model-pricing";
 
-describe("usdToCreditsInput", () => {
-  it("converts whole dollars exactly", () => {
-    expect(usdToCreditsInput("1")).toBe(CREDITS_PER_USD);
-    expect(usdToCreditsInput("10")).toBe(10 * CREDITS_PER_USD);
-    expect(usdToCreditsInput("250")).toBe(250 * CREDITS_PER_USD);
+describe("parseCreditLimitInput", () => {
+  it("takes a plain credit count exactly", () => {
+    expect(parseCreditLimitInput("1")).toBe(1);
+    expect(parseCreditLimitInput("10000000000")).toBe(10_000_000_000);
+    expect(parseCreditLimitInput("250")).toBe(250);
   });
 
-  it("converts the decimal literals float multiplication gets wrong", () => {
-    // 0.1 * 1e9 and 12.34 * 1e9 are the two shapes that motivated the
-    // string-shifting implementation. Asserted against the integer arithmetic
-    // the customer means, never against the float expression under test.
-    expect(usdToCreditsInput("0.1")).toBe(100_000_000);
-    expect(usdToCreditsInput("12.34")).toBe(12_340_000_000);
-    expect(usdToCreditsInput("0.07")).toBe(70_000_000);
-    expect(usdToCreditsInput("29.97")).toBe(29_970_000_000);
+  it("accepts grouping separators, because a real cap is a twelve-digit number", () => {
+    expect(parseCreditLimitInput("10,000,000,000")).toBe(10_000_000_000);
+    expect(parseCreditLimitInput("1,000")).toBe(1_000);
+    // Exactly the credit unit, which is the figure a customer converting an
+    // old dollar cap by hand is most likely to type.
+    expect(parseCreditLimitInput("1,000,000,000")).toBe(CREDITS_PER_USD);
   });
 
-  it("keeps trailing-zero and leading-zero forms of the same amount identical", () => {
-    // Anchored on a literal as well as on each other: equality alone would
-    // still hold if every conversion were off by the same factor.
-    expect(usdToCreditsInput("10.00")).toBe(10_000_000_000);
-    expect(usdToCreditsInput("10.00")).toBe(usdToCreditsInput("10"));
-    expect(usdToCreditsInput("0.50")).toBe(500_000_000);
-    expect(usdToCreditsInput("0.50")).toBe(usdToCreditsInput("0.5"));
-    expect(usdToCreditsInput("007")).toBe(7 * CREDITS_PER_USD);
+  it("refuses separators in positions that are not the canonical grouping", () => {
+    // "1,0,0" read as 100 would set a cap two orders of magnitude below the
+    // one the customer meant to type.
+    expect(parseCreditLimitInput("1,0,0")).toBeNull();
+    expect(parseCreditLimitInput("1,00,000")).toBeNull();
+    expect(parseCreditLimitInput(",100")).toBeNull();
+    expect(parseCreditLimitInput("100,")).toBeNull();
   });
 
-  it("accepts the full nine fractional digits, which is one credit", () => {
-    expect(usdToCreditsInput("0.000000001")).toBe(1);
+  it("trims surrounding whitespace", () => {
+    expect(parseCreditLimitInput("  5,000  ")).toBe(5_000);
   });
 
-  it("refuses a tenth fractional digit rather than truncating it", () => {
-    // Truncating would silently enforce a different ceiling from the one
-    // typed, which is the failure mode this whole helper exists to avoid.
-    expect(usdToCreditsInput("0.0000000001")).toBeNull();
-    expect(usdToCreditsInput("1.1234567891")).toBeNull();
+  it("refuses a fractional credit, since the ledger has no such quantity", () => {
+    // Truncating "10.5" to 10 would set a cap the customer did not type, and
+    // rounding it up would set one they did not agree to either.
+    expect(parseCreditLimitInput("10.5")).toBeNull();
+    expect(parseCreditLimitInput("0.000000001")).toBeNull();
   });
 
-  it("treats blank as no cap", () => {
-    expect(usdToCreditsInput("")).toBeNull();
-    expect(usdToCreditsInput("   ")).toBeNull();
+  it("treats a blank field as no cap rather than a zero cap", () => {
+    expect(parseCreditLimitInput("")).toBeNull();
+    expect(parseCreditLimitInput("   ")).toBeNull();
   });
 
-  it("refuses zero, negatives and non-numeric input", () => {
-    // Zero is refused deliberately: the budget check denies when
-    // consumed + reserved + estimated > limit, so a zero cap bricks the key on
-    // its first request. A customer typing 0 means "no limit" on every
-    // upstream console that accepts it, and this form means blank for that.
-    expect(usdToCreditsInput("0")).toBeNull();
-    expect(usdToCreditsInput("0.00")).toBeNull();
-    expect(usdToCreditsInput("-5")).toBeNull();
-    expect(usdToCreditsInput("1e9")).toBeNull();
-    expect(usdToCreditsInput("ten")).toBeNull();
-    expect(usdToCreditsInput("10.00 USD")).toBeNull();
-    expect(usdToCreditsInput("$10")).toBeNull();
-    expect(usdToCreditsInput("1,000")).toBeNull();
-    expect(usdToCreditsInput("Infinity")).toBeNull();
-    expect(usdToCreditsInput("NaN")).toBeNull();
+  it("refuses zero and negatives, which would refuse every request", () => {
+    // "0 (unlimited)" is upstream terminology, never a real cap here: the
+    // budget check refuses when consumed + reserved + estimated exceeds the
+    // limit, and every request carries a positive estimate.
+    expect(parseCreditLimitInput("0")).toBeNull();
+    expect(parseCreditLimitInput("-5")).toBeNull();
+  });
+
+  it("refuses anything that is not a plain credit count", () => {
+    expect(parseCreditLimitInput("1e9")).toBeNull();
+    expect(parseCreditLimitInput("ten")).toBeNull();
+    expect(parseCreditLimitInput("10 credits")).toBeNull();
+    expect(parseCreditLimitInput("$10")).toBeNull();
+    expect(parseCreditLimitInput("Infinity")).toBeNull();
+    expect(parseCreditLimitInput("NaN")).toBeNull();
   });
 
   it("refuses an amount that cannot survive as a JS-safe integer", () => {
@@ -84,8 +87,9 @@ describe("usdToCreditsInput", () => {
     // different number from the one typed, so the honest answer is a refusal
     // rather than a rounded cap the customer never chose. The proxy route
     // rejects the same range independently.
-    expect(usdToCreditsInput("9007199.254740991")).toBe(Number.MAX_SAFE_INTEGER);
-    expect(usdToCreditsInput("9007199.254740992")).toBeNull();
-    expect(usdToCreditsInput("100000000")).toBeNull();
+    expect(parseCreditLimitInput("9007199254740991")).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+    expect(parseCreditLimitInput("9007199254740992")).toBeNull();
   });
 });

@@ -162,79 +162,73 @@ export function formatPercent(
  * One US dollar is one billion Hive credits (.wolf/decisions.md D-046,
  * migration 20260823_40_credit_unit_rescale_billion.sql).
  *
- * Defined here rather than in model-pricing.ts, which is where it used to
- * live: balances need it too, and model-pricing already imports this module,
- * so the reverse import would be a cycle. model-pricing re-exports it, so
- * existing callers are unaffected.
+ * Nothing renders this. It is the conversion the PURCHASE flow needs, because
+ * a customer buying credits is quoted a price in a currency they will actually
+ * be charged (checkout-modal.tsx). Every balance, usage and spend surface
+ * renders the credit quantity itself and no currency at all (D-070), so no
+ * display formatter divides by this constant any more.
  */
 export const CREDITS_PER_USD = 1_000_000_000;
 
 /**
- * What a positive balance below one cent reads as. A bound, not a figure: at
- * two decimals such a balance would render "$0.00", which is what an empty
- * wallet renders, and the point of saying anything at all is that the wallet
- * is not empty.
+ * A credit quantity as digits, with no unit word.
+ *
+ * For the one place a pair of credit figures is read as a pair ("9,000 of
+ * 10,000 credits"), where repeating the unit on both halves is noise. Every
+ * other caller wants formatCreditAmount below, which states the unit.
+ *
+ * Locale is pinned to en-US rather than routed through intlTag. A credit
+ * figure and its unit word are one string, the word is English on every
+ * surface, and bn-BD's lakh grouping would put "10,00,00,00,000 credits" next
+ * to an "10,000,000,000 credits" printed by the chat front end's twin of this
+ * function, which carries no locale plumbing at all.
+ *
+ * Truncated rather than rounded: credits are whole in storage, so a
+ * fractional value here can only be a decode artefact, and truncating never
+ * invents a credit that is not there.
  */
-export const SUB_CENT_BALANCE = "< $0.01";
+export function formatCreditDigits(credits: number): string {
+  if (!Number.isFinite(credits)) {
+    return "—";
+  }
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0,
+  }).format(Math.trunc(credits));
+}
 
 /**
- * Format a credit balance as the US dollars a customer reasons in.
+ * A credit quantity as a customer reads it: the exact integer and its unit.
  *
- * Rounded down, never up, which is the one behavioural difference from
- * formatUsdFromCredits in model-pricing.ts. A catalog rate is a published
- * price and rounds to the nearest cent; an available balance is spendable
- * money, and rounding 99,996,364,207 credits up to "$100.00" tells a customer
- * they hold more than they can spend. Down rather than toward zero, so that a
- * balance driven negative by reservations overstates the hole rather than
- * flattering it.
+ * This is the ONLY renderer for a balance, a usage figure, a spend figure or
+ * a budget cap. It replaces the currency formatters those surfaces used to go
+ * through, per the owner ruling recorded as .wolf/decisions.md D-070:
+ * purchased credits display as Hive credits, and a currency figure appears
+ * only on an invoice, which is a record of a payment actually made in that
+ * currency.
  *
- * Two decimals, always. A balance is money, and money reads in cents: the
- * per-value precision this used to borrow from the pricing formatter printed
- * a real balance of 858 credits as "$0.000000858", nine significant figures
- * in permanent chrome that no reader can act on. Nine decimals is the width
- * of one credit, which is the right precision for a published per-million
- * rate and the wrong precision for a wallet.
+ * The ruling is a confidentiality boundary, not a style preference. Credits
+ * are sold at a markup (D-065) and a subscription grants a credit quantity
+ * whose internal value the owner requires stay unpublished, so a balance
+ * rendered in dollars beside a price paid in dollars hands the customer the
+ * peg and every internal figure that follows from it.
  *
- * What that precision was protecting is kept: a real, non-zero balance still
- * never renders as the "$0.00" an empty wallet renders. A positive balance
- * under one cent reads as SUB_CENT_BALANCE, a bound rather than a figure. A
- * negative one needs no such case, because flooring moves it away from zero:
- * one credit overdrawn already floors to "-$0.01".
+ * There is no rounding to defend here, which is the point: the old balance
+ * formatter floored to cents and the old price formatter rounded to nearest,
+ * and keeping those two apart was its own recurring defect. An integer count
+ * of credits is exact.
  *
- * Locale is pinned to en-US for the same reason model-pricing pins it: the
- * unit is US dollars on every surface, and bn-BD renders the same amount as
- * "US$0.20", which reads as a second currency.
- *
- * The chat front end carries a byte-identical twin at
+ * The chat front end carries a twin at
  * vendor/open-webui/src/lib/hive/credits.ts. The two builds cannot share a
  * module, so tools/lint-credit-balance-formatter-parity.mjs fails the build
  * when they stop matching, which is how they diverged into #1344 and #1345.
  */
-export function formatUsdBalanceFromCredits(credits: number): string {
-  // Zero is a real, readable balance. A non-finite value is not: it can only
-  // come from a decode that failed, and rendering that as "$0.00" would assert
-  // an empty wallet where nothing was read at all. Same policy, and the same
-  // em dash, as formatPercent above.
+export function formatCreditAmount(credits: number): string {
   if (!Number.isFinite(credits)) {
     return "—";
   }
-  if (credits === 0) {
-    return "$0.00";
-  }
-  // Floor in credits rather than in dollars. The dollar product is a float:
-  // 8,290,000,000 credits is 8.29 dollars, 8.29 times 100 is
-  // 828.9999999999999, and flooring that prints $8.28, understating a real
-  // balance by a cent. CREDITS_PER_USD is a power of ten, so creditsPerCent is
-  // an exact integer and this is exact for every integer balance.
-  const creditsPerCent = CREDITS_PER_USD / 100;
-  const cents = Math.floor(credits / creditsPerCent);
-  if (cents === 0) {
-    return SUB_CENT_BALANCE;
-  }
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(cents / 100);
+  const whole = Math.trunc(credits);
+  const digits = new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0,
+  }).format(whole);
+  return digits + " " + (whole === 1 || whole === -1 ? "credit" : "credits");
 }

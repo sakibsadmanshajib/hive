@@ -14,9 +14,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
-import { formatShortDate } from "@/lib/format/credits";
-import { formatUsdFromCredits } from "@/lib/format/model-pricing";
-import { MAX_KEY_NICKNAME_LEN, usdToCreditsInput } from "@/lib/api-keys";
+import { formatCreditAmount, formatShortDate } from "@/lib/format/credits";
+import { MAX_KEY_NICKNAME_LEN, parseCreditLimitInput } from "@/lib/api-keys";
 import { buildQuickstartCurl } from "@/lib/quickstart-model";
 
 // Mirrors UpdateApiKeyBudgetInput["budgetKind"] in lib/control-plane/client.ts.
@@ -32,8 +31,8 @@ type ResetCadence = "never" | "monthly";
 // coverage gate reported the control as having no proven effect, which was an
 // accurate reading of a money control that gave no feedback.
 const LIMIT_HINT: Record<ResetCadence, string> = {
-  never: "Total for the key's lifetime; blank for unlimited",
-  monthly: "Per calendar month; blank for unlimited",
+  never: "Credits, total for the key's lifetime; blank for unlimited",
+  monthly: "Credits, per calendar month; blank for unlimited",
 };
 
 const BUDGET_NOT_APPLIED =
@@ -57,16 +56,21 @@ const CADENCE_PHRASE: Record<ResetCadence, string> = {
  * A blank field says the cap is absent in the same sentence, because an
  * unstated absence is how a customer ends up believing an uncapped key is
  * capped.
+ *
+ * The unit is Hive credits, in the field and in this sentence, per the owner
+ * ruling recorded as .wolf/decisions.md D-070 (issue #1694). It was US
+ * dollars, which put a dollar cap on the same row as a credit spend figure in
+ * the keys table and published the credit peg between them.
  */
 export function limitSummaryText(rawLimit: string, cadence: ResetCadence): string {
   if (rawLimit.trim() === "") {
     return "No credit limit: this key can spend the account balance.";
   }
-  const credits = usdToCreditsInput(rawLimit);
+  const credits = parseCreditLimitInput(rawLimit);
   if (credits === null) {
-    return "Credit limit must be a positive dollar amount, so no limit will be applied.";
+    return "Credit limit must be a whole, positive number of credits, so no limit will be applied.";
   }
-  return `Enforced: a request is refused once it would push this key past ${formatUsdFromCredits(
+  return `Enforced: a request is refused once it would push this key past ${formatCreditAmount(
     credits,
   )} ${CADENCE_PHRASE[cadence]}.`;
 }
@@ -185,9 +189,9 @@ export function ApiKeyCreateForm({
       setError("Expiry must be a date in the future.");
       return;
     }
-    const limitCredits = usdToCreditsInput(creditLimit);
+    const limitCredits = parseCreditLimitInput(creditLimit);
     if (creditLimit.trim() !== "" && limitCredits === null) {
-      setError("Credit limit must be a positive dollar amount.");
+      setError("Credit limit must be a whole, positive number of credits.");
       return;
     }
 
@@ -369,7 +373,7 @@ export function ApiKeyCreateForm({
                 data-testid="created-api-key-limit"
               >
                 {appliedLimitCredits !== null
-                  ? `${formatUsdFromCredits(appliedLimitCredits)} (${
+                  ? `${formatCreditAmount(appliedLimitCredits)} (${
                       resetCadence === "monthly" ? "resets monthly" : "never resets"
                     })`
                   : "Unlimited"}
@@ -533,17 +537,17 @@ export function ApiKeyCreateForm({
           </Field>
           <div aria-hidden="true" className="hidden sm:block" />
           <Field
-            label="Credit limit (USD)"
+            label="Credit limit (credits)"
             htmlFor="key-credit-limit"
             hint={LIMIT_HINT[resetCadence]}
           >
             <Input
               id="key-credit-limit"
               type="text"
-              inputMode="decimal"
+              inputMode="numeric"
               value={creditLimit}
               onChange={(e) => setCreditLimit(e.target.value)}
-              placeholder="e.g. 10.00"
+              placeholder="e.g. 10,000,000,000"
             />
           </Field>
           <Field

@@ -820,11 +820,11 @@ jobs:
       # the committed tree, not the diff, so running it unconditionally also
       # covers a capture that landed earlier and was never scanned.
       - run: npm run lint:proof-tokens
-      # formatUsdBalanceFromCredits is hand-duplicated across the console and
-      # the chat front end, which are separate builds whose test suites cannot
-      # see each other's copy. It drifted twice that way (#1344, #1345), each
-      # time with both suites green. This is the only place both files are
-      # readable at once.
+      # formatCreditAmount is hand-duplicated across the console and the chat
+      # front end, which are separate builds whose test suites cannot see each
+      # other's copy. Its currency-rendering predecessor drifted twice that way
+      # (#1344, #1345), each time with both suites green. This is the only
+      # place both files are readable at once.
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:credits-parity
       - if: needs.changes.outputs.run != 'false'

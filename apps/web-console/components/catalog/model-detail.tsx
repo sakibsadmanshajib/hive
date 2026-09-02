@@ -46,16 +46,16 @@ interface PriceRow {
   cache?: boolean;
 }
 
-// Every figure on this page is a rate per one million metered tokens, the
-// same unit the catalog list prints, so the unit is stated once per section
-// rather than repeated in every cell.
+// Every figure on this page is a rate in Hive credits per one million metered
+// tokens, so the unit is stated once per section rather than repeated in every
+// cell.
 //
-// Both units are shown, and deliberately. Dollars lead because that is the
-// figure a customer comparing gateways reads, and the raw credit integer is
-// kept alongside it because credits are the unit the ledger actually moves:
-// an account reconciling a bill against its usage needs the exact integer,
-// which a dollar figure rounded for legibility cannot give back.
-const PER_MILLION = "Per 1M tokens";
+// One unit, not two. This page used to print the dollar figure and the credit
+// integer for the same rate side by side, which is a conversion table: two
+// renderings of one quantity publish the credit peg, and from the peg every
+// internal figure follows. Currency now appears only on an invoice, per the
+// owner ruling recorded as .wolf/decisions.md D-070 (issue #1694).
+const PER_MILLION = "Credits per 1M tokens";
 
 /**
  * A capability Hive's control plane does not publish per model today. Rendered
@@ -165,27 +165,14 @@ export function ModelDetail({
       ),
     },
     {
-      key: "price",
-      header: "Price / 1M",
+      key: "credits",
+      header: "Credits / 1M",
       numeric: true,
       align: "right",
       cell: (row) =>
         row.cache
           ? formatCachePrice(row.credits, model.pricing.pricing_mode)
           : formatModelPrice(row.credits, model.pricing.pricing_mode),
-    },
-    {
-      key: "credits",
-      header: "Credits / 1M",
-      numeric: true,
-      align: "right",
-      cell: (row) => (
-        <span className="text-xs text-[var(--color-ink-3)]">
-          {row.cache
-            ? formatCachePrice(row.credits, model.pricing.pricing_mode, "credits")
-            : formatModelPrice(row.credits, model.pricing.pricing_mode, "credits")}
-        </span>
-      ),
     },
     {
       key: "note",
@@ -217,7 +204,6 @@ export function ModelDetail({
               {formatInOutPrice(model.pricing)}
             </span>
             <span className="block text-2xs text-[var(--color-ink-3)]">
-              {formatInOutPrice(model.pricing, "credits")} credits,{" "}
               {PER_MILLION.toLowerCase()}
             </span>
           </Tile>
@@ -234,18 +220,7 @@ export function ModelDetail({
               )}
             </span>
             <span className="block text-2xs text-[var(--color-ink-3)]">
-              {formatCachePrice(
-                model.pricing.cache_read_price_credits,
-                model.pricing.pricing_mode,
-                "credits",
-              )}
-              {" / "}
-              {formatCachePrice(
-                model.pricing.cache_write_price_credits,
-                model.pricing.pricing_mode,
-                "credits",
-              )}{" "}
-              credits, {PER_MILLION.toLowerCase()}
+              {PER_MILLION.toLowerCase()}
             </span>
           </Tile>
           <Tile label="Context">
@@ -271,7 +246,7 @@ export function ModelDetail({
           <CardDescription>
             {variablePriced
               ? "This alias is priced from the actual cost of each generation, so it publishes no per-million rate. The charge is derived per request, not from a table."
-              : "Every rate Hive charges for this model, per one million metered tokens, in US dollars and in the credits the ledger moves. A rate of 0 means that dimension is deliberately not charged. Unknown means the catalog holds no rate, which is not the same as free. A dash on a cache row means this alias publishes no cache rate."}
+              : "Every rate Hive charges for this model, in Hive credits per one million metered tokens. A rate of 0 means that dimension is deliberately not charged. Unknown means the catalog holds no rate, which is not the same as free. A dash on a cache row means this alias publishes no cache rate."}
           </CardDescription>
         </CardHeader>
         <CardContent>

@@ -136,32 +136,41 @@ export function validateLimits(input: KeyLimitsInput): string | null {
 // fetch client. Issue #552: the helpers that used to sit here fetched a bare
 // relative path, which is unresolvable from a Server Component.
 
-const USD_INPUT_RE = /^\d+(\.\d{1,9})?$/;
+// Digits, with optional thousands separators, and nothing else. A credit is
+// the atom of the ledger, so there is no fractional part to accept: "10.5
+// credits" is not a quantity the control plane can store, and silently
+// truncating it would set a cap the customer did not type.
+const CREDIT_INPUT_RE = /^\d{1,3}(,\d{3})*$|^\d+$/;
 
 /**
- * Convert a customer-typed dollar string (the New Key modal's "Credit limit"
- * field) into an integer credit count. One US dollar is 1,000,000,000
- * credits (`.wolf/decisions.md` D-046), which is exact in IEEE 754, but many
- * decimal literals a customer types ("0.1", "12.34") are not, so this shifts
- * the decimal point on the STRING rather than multiplying floats. A limit
- * that is off by even one credit is a wrong enforcement ceiling, not a
- * cosmetic rounding difference.
+ * Convert a customer-typed credit string (the New Key modal's "Credit limit"
+ * field) into an integer credit count.
+ *
+ * The field used to take US dollars and multiply by 1,000,000,000. It takes
+ * credits now, because the cap sits in the API keys table directly beside a
+ * credit-denominated spend figure and its own bar, and a dollar cap next to a
+ * credit figure for the same key is the pairing the owner ruling recorded as
+ * .wolf/decisions.md D-070 exists to remove: it hands the reader the credit
+ * peg. The stored unit was always credits (budget_limit_credits), so nothing
+ * on the wire or in the database changes.
+ *
+ * Grouping separators are accepted because the credit unit puts a real cap in
+ * the billions and "10000000000" is unreadable to type or to check. They are
+ * accepted only in the canonical three-digit positions, so "1,0,0" is refused
+ * rather than quietly read as 100.
  *
  * Returns null for blank input (the field is optional; blank means no cap),
- * for anything that is not a plain non-negative decimal with at most 9
- * fractional digits (1 credit's own precision), for zero (a $0 cap would
- * block every request, which is not what "$0" typed into this field means to
- * a customer -- "0 (unlimited)" is Groq/OpenRouter/upstream terminology,
+ * for anything that is not a plain non-negative integer, for zero (a zero cap
+ * would block every request, which is not what "0" typed into this field means
+ * to a customer -- "0 (unlimited)" is Groq/OpenRouter/upstream terminology,
  * never a real cap here), and for anything that would not survive the round
  * trip as a JS-safe integer.
  */
-export function usdToCreditsInput(raw: string): number | null {
+export function parseCreditLimitInput(raw: string): number | null {
   const trimmed = raw.trim();
   if (trimmed === "") return null;
-  if (!USD_INPUT_RE.test(trimmed)) return null;
-  const [whole, frac = ""] = trimmed.split(".");
-  const digits = `${whole}${frac.padEnd(9, "0")}`.replace(/^0+(?=\d)/, "");
-  const credits = Number(digits);
+  if (!CREDIT_INPUT_RE.test(trimmed)) return null;
+  const credits = Number(trimmed.replace(/,/g, ""));
   if (!Number.isSafeInteger(credits) || credits <= 0) return null;
   return credits;
 }

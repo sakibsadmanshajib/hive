@@ -6,7 +6,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import type { TopKeyRow } from "@/lib/analytics/cache-metrics";
-import { formatUsdFromCredits } from "@/lib/format/model-pricing";
+import { formatCreditAmount } from "@/lib/format/credits";
 
 interface TopApiKeysCardProps {
   topKeys: TopKeyRow[];
@@ -54,7 +54,7 @@ export function TopApiKeysCard({ topKeys, failed }: TopApiKeysCardProps) {
                   </span>
                 </span>
                 <span className="metric shrink-0 text-[var(--color-ink)]">
-                  {formatUsdFromCredits(row.credits)}
+                  {formatCreditAmount(row.credits)}
                 </span>
               </li>
             ))}

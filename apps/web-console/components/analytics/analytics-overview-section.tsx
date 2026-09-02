@@ -11,8 +11,11 @@ import { UsageChart } from "@/components/analytics/usage-chart";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/cn";
 import { blendedPriceNote } from "@/components/analytics/blended-price-note";
-import { formatCredits, formatPercent } from "@/lib/format/credits";
-import { formatUsdFromCredits } from "@/lib/format/model-pricing";
+import {
+  formatCreditAmount,
+  formatCredits,
+  formatPercent,
+} from "@/lib/format/credits";
 
 interface SummaryCardProps {
   label: string;
@@ -211,7 +214,7 @@ export function AnalyticsOverviewSection({
         />
         <SummaryCard
           label="Total spend"
-          value={formatUsdFromCredits(tiles.totalCreditsSpent)}
+          value={formatCreditAmount(tiles.totalCreditsSpent)}
           delta={tiles.creditsDelta}
           sparkline={tiles.creditsSparkline}
           sparklineCaption={tiles.sparklineCaption}
@@ -232,7 +235,7 @@ export function AnalyticsOverviewSection({
           value={
             tiles.blendedCreditsPerMillion === null
               ? "—"
-              : formatUsdFromCredits(tiles.blendedCreditsPerMillion)
+              : formatCreditAmount(tiles.blendedCreditsPerMillion)
           }
           note={blendedNote}
           delta={tiles.blendedDelta}

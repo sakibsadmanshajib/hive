@@ -146,10 +146,8 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
                 group_key: "hive-auto",
                 total_input_tokens: 18,
                 total_output_tokens: 4,
-                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
-                // A round dollar figure keeps the rendered-text assertion
-                // below stable; the tile now formats this through
-                // formatUsdFromCredits rather than the raw integer.
+                // Rendered by the Total spend tile through formatCreditAmount
+                // (issue #1694): Hive credits, grouped, with no currency.
                 total_credits_spent: 3_000_000_000,
                 request_count: 7,
               },
@@ -191,7 +189,7 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
     screen.getByText("7");
     screen.getByText("18");
     screen.getByText("4");
-    screen.getByText("$3.00");
+    screen.getByText("3,000,000,000 credits");
   });
 
   it("renders 'Unavailable' for the tile deltas and the top-keys panel when their own fetches fail, never the same 'No prior data' / empty text a real zero would render", async () => {
@@ -329,10 +327,8 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
                 group_key: "hive-auto",
                 total_input_tokens: 18,
                 total_output_tokens: 4,
-                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
-                // A round dollar figure keeps the rendered-text assertion
-                // below stable; the tile now formats this through
-                // formatUsdFromCredits rather than the raw integer.
+                // Rendered by the Total spend tile through formatCreditAmount
+                // (issue #1694): Hive credits, grouped, with no currency.
                 total_credits_spent: 3_000_000_000,
                 request_count: 7,
               },
@@ -399,10 +395,8 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
                 group_key: "hive-auto",
                 total_input_tokens: 18,
                 total_output_tokens: 4,
-                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
-                // A round dollar figure keeps the rendered-text assertion
-                // below stable; the tile now formats this through
-                // formatUsdFromCredits rather than the raw integer.
+                // Rendered by the Total spend tile through formatCreditAmount
+                // (issue #1694): Hive credits, grouped, with no currency.
                 total_credits_spent: 3_000_000_000,
                 request_count: 7,
               },
@@ -462,10 +456,8 @@ describe("app/console/analytics/page.tsx renders real, non-zero counts", () => {
                 group_key: "hive-auto",
                 total_input_tokens: 18,
                 total_output_tokens: 4,
-                // 3,000,000,000 credits = $3.00 (D-046: 1 USD = 1e9 credits).
-                // A round dollar figure keeps the rendered-text assertion
-                // below stable; the tile now formats this through
-                // formatUsdFromCredits rather than the raw integer.
+                // Rendered by the Total spend tile through formatCreditAmount
+                // (issue #1694): Hive credits, grouped, with no currency.
                 total_credits_spent: 3_000_000_000,
                 request_count: 7,
               },
