@@ -13,7 +13,7 @@ needs a task run against the deployed launcher after this merges.
 
 ## How it was produced
 
-```
+```shell
 docker run --rm -v <repo>:/w:ro -v <scratch>:/s python:3.13-slim sh -c \
   "cp -r /w/vendor/openhands/openhands-sdk /tmp/sdk \
    && pip install --no-cache-dir /tmp/sdk \
@@ -35,7 +35,7 @@ into the working directory at all and `load_project_skills` is false, so the
 real before state loads nothing whatsoever. This run instead shows what the old
 layout would have produced even if both of those had been fixed.
 
-```
+```text
 loaded project skills: [('agents', 'repo'), ('agents:skills/code-canvas', 'knowledge'), ('agents:skills/deck-generation', 'knowledge'), ('agents:skills/doc-layout', 'knowledge'), ('knowledge-work-pack', 'repo')]
 ```
 
@@ -49,13 +49,13 @@ be injected into every prompt, and it is deleted in this PR.
 
 ## After (this branch)
 
-```
+```text
 loaded project skills: [('agents', 'repo'), ('code-canvas', 'agentskills'), ('deck-generation', 'agentskills'), ('doc-layout', 'agentskills')]
 ```
 
 Rendered system-message section, abridged to the two parts that matter:
 
-```
+```text
 [BEGIN context from [agents]]
 # Knowledge Work Pack
 

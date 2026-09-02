@@ -87,7 +87,18 @@ func assertSkillNameMatchesDir(t *testing.T, dir, want string) {
 		t.Errorf("skill %s has no SKILL.md: %v", want, err)
 		return
 	}
-	for _, line := range strings.Split(string(body), "\n") {
+	lines := strings.Split(string(body), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		t.Errorf("skill %s opens with no frontmatter block", want)
+		return
+	}
+	// Only the opening block counts. A `name:` line further down is body
+	// text, and matching it would let this test pass over a skill the SDK
+	// rejects for having no frontmatter name at all.
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "---" {
+			break
+		}
 		if name, ok := strings.CutPrefix(line, "name:"); ok {
 			if got := strings.TrimSpace(name); got != want {
 				t.Errorf("skill %s declares name %q; the SDK requires it to equal the directory name", want, got)
