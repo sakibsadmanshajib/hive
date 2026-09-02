@@ -1445,7 +1445,51 @@ func TestParseRAGMaxUploadBytes(t *testing.T) {
 // are asserted, because a metric no rule consumes is the same silence wearing
 // a nicer hat (issue #1728).
 
-const owuiShimKeyUsableSeries = "hive_owui_shim_key_usable"
+const (
+	owuiShimKeyUsableSeries  = "hive_owui_shim_key_usable"
+	owuiShimKeyVerdictSeries = "hive_owui_shim_key_last_verdict_seconds"
+)
+
+// TestOWUIShimKeyVerdictTimestampOnlyMovesOnARealVerdict covers the blind spot
+// the usable gauge has by design. That gauge starts at 1 and holds its last
+// real verdict, so "usable" and "never actually measured" are the same reading:
+// an edge-api whose control plane is never reachable would export a healthy 1
+// indefinitely with nothing observed, and no rule on that series alone can page
+// on it. This series is what OWUIShimKeyVerdictStale reads instead, so an
+// absent verdict is loud rather than quietly green.
+func TestOWUIShimKeyVerdictTimestampOnlyMovesOnARealVerdict(t *testing.T) {
+	captureLog(t)
+	reg := prometheus.NewRegistry()
+	registerOWUIShimKeyMetric(reg, testOWUIShimKey)
+	if got := gaugeFromRegistry(t, reg, owuiShimKeyVerdictSeries); got != 0 {
+		t.Fatalf("%s = %v before the first probe, want 0 so an age-based rule fires on 'never measured'", owuiShimKeyVerdictSeries, got)
+	}
+
+	resolver := &stubShimKeyResolver{
+		err: fmt.Errorf("authz: fetch: %w: %w", authz.ErrUpstreamUnavailable, context.DeadlineExceeded),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		watchOWUIShimKey(ctx, resolver, testOWUIShimKey, time.Millisecond)
+		close(done)
+	}()
+	waitFor(t, func() bool { return resolver.calls.Load() >= 3 })
+	if got := gaugeFromRegistry(t, reg, owuiShimKeyVerdictSeries); got != 0 {
+		t.Fatalf("%s = %v after only transient failures, want 0: an unreachable control plane is not a verdict", owuiShimKeyVerdictSeries, got)
+	}
+
+	// A real verdict, of either kind, is what stamps it.
+	resolver.set(authz.AuthSnapshot{}, errors.New("authz: resolve status 404: not found"))
+	waitFor(t, func() bool { return gaugeFromRegistry(t, reg, owuiShimKeyVerdictSeries) > 0 })
+	dead := gaugeFromRegistry(t, reg, owuiShimKeyVerdictSeries)
+	if delta := time.Since(time.Unix(int64(dead), 0)); delta > time.Minute || delta < -time.Minute {
+		t.Fatalf("%s = %v, which is not a current unix time", owuiShimKeyVerdictSeries, dead)
+	}
+	cancel()
+	<-done
+}
 
 func TestOWUIShimKeyGaugeGoesToZeroOnADeadKey(t *testing.T) {
 	captureLog(t)
@@ -1537,9 +1581,24 @@ func TestOWUIShimKeyGaugeIsReadByAnAlertRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
-	if !strings.Contains(string(raw), owuiShimKeyUsableSeries) {
-		t.Fatalf("%s exports %s and no alert rule reads it; an unread metric is the same "+
-			"silent outage this probe exists to end", path, owuiShimKeyUsableSeries)
+	for _, series := range []string{owuiShimKeyUsableSeries, owuiShimKeyVerdictSeries} {
+		if !strings.Contains(string(raw), series) {
+			t.Fatalf("%s exports %s and no alert rule reads it; an unread metric is the same "+
+				"silent outage this probe exists to end", path, series)
+		}
+	}
+	// And the scrape itself. A target that stops being scraped takes every rule
+	// above with it, silently: an expression over a series that no longer
+	// exists matches nothing, which reads exactly like a condition that is not
+	// met. Absence must be loud.
+	const monitoring = "../../../../deploy/prometheus/alerts/monitoring.yml"
+	rawMonitoring, err := os.ReadFile(monitoring)
+	if err != nil {
+		t.Fatalf("read %s: %v", monitoring, err)
+	}
+	if !strings.Contains(string(rawMonitoring), `up{job="edge-api"}`) {
+		t.Fatalf("%s has no rule on edge-api being scraped, so an absent scrape reads as healthy "+
+			"to every rule that consumes an edge-api series", monitoring)
 	}
 }
 

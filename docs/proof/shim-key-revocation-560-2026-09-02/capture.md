@@ -84,10 +84,22 @@ owui-e2e-shim|owui-e2e-shim-key|active|1
 ```
 
 Note the nickname on the live key: `hive-demo-owui-shim-key`, not the
-`owui-e2e-shim-key` this script writes. It was minted by hand, which is why the
-third layer matters: the cleanup now filters on the script's own nickname, so a
-key minted by any other route is never revoked by a rotation that knows nothing
-about who carries it.
+`owui-e2e-shim-key` the first revision of this script wrote. It was minted by
+hand, which is why the third layer matters: the cleanup filters on a nickname,
+so a key minted by another route is never revoked by a rotation that knows
+nothing about who carries it.
+
+Security review then pointed out that a fixed nickname made that protection a
+coincidence rather than a property, and one with a short life: the documented
+remedy mints unconditionally, so the first recovery run would have renamed the
+box's key to the constant and destroyed the very thing sparing it. The nickname
+is now derived from the account slug (`key_nickname`), which reproduces
+`hive-demo-owui-shim-key` for `hive-demo-owui-shim` exactly as the row above
+shows, so recovery preserves the name already on the box, CI's cleanup and a
+deployment's can never name the same key, and the remedy run revokes the key it
+just replaced instead of leaving a superseded credential active forever. A key
+under any other nickname is still left alone, and `.env.example` and the alert
+now both tell the operator to revoke that one deliberately.
 
 ## 4. The loud signal fires
 
@@ -171,3 +183,59 @@ against the corrected annotations and passes unchanged; the summary now reads
 `OWUI_SHIM_KEY does not resolve; chat text-to-speech and speech-to-text are
 down`, and `.env.example`'s list of what the key authenticates was corrected in
 the same pass, since it had gone stale the moment #1712 landed.
+
+## 7. Review round two (2026-09-02, security review 5093605279)
+
+Five threads, all applied. What was re-run afterwards, on this dev box rather
+than the demo box: no live credential was read, changed or revoked in this
+round, and the live rows above are the same rows, unmodified.
+
+The rules, including the two new ones, evaluated by Prometheus itself:
+
+```
+$ docker run --rm -v $PWD:/rules -w /rules --entrypoint promtool \
+    prom/prometheus:latest check rules alerts.yml monitoring.yml
+Checking alerts.yml
+  SUCCESS: 10 rules found
+Checking monitoring.yml
+  SUCCESS: 4 rules found
+
+$ docker run --rm -v $PWD:/rules -w /rules --entrypoint promtool \
+    prom/prometheus:latest test rules owui-shim-key_test.yml
+  SUCCESS
+```
+
+Four cases, and the last two are the ones that were missing before:
+
+* usable for two minutes then zero, with a verdict on every probe: nothing at
+  5m, exactly one `OWUIShimKeyUnusable` at 9m with `severity=critical` and the
+  full corrected annotation text, and no `OWUIShimKeyVerdictStale`.
+* a fresh verdict on every probe out to 40m: `OWUIShimKeyVerdictStale` silent.
+  The discriminating negative, since at 9m that rule cannot fire whatever the
+  series holds.
+* the blind spot: `hive_owui_shim_key_usable` sitting at the 1 it is registered
+  with while `hive_owui_shim_key_last_verdict_seconds` stays 0, so nothing has
+  ever been measured. `OWUIShimKeyUnusable` cannot fire on that, and
+  `OWUIShimKeyVerdictStale` does, at `severity=warning`.
+* the scrape stops entirely (`up{job="edge-api"}` goes to 0): every rule reading
+  an edge-api series goes quiet, because an expression over a series that no
+  longer exists matches nothing, and `EdgeAPITargetDown` fires. An absent scrape
+  can no longer read as healthy.
+
+The seeder guards, each confirmed red against a mutation of the code rather
+than assumed (`python3 scripts/test_seed_owui_e2e_user.py`, 34 checks):
+
+```
+key_nickname reverted to the constant   -> red (nickname derivation + call sites)
+casefold comparison removed             -> red (a cased reserved slug was allowed a consumer)
+empty-slug refusal removed              -> red (an empty account slug was allowed)
+env-file gate removed from the delete   -> red (the deletion is no longer gated on the env-file check)
+```
+
+Go: `go vet ./apps/edge-api/cmd/...` clean, and
+`go test ./apps/edge-api/cmd/... -run OWUIShimKey` passes, including the new
+`TestOWUIShimKeyVerdictTimestampOnlyMovesOnARealVerdict` (the timestamp series
+does not move on transient probe failures, and is 0 before the first verdict so
+an age rule fires on "never measured") and the extended
+`TestOWUIShimKeyGaugeIsReadByAnAlertRule`, which now also fails if either series
+loses its rule or if nothing alerts on `up{job="edge-api"}`.

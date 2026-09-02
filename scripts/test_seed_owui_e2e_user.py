@@ -10,6 +10,7 @@ Run: python3 scripts/test_seed_owui_e2e_user.py
 """
 import ast
 import datetime
+import hashlib
 import importlib.util
 import io
 import json
@@ -691,6 +692,210 @@ def test_a_padded_reserved_slug_cannot_slip_past_the_guard() -> None:
     print("ok: a padded reserved account slug is still the reserved account")
 
 
+def test_an_empty_account_slug_is_refused() -> None:
+    """An empty slug misses the reserved comparison, so with a consumer
+    configured it used to pass the guard and then mint a key on an account whose
+    slug is the empty string: a garbage account nothing rotates and nobody
+    owns, holding a credential a deployment was just handed."""
+    saved = _scope_env(OWUI_ADMIN_TOKEN="t")
+    stderr, sys.stderr = sys.stderr, io.StringIO()
+    try:
+        try:
+            seed_owui_e2e_user.assert_account_scope("", "")
+        except SystemExit as exc:
+            assert exc.code == 2, exc.code
+        else:
+            raise AssertionError("an empty account slug was allowed")
+    finally:
+        sys.stderr = stderr
+        _restore_scope_env(saved)
+    print("ok: an empty account slug is refused")
+
+
+def test_a_cased_reserved_slug_is_still_the_reserved_account() -> None:
+    """public.accounts.slug is case sensitive, so `OWUI-E2E-SHIM` would miss the
+    reserved arm, be treated as a deployment account and upsert a near-duplicate
+    row nothing rotates. Same confusion the whitespace strip exists to prevent."""
+    saved = _scope_env(OWUI_ADMIN_TOKEN="t")
+    stderr, sys.stderr = sys.stderr, io.StringIO()
+    try:
+        try:
+            seed_owui_e2e_user.assert_account_scope("OWUI-E2E-SHIM", "")
+        except SystemExit as exc:
+            assert exc.code == 2, exc.code
+        else:
+            raise AssertionError("a cased reserved slug was allowed a consumer")
+    finally:
+        sys.stderr = stderr
+        _restore_scope_env(saved)
+    print("ok: a cased reserved account slug is still the reserved account")
+
+
+# --- the nickname is a property, not a coincidence ------------------------
+
+def test_key_nickname_is_derived_from_the_account() -> None:
+    """The cleanup filter used to hold only because the box's live key happened
+    to carry a different name than the constant this script wrote. That
+    coincidence dies the first time anyone follows the documented remedy, since
+    the mint writes the nickname unconditionally. Derived, it cannot."""
+    nickname = seed_owui_e2e_user.key_nickname
+    assert nickname("owui-e2e-shim") == seed_owui_e2e_user.SHIM_KEY_NICKNAME
+    assert nickname("hive-demo-owui-shim") == "hive-demo-owui-shim-key"
+    # Two accounts can never be handed the same nickname, so CI's cleanup can
+    # never match a deployment's key even if the two ever shared an account.
+    assert nickname("owui-e2e-shim") != nickname("hive-demo-owui-shim")
+    print("ok: the key nickname is derived from the account slug")
+
+
+def test_the_derived_nickname_reproduces_the_live_key_on_the_box() -> None:
+    """The property is only worth anything if it agrees with the deployment it
+    has to protect. The demo box's live key, read out of public.api_keys and
+    recorded in this PR's proof capture, is `hive-demo-owui-shim-key` on account
+    `hive-demo-owui-shim`. So the documented remedy reproduces the name already
+    on the box rather than replacing it, and the run that mints the replacement
+    revokes the key it replaced instead of leaving it active forever."""
+    capture = (
+        Path(__file__).parent.parent
+        / "docs/proof/shim-key-revocation-560-2026-09-02/capture.md"
+    ).read_text()
+    live = "hive-demo-owui-shim|hive-demo-owui-shim-key|active"
+    assert live in capture, "the recorded live row no longer names the key this derivation must match"
+    account, expected = live.split("|")[0], live.split("|")[1]
+    assert seed_owui_e2e_user.key_nickname(account) == expected
+    print("ok: the derived nickname is the one the live key already carries")
+
+
+def test_the_mint_and_the_cleanup_derive_the_same_nickname() -> None:
+    """Both call sites must use the derivation. A mint that writes the constant
+    while the cleanup filters on the derived name (or the reverse) revokes
+    either nothing or the wrong thing, and both are silent."""
+    source = (Path(__file__).parent / "seed-owui-e2e-user.py").read_text()
+    tree = ast.parse(source)
+
+    def nickname_value(call, kwarg):
+        mapping = next((kw.value for kw in call.keywords if kw.arg == kwarg), None)
+        if not isinstance(mapping, ast.Dict):
+            return None
+        for key, value in zip(mapping.keys, mapping.values):
+            if isinstance(key, ast.Constant) and key.value == "nickname":
+                return value
+        return None
+
+    def derives_nickname(node) -> bool:
+        """True for key_nickname(...) and for f-strings interpolating it."""
+        if node is None:
+            return False
+        return any(
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Name)
+            and inner.func.id == "key_nickname"
+            for inner in ast.walk(node)
+        )
+
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name) and node.func.id == "request"
+        and any(isinstance(a, ast.Constant) and a.value == "/api_keys" for a in node.args)
+    ]
+    mints = [c for c in calls if any(isinstance(a, ast.Constant) and a.value == "POST" for a in c.args)]
+    deletes = [c for c in calls if any(isinstance(a, ast.Constant) and a.value == "DELETE" for a in c.args)]
+    assert len(mints) == 1 and len(deletes) == 1, (len(mints), len(deletes))
+    assert derives_nickname(nickname_value(mints[0], "body")), "the mint no longer derives its nickname"
+    assert derives_nickname(nickname_value(deletes[0], "params")), "the cleanup no longer derives its nickname"
+    print("ok: the mint and the cleanup both derive the nickname from the account")
+
+
+# --- --env-file proves a rewrite, not that it was the right file ----------
+
+def test_read_env_assignment_reads_what_the_file_was_carrying() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, ".env")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("# OWUI_SHIM_KEY=commented-out\nOTHER=1\nOWUI_SHIM_KEY=hk_old\nOWUI_SHIM_KEY=hk_dup\n")
+        assert seed_owui_e2e_user.read_env_assignment(path) == "hk_old"
+
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("OTHER=1\nOWUI_SHIM_KEY=\n")
+        assert seed_owui_e2e_user.read_env_assignment(path) == ""
+        assert seed_owui_e2e_user.read_env_assignment(os.path.join(d, "nope.env")) == ""
+    print("ok: read_env_assignment reports what the file was carrying")
+
+
+def test_a_scratch_env_file_earns_no_revocation() -> None:
+    """`--env-file /tmp/scratch.env` rewrites a file, satisfies the scope guard
+    and satisfies the consumer-sync check, and the revocation then takes down
+    whoever really holds this account's key: issue #560 reached through the arm
+    the guard allows. The proof that this run replaced the key it is about to
+    revoke is that the value it overwrote is a key on this very account."""
+    seen = []
+
+    def found(base, headers, method, path, body=None, params=None, prefer=None):
+        seen.append((method, path, params))
+        return 200, [{"id": "key-1"}]
+
+    def not_found(base, headers, method, path, body=None, params=None, prefer=None):
+        seen.append((method, path, params))
+        return 200, []
+
+    original = seed_owui_e2e_user.request
+    try:
+        # A file carrying nothing (first-time setup, or the wrong file) never
+        # reaches the database: there is no old key whose revocation this run
+        # could have earned.
+        seed_owui_e2e_user.request = found
+        assert seed_owui_e2e_user.env_file_carried_this_accounts_key({}, {}, "acct-1", "") is False
+        assert seen == [], seen
+
+        # A value that hashes to no key on this account: another deployment's
+        # .env, or a scratch path someone put an OWUI_SHIM_KEY line in.
+        seed_owui_e2e_user.request = not_found
+        assert seed_owui_e2e_user.env_file_carried_this_accounts_key({}, {}, "acct-1", "hk_foreign") is False
+
+        # The real deployment's .env: the value it held is a key on this account.
+        seed_owui_e2e_user.request = found
+        assert seed_owui_e2e_user.env_file_carried_this_accounts_key({}, {}, "acct-1", "hk_real") is True
+        method, path, params = seen[-1]
+        assert (method, path) == ("GET", "/api_keys"), (method, path)
+        assert params["account_id"] == "eq.acct-1", params
+        assert params["token_hash"] == "eq." + hashlib.sha256(b"hk_real").hexdigest(), params
+    finally:
+        seed_owui_e2e_user.request = original
+    print("ok: only the file that was carrying this account's key earns a revocation")
+
+
+def test_the_revocation_is_gated_on_that_check() -> None:
+    """And the check has to sit in front of the delete, not merely exist."""
+    source = (Path(__file__).parent / "seed-owui-e2e-user.py").read_text()
+    tree = ast.parse(source)
+    branches = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name) and call.func.id == "request"
+            and any(isinstance(a, ast.Constant) and a.value == "DELETE" for a in call.args)
+            for stmt in node.orelse for call in ast.walk(stmt)
+        )
+    ]
+    assert branches, "no branch guards the api_keys deletion at all"
+    # The innermost one: `if consumer_failed / elif env_file_unproven / else
+    # delete` nests, and it is the last test before the delete that matters.
+    gate = max(branches, key=lambda node: node.lineno)
+    guarded_by = {n.id for n in ast.walk(gate.test) if isinstance(n, ast.Name)}
+    assert "env_file_unproven" in guarded_by, (
+        f"the deletion is no longer gated on the env-file check: {sorted(guarded_by)}"
+    )
+    assigned = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "env_file_carried_this_accounts_key"
+    ]
+    assert assigned, "env_file_unproven is no longer computed from the account check"
+    print("ok: the deletion is gated on the env file having carried this account's key")
+
+
 def main() -> None:
     os.environ["OWUI_ADMIN_EMAIL"] = "admin@example.com"
     os.environ["OWUI_ADMIN_PASSWORD"] = "pw"
@@ -725,6 +930,14 @@ def main() -> None:
     test_revocation_only_ever_targets_keys_this_script_minted()
     test_the_nightly_workflow_still_names_the_ci_account()
     test_a_padded_reserved_slug_cannot_slip_past_the_guard()
+    test_an_empty_account_slug_is_refused()
+    test_a_cased_reserved_slug_is_still_the_reserved_account()
+    test_key_nickname_is_derived_from_the_account()
+    test_the_derived_nickname_reproduces_the_live_key_on_the_box()
+    test_the_mint_and_the_cleanup_derive_the_same_nickname()
+    test_read_env_assignment_reads_what_the_file_was_carrying()
+    test_a_scratch_env_file_earns_no_revocation()
+    test_the_revocation_is_gated_on_that_check()
 
     del os.environ["OWUI_ADMIN_EMAIL"]
     del os.environ["OWUI_ADMIN_PASSWORD"]

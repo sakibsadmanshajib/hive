@@ -1486,12 +1486,15 @@ type shimKeyResolver interface {
 // or reported to the customer as a generic invalid-key error that names no
 // cause. This probe is the signal that names it.
 //
-// Embeddings used to be on that list and are not any more (issue #1696). They
-// still present the shim key on Authorization, which is what gates the carrier
-// header, but the principal they are billed and audited under is now the
-// signed-in user's, so the shim key resolving is necessary for them rather than
-// sufficient. The probe is unchanged: a key that does not resolve still breaks
-// them, so it still belongs in the list of things this failure takes down.
+// Embeddings used to be on that list and are not any more (issue #1696), and
+// not merely in the weaker sense that they no longer depend on it: this key
+// resolving is neither necessary nor sufficient for them. They still present it
+// on Authorization, but auth.hasShimAuthorization matches that header by string
+// comparison against the configured value, and forwardUnwrapped then swaps in
+// the signed-in user's token before anything reaches authz. A revoked key is
+// still the same string, so revocation is simply invisible on /v1/embeddings.
+// Document RAG therefore stays up through exactly the failure this probe
+// watches for, which is why the alert says so.
 //
 // Its predicate must stay at least as strict as the request path's, or the
 // probe becomes a false green. It was exactly that in issue #717: it read
@@ -1524,7 +1527,7 @@ func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 	// account_not_provisioned, so minting a replacement key cannot help: the
 	// account itself has to be mapped to a tenant.
 	if _, err := snapshot.TenantUUID(); err != nil {
-		return fmt.Errorf("%w, so /v1/models, chat embeddings and audio all answer "+
+		return fmt.Errorf("%w, so /v1/models and audio both answer "+
 			"403 account_not_provisioned for it. A new key will NOT help: map the account by running "+
 			"apps/control-plane/cmd/backfill-tenants against the same database, or re-run "+
 			"scripts/seed-owui-e2e-user.py, which provisions the mapping for the account it mints on", err)
@@ -1554,7 +1557,21 @@ func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 // registers it observes nothing.
 var owuiShimKeyUsable = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "hive_owui_shim_key_usable",
-	Help: "1 when OWUI_SHIM_KEY resolves to an active, tenant-provisioned Hive API key allowed at least one model, 0 when it does not. Open WebUI's text-to-speech and speech-to-text authenticate as that key and nothing else, so 0 means voice is down while every visible surface still looks healthy (issue #560). Held at its last value while the control plane is unreachable, because that is not a verdict on the key.",
+	Help: "1 when OWUI_SHIM_KEY resolves to an active, tenant-provisioned Hive API key allowed at least one model, 0 when it does not. Open WebUI's model picker (the bodyless GET /v1/models), text-to-speech and speech-to-text authenticate as that key and nothing else, so 0 means an empty picker and dead voice while sign-in and every other surface still looks healthy (issue #560). Held at its last value while the control plane is unreachable, because that is not a verdict on the key.",
+})
+
+// owuiShimKeyLastVerdict is what keeps the gauge above honest. That gauge holds
+// its last real verdict, and starts at 1, so "usable" and "never actually
+// measured" are the same reading: a boot in which the control plane is never
+// reachable leaves it at 1 indefinitely with nothing having been observed, and
+// no rule on the gauge alone can page on that. This series carries the unix
+// time of the last real verdict (healthy or dead, never a transient failure),
+// which is what OWUIShimKeyVerdictStale in deploy/prometheus/alerts.yml alerts
+// on. Zero until the first verdict lands, which reads as an unbounded age and
+// so fires that rule rather than passing it.
+var owuiShimKeyLastVerdict = prometheus.NewGauge(prometheus.GaugeOpts{
+	Name: "hive_owui_shim_key_last_verdict_seconds",
+	Help: "Unix time of the last probe that reached a real verdict about OWUI_SHIM_KEY. Not written when the control plane is unreachable, so an age beyond a few probe intervals means the key's state is unknown rather than good, and hive_owui_shim_key_usable is stale. 0 until the first verdict.",
 })
 
 // registerOWUIShimKeyMetric exports the gauge, and only when a shim key is
@@ -1569,13 +1586,19 @@ var owuiShimKeyUsable = prometheus.NewGauge(prometheus.GaugeOpts{
 // The initial value is 1 rather than 0 for the mirror-image reason: the first
 // probe lands within milliseconds, but if it happens to time out, a gauge that
 // started at 0 would page for an unreachable control plane, which is the exact
-// false alarm the transient branch below exists to avoid.
+// false alarm the transient branch below exists to avoid. The cost of that
+// choice is that "usable" and "never measured" read the same, which is what
+// owuiShimKeyLastVerdict and the OWUIShimKeyVerdictStale rule exist to close:
+// an absent verdict is loud rather than quietly healthy.
 func registerOWUIShimKeyMetric(reg prometheus.Registerer, shimKey string) {
 	if strings.TrimSpace(shimKey) == "" {
 		return
 	}
 	owuiShimKeyUsable.Set(1)
-	reg.MustRegister(owuiShimKeyUsable)
+	// Deliberately NOT pre-set: 0 means "no verdict yet", which is exactly what
+	// the staleness rule must see if the first probe never lands.
+	owuiShimKeyLastVerdict.Set(0)
+	reg.MustRegister(owuiShimKeyUsable, owuiShimKeyLastVerdict)
 }
 
 // watchOWUIShimKey probes the configured OWUI shim key at boot and every
@@ -1635,19 +1658,24 @@ func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 		// Every probe, not only the transitions: the log deduplicates because a
 		// repeated line is noise, while a gauge that stops being written is a
 		// gauge an alert cannot trust. The transient case deliberately writes
-		// nothing and leaves the last real verdict standing, so an unreachable
-		// control plane does not page anyone to rotate a working key.
+		// neither series and leaves the last real verdict standing, so an
+		// unreachable control plane does not page anyone to rotate a working
+		// key. It is the timestamp that then ages, which is how a control plane
+		// that never answers becomes an alert about an unknown key state rather
+		// than silence behind a gauge stuck on its last good value.
 		switch state {
 		case owuiShimKeyHealthy:
 			owuiShimKeyUsable.Set(1)
+			owuiShimKeyLastVerdict.SetToCurrentTime()
 		case owuiShimKeyDead:
 			owuiShimKeyUsable.Set(0)
+			owuiShimKeyLastVerdict.SetToCurrentTime()
 		}
 
 		if !reported || state != lastState {
 			switch state {
 			case owuiShimKeyHealthy:
-				log.Printf("owui: OWUI_SHIM_KEY resolves to an active Hive API key on a tenant-provisioned account; Open WebUI model listing, chat embeddings and audio can authenticate")
+				log.Printf("owui: OWUI_SHIM_KEY resolves to an active Hive API key on a tenant-provisioned account; Open WebUI model listing and audio can authenticate")
 			case owuiShimKeyTransient:
 				// Transient: the control plane could not be reached in time,
 				// not a verdict that the key is bad. No "mint a replacement"
@@ -1655,7 +1683,7 @@ func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 				// the failure this branch exists to prevent.
 				log.Printf("owui: WARN OWUI_SHIM_KEY probe could not reach the control plane (transient, will retry next interval): %v. This is NOT a sign the key is invalid -- do not rotate it over this alone", err)
 			default:
-				log.Printf("owui: ERROR OWUI_SHIM_KEY is unusable: %v. Open WebUI's model picker will be empty and its chat embeddings and audio will fail with a generic invalid-key error. Mint a replacement with scripts/seed-owui-e2e-user.py, which updates .env and Open WebUI's persisted config together, then restart open-webui", err)
+				log.Printf("owui: ERROR OWUI_SHIM_KEY is unusable: %v. Open WebUI's model picker will be empty, and an empty picker issues no chat request at all, so the whole chat surface looks like a silent no-op; text-to-speech and speech-to-text will fail with a generic invalid-key error. Document RAG is unaffected: its embeddings carry the signed-in user's own token since issue #1696, and this key is never resolved on that path. Mint a replacement with scripts/seed-owui-e2e-user.py, which updates .env and Open WebUI's persisted config together, then restart open-webui", err)
 			}
 			reported = true
 			lastState = state
