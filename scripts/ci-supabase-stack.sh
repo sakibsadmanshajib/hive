@@ -69,6 +69,21 @@ gateway_port="9000"
 jwks_tls_ca=""
 jwks_tls_host="supabase-tls"
 jwks_tls_port="9443"
+# The externally visible base of GoTrue: what the discovery document advertises
+# as its endpoints, and what GoTrue stamps as `iss`. Empty keeps the historical
+# value, which is right for a caller whose whole world is the runner's own
+# localhost. It is NOT right for a caller whose browser and whose containers
+# both have to reach one origin, because inside a container localhost is the
+# container; that caller passes the docker bridge form here.
+#
+# Note the /auth/v1 suffix such a caller has to include. The gateway below maps
+# /auth/v1/ onto GoTrue's root, so the prefix is part of the external address
+# even though GoTrue itself never sees it.
+external_url=""
+# Opt-in, off by default. The OAuth 2.1 authorization server is what Open WebUI
+# signs in through, and enabling it needs a GoTrue new enough to have one: see
+# the image selection below.
+oauth_server=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -78,6 +93,8 @@ while [ "$#" -gt 0 ]; do
     --jwks-tls-ca) jwks_tls_ca="$2"; shift 2 ;;
     --jwks-tls-host) jwks_tls_host="$2"; shift 2 ;;
     --jwks-tls-port) jwks_tls_port="$2"; shift 2 ;;
+    --external-url) external_url="$2"; shift 2 ;;
+    --oauth-server) oauth_server=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -163,7 +180,14 @@ if [ -n "$jwks_tls_ca" ]; then
     log "::error::generate-enterprise-jwt-keys.py printed no ENTERPRISE_JWT_KEYS / ENTERPRISE_JWT_VERIFY_KEYS pair"
     exit 1
   fi
-  jwks_issuer="https://${jwks_tls_host}:${jwks_tls_port}/auth/v1"
+  # --external-url wins when it was given. The two consumers of a JWKS front
+  # do not have to be the same consumer: edge-api fetches the key set over
+  # TLS, while a browser and a container both follow the discovery document
+  # over the plain origin, and the `iss` claim has to match what THAT document
+  # advertises or every OIDC client rejects the id_token. Deriving the issuer
+  # from the TLS front is right only when the TLS front is also the address
+  # everything else uses.
+  jwks_issuer="${external_url:-https://${jwks_tls_host}:${jwks_tls_port}/auth/v1}"
   gotrue_key_args=(
     -e "GOTRUE_JWT_KEYS=${jwt_keys}"
     # Set explicitly, and emitted verbatim below as SUPABASE_JWT_ISSUER. The
@@ -203,12 +227,45 @@ db_url="postgres://$(urlenc "$db_user"):$(urlenc "$db_password")@supabase-db:543
 log "==> auth schema and roles, before GoTrue migrates into them"
 psql --no-psqlrc -qX -v ON_ERROR_STOP=1 -f "$repo_root/deploy/supabase/init/00-extensions.sql" >/dev/null
 
+# ---------------------------------------------------------------------------
+# GoTrue image and the OAuth 2.1 authorization server.
+#
+# Two pins on purpose, not an oversight. v2.170.0 is what every existing caller
+# has been exercised against and stays the default, so a job that only needs a
+# browser login is byte for byte unaffected. The OAuth server does not exist in
+# it at all: scripts/register-owui-oauth-client.py documents that the route it
+# registers against answers 404 there, and Open WebUI's whole sign-in is that
+# server, so a caller asking for --oauth-server is asking for a newer GoTrue by
+# definition.
+#
+# The newer pin is the same digest deploy/docker/docker-compose.enterprise.yml
+# runs, rather than a third version chosen here: the demo box already proves
+# that build against this migration chain, including the custom access token
+# hook, so --oauth-server borrows a combination that is known to work instead
+# of introducing one.
+# ---------------------------------------------------------------------------
+gotrue_image="supabase/gotrue:v2.170.0"
+gotrue_oauth_args=()
+if [ "$oauth_server" = "1" ]; then
+  gotrue_image="supabase/gotrue:v2.189.0@sha256:385184459f57569c54c25209f51f3b2be99ddd7c4ce9e3555b5d3eea8447b7cf"
+  gotrue_oauth_args=(
+    -e GOTRUE_OAUTH_SERVER_ENABLED=true
+    # Where GoTrue sends the browser to collect consent, resolved against
+    # GOTRUE_SITE_URL. That is the console's own consent route
+    # (apps/web-console/app/oauth/consent/page.tsx), so a caller passing this
+    # flag has to be serving the console at the site URL as well; the
+    # authorize call otherwise redirects the browser at a 404 and the sign-in
+    # simply stops, with nothing in GoTrue's log to read.
+    -e GOTRUE_OAUTH_SERVER_AUTHORIZATION_PATH=/oauth/consent
+  )
+fi
+
 log "==> GoTrue"
 docker rm -f supabase-auth >/dev/null 2>&1 || true
 docker run -d --name supabase-auth --network "$network" \
   -e GOTRUE_API_HOST=0.0.0.0 \
   -e GOTRUE_API_PORT=9999 \
-  -e "API_EXTERNAL_URL=http://localhost:${gateway_port}" \
+  -e "API_EXTERNAL_URL=${external_url:-http://localhost:${gateway_port}}" \
   -e GOTRUE_DB_DRIVER=postgres \
   -e "GOTRUE_DB_DATABASE_URL=${db_url}?search_path=auth&sslmode=disable" \
   -e "GOTRUE_SITE_URL=http://localhost:3000" \
@@ -225,7 +282,8 @@ docker run -d --name supabase-auth --network "$network" \
   -e GOTRUE_PASSWORD_MIN_LENGTH=6 \
   -e GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED=true \
   -e "GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI=pg-functions://postgres/public/custom_access_token_hook" \
-  supabase/gotrue:v2.170.0 >/dev/null
+  ${gotrue_oauth_args[@]+"${gotrue_oauth_args[@]}"} \
+  "$gotrue_image" >/dev/null
 
 for _ in $(seq 1 60); do
   if docker exec supabase-auth wget -q -O /dev/null http://localhost:9999/health 2>/dev/null; then break; fi
