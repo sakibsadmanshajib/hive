@@ -596,9 +596,24 @@ CADDY
   # with at least one key in it. An empty "keys" array is the exact shape
   # HS256-only GoTrue returns, and it is what makes edge-api refuse to boot, so
   # it fails here by name instead of there by symptom.
-  jwks_body="$(curl -sS --cacert "$jwks_tls_ca" \
-    --resolve "${jwks_tls_host}:${jwks_tls_port}:127.0.0.1" \
-    "https://${jwks_tls_host}:${jwks_tls_port}/auth/v1/.well-known/jwks.json" || true)"
+  # Polled, not probed once. root.crt existing means Caddy's authority is on
+  # disk, which happens a beat before the listener will actually complete a
+  # handshake with the certificate it just issued: measured on run 33675164605,
+  # where the single-shot curl ran 0.2 seconds after "certificate obtained
+  # successfully" and came back empty, and the job then failed claiming GoTrue
+  # published no key. The distinction this assertion exists to make is between
+  # a key set that is empty and one that is not, so it must not also be able to
+  # fail on a listener that is a fraction of a second from ready.
+  jwks_body=""
+  for _ in $(seq 1 30); do
+    jwks_body="$(curl -sS --cacert "$jwks_tls_ca" \
+      --resolve "${jwks_tls_host}:${jwks_tls_port}:127.0.0.1" \
+      "https://${jwks_tls_host}:${jwks_tls_port}/auth/v1/.well-known/jwks.json" || true)"
+    if printf '%s' "$jwks_body" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("keys") else 1)' 2>/dev/null; then
+      break
+    fi
+    sleep 2
+  done
   if ! printf '%s' "$jwks_body" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("keys") else 1)' 2>/dev/null; then
     log "::error::the JWKS endpoint served no usable key over TLS. edge-api validates every browser token against this document and refuses to boot on an empty key set."
     docker logs supabase-tls 2>&1 | tail -20 >&2
