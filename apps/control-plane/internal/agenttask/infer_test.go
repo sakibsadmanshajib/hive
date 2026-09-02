@@ -23,6 +23,11 @@ func TestInferPack_DefaultsToKnowledgeWorkWithoutCodingEvidence(t *testing.T) {
 		"Research the Bangladesh data localisation rules and write up what applies to us.",
 		"Turn these meeting notes into a project brief with owners and dates.",
 		"Read the contract and list every clause that mentions termination.",
+		// The exact string the visual proof for issue #1623 submits in its
+		// knowledge-work frame. Pinned here so the pack that capture shows is
+		// the one this function is mechanically held to, in CI, rather than a
+		// number a capture script decided on its own.
+		"Write a one page brief on how prepaid credit billing works for a new team member.",
 	} {
 		if got := agenttask.InferPack(instructions); got != agenttask.PackKnowledgeWork {
 			t.Errorf("InferPack(%q) = %q, want %q", instructions, got, agenttask.PackKnowledgeWork)
@@ -47,6 +52,10 @@ func TestInferPack_PicksCodingOnPositiveEvidence(t *testing.T) {
 		"Update main.go so the flag defaults to false.",
 		"Fix the type error in ComposerCoworkRow.svelte.",
 		"Work out what this does:\n```go\nfunc main() {}\n```",
+		// The exact string the visual proof for issue #1623 submits in its
+		// coding frame, pinned for the same reason as its knowledge-work twin
+		// above.
+		"Refactor the retry helper in server.go and run the test suite.",
 	} {
 		if got := agenttask.InferPack(instructions); got != agenttask.PackCoding {
 			t.Errorf("InferPack(%q) = %q, want %q", instructions, got, agenttask.PackCoding)
