@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -5,14 +9,14 @@ import {
 	ProjectError,
 	addFileToProject,
 	bindChatToProject,
-	createBoundChat,
 	createProject,
 	deleteProject,
 	getProject,
 	listProjects,
 	removeFileFromProject,
 	resolveProjectConversations,
-	updateProject
+	updateProject,
+	withProjectFiles
 } from './projects';
 
 /*
@@ -21,6 +25,9 @@ import {
  * against the real tree inside the image build (npm run test:frontend), so it
  * must stay free of any import a bare vitest cannot resolve.
  */
+
+const here = dirname(fileURLToPath(import.meta.url));
+const chatSource = readFileSync(resolve(here, '../../components/chat/Chat.svelte'), 'utf8');
 
 const json = (body: unknown) =>
 	new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -171,18 +178,6 @@ describe('projects data layer', () => {
 		expect(seen[1].body).toEqual({ chat: { [PROJECT_CHAT_KEY]: null } });
 	});
 
-	it('creates a chat already bound at birth via chats/new', async () => {
-		let body: Record<string, unknown> = {};
-		const fetchImpl = (async (_i: RequestInfo | URL, init: RequestInit = {}) => {
-			body = JSON.parse(String(init.body ?? '{}'));
-			return json({ id: 'c-new' });
-		}) as unknown as typeof fetch;
-
-		const chat = await createBoundChat('tok', 'k1', '/api/v1', fetchImpl);
-		expect(chat.id).toBe('c-new');
-		expect((body.chat as Record<string, unknown>)[PROJECT_CHAT_KEY]).toBe('k1');
-	});
-
 	it('resolves bound conversations by scanning the chat list and reading blobs', async () => {
 		const chatsById: Record<string, unknown> = {
 			c1: { id: 'c1', title: 'T1', chat: { [PROJECT_CHAT_KEY]: 'k1' }, updated_at: 10 },
@@ -252,5 +247,113 @@ describe('projects data layer', () => {
 	it('exposes PROJECT_CHAT_KEY namespaced for blob safety', () => {
 		expect(PROJECT_CHAT_KEY).toBe('hiveProject');
 		expect(new ProjectError('x').name).toBe('ProjectError');
+	});
+});
+
+/* ------------------------------------------------------------------ *
+ * Issue #1358: the project's files must reach the model, not just the
+ * project page.
+ * ------------------------------------------------------------------ */
+
+describe('a project bound chat carries the project scope into its request', () => {
+	it('attaches the project as a retrievable collection when the chat is bound', () => {
+		// This is the state a project bound conversation is actually in at send
+		// time. Chat.svelte prunes chatFiles down to the files some message in
+		// the branch references (Chat.svelte, sendMessageSocket), so a chat that
+		// was merely created inside a project reaches this point with nothing:
+		// an attachment written onto the chat blob at creation time is deleted
+		// before it is ever sent. The binding has to be resolved here instead.
+		expect(withProjectFiles([], 'proj-1')).toEqual([{ type: 'collection', id: 'proj-1' }]);
+	});
+
+	it('keeps the turn\'s own attachments alongside the project', () => {
+		const uploaded = { type: 'file', id: 'f1', name: 'invoice.pdf' };
+		expect(withProjectFiles([uploaded], 'proj-1')).toEqual([
+			uploaded,
+			{ type: 'collection', id: 'proj-1' }
+		]);
+	});
+
+	it('leaves an unbound chat exactly as it was, same array', () => {
+		const files = [{ type: 'file', id: 'f1' }];
+		expect(withProjectFiles(files, null)).toBe(files);
+		expect(withProjectFiles(files, '')).toBe(files);
+	});
+
+	it('does not attach the project twice when it is already on the turn', () => {
+		// The person can attach the same project by hand from the plus menu.
+		const manual = { type: 'collection', id: 'proj-1', name: 'Tax 2026' };
+		expect(withProjectFiles([manual], 'proj-1')).toEqual([manual]);
+	});
+
+	it('sends a reference rather than a snapshot, so a file added later still arrives', () => {
+		// The whole claim on ProjectDetail.svelte is that files land in EVERY
+		// conversation in the project, including conversations that already
+		// existed when the file was uploaded. A collection id is resolved to its
+		// current file set by the retrieval layer on every request, so this
+		// holds; a list of file ids captured at bind time would not.
+		const attached = withProjectFiles([], 'proj-1');
+		expect(attached[0]).not.toHaveProperty('collection_names');
+		expect(Object.keys(attached[0])).toEqual(['type', 'id']);
+	});
+});
+
+describe('Chat.svelte actually reads the binding it is handed', () => {
+	it('takes the binding off the URL when a conversation is started from a project', () => {
+		// The project page navigates rather than pre creating the chat: a chat
+		// that already exists makes the first request carry a chat_id, and the
+		// backend then drops title and tag generation for it forever, so every
+		// conversation in a project would stay called New Chat.
+		const init = chatSource.slice(chatSource.indexOf('const initNewChat = async'));
+		expect(init).toContain("hiveProjectId = $page.url.searchParams.get('project')");
+	});
+
+	it('writes the binding once the backend has told it the new chat id', () => {
+		// The chat row is created server side from the completion request, which
+		// never carries the binding, so it is written on the same branch that
+		// already persists chat level params for exactly that reason.
+		const branch = chatSource.slice(chatSource.indexOf('if (res.chat_id && $chatId !== res.chat_id'));
+		expect(branch).toContain('bindChatToProject(localStorage.token, res.chat_id, hiveProjectId)');
+		const params = branch.indexOf('params: params');
+		const bind = branch.indexOf('bindChatToProject');
+		expect(params).toBeGreaterThan(-1);
+		expect(bind).toBeGreaterThan(params);
+	});
+
+	it('loads the project marker off the chat blob of an existing conversation', () => {
+		expect(chatSource).toContain('hiveProjectId = chatContent?.[PROJECT_CHAT_KEY] ?? null');
+	});
+
+	it('clears the binding before the next chat is read, not only where it is set', () => {
+		// A chat whose blob does not load never reaches the assignment, so a
+		// reset that lives only there leaves the previous conversation's
+		// project attached to the next one.
+		const load = chatSource.slice(chatSource.indexOf('const loadChat = async'));
+		expect(load.slice(0, load.indexOf('const chatContent'))).toContain('hiveProjectId = null');
+	});
+
+	it('resolves the binding at request assembly, after the prune that would undo it', () => {
+		// sendMessageSocket is the one function submitPrompt, regeneration and
+		// continue all reach, and `files` is the field it puts on the wire.
+		// Ordering is the whole fix: the prune drops any chat level file no
+		// message references, so an attachment added before it is deleted again.
+		const assembly = chatSource.slice(chatSource.indexOf('const sendMessageSocket'));
+		const pruned = assembly.indexOf('chatFiles = chatFiles.filter');
+		const attach = assembly.indexOf('files = withProjectFiles(files, hiveProjectId)');
+		expect(pruned).toBeGreaterThan(-1);
+		expect(attach).toBeGreaterThan(pruned);
+	});
+});
+
+describe('the project page hands the binding over rather than pre creating a chat', () => {
+	const detail = readFileSync(resolve(here, './ProjectDetail.svelte'), 'utf8');
+
+	it('navigates to the composer with the project on the query string', () => {
+		expect(detail).toContain('goto(`/?project=${encodeURIComponent(id)}`)');
+	});
+
+	it('has no second chat creation path of its own left to drift', () => {
+		expect(detail).not.toContain('createBoundChat');
+		expect(detail).not.toContain('seedChatModels');
 	});
 });

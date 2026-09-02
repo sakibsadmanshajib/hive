@@ -126,6 +126,11 @@
 		settleRunSteps,
 		type RunStep
 	} from '$lib/hive/coworkMode';
+	import {
+		PROJECT_CHAT_KEY,
+		bindChatToProject,
+		withProjectFiles
+	} from '$lib/hive/projects/projects';
 	import Messages from '$lib/components/chat/Messages.svelte';
 	import Navbar from '$lib/components/chat/Navbar.svelte';
 	import ChatControls from './ChatControls.svelte';
@@ -254,6 +259,9 @@
 	// Chat Input
 	let prompt = '';
 	let chatFiles = [];
+	// The project this conversation belongs to, read off the chat blob at load
+	// time. Resolved into the request's files on every send (#1358).
+	let hiveProjectId: string | null = null;
 	let files = [];
 	let params = {};
 
@@ -1547,9 +1555,20 @@
 		};
 
 		chatFiles = [];
+		hiveProjectId = null;
 		params = {};
 		taskIds = null;
 		chatTasks = [];
+
+		// A conversation started from a project carries its binding on the URL
+		// and writes it into the chat when the chat is created (#1358). The chat
+		// is deliberately not created up front: doing that makes the request
+		// carry a chat_id, and the backend then drops title and tag generation
+		// (is_new_chat in main.py), so every conversation in a project would
+		// stay titled New Chat forever.
+		if ($page.url.searchParams.get('project')) {
+			hiveProjectId = $page.url.searchParams.get('project');
+		}
 
 		if ($page.url.searchParams.get('youtube')) {
 			await uploadWeb(`https://www.youtube.com/watch?v=${$page.url.searchParams.get('youtube')}`);
@@ -1660,6 +1679,10 @@
 
 	const loadChat = async () => {
 		chatId.set(chatIdProp);
+		// Cleared before the incoming chat's blob is read, not only inside the
+		// branch that reads it: a chat whose blob fails to load would otherwise
+		// inherit the previous conversation's project (#1358).
+		hiveProjectId = null;
 
 		if ($temporaryChatEnabled) {
 			temporaryChatEnabled.set(false);
@@ -1704,6 +1727,7 @@
 
 				params = structuredClone(chatContent?.params ?? {});
 				chatFiles = structuredClone(chatContent?.files ?? []);
+				hiveProjectId = chatContent?.[PROJECT_CHAT_KEY] ?? null;
 
 				// Load tasks from chat-level DB field
 				chatTasks = chat?.tasks ?? [];
@@ -2836,6 +2860,25 @@
 		// Remove duplicates
 		files = files.filter((item, index, array) => array.findIndex((i) => equal(i, item)) === index);
 
+		// The project's own documents, resolved from the binding rather than
+		// from anything persisted on the chat: the prune above deletes a chat
+		// level attachment no message references (#1358).
+		//
+		// ponytail: a non empty `files` array makes the backend run
+		// `generate_queries` before retrieval, so a turn in a project bound
+		// conversation spends one extra task model completion, including while
+		// the project still holds no files. Retrieval over an empty collection
+		// is harmless (`sources` comes back empty and the injection is guarded),
+		// so the cost is the query generation call alone. Skipping it would mean
+		// knowing the project's file count on every turn, which is a fetch per
+		// turn to save a call, so it is accepted rather than optimised.
+		//
+		// Cowork turns never reach this line: `submitHandler` returns after
+		// `submitCoworkRun`, so a run started inside a project receives none of
+		// its documents. Work mode retrieval is issue #1312 and task 8 of the
+		// Projects unification spec, not this fix.
+		files = withProjectFiles(files, hiveProjectId);
+
 		scrollToBottom();
 		eventTarget.dispatchEvent(
 			new CustomEvent('chat:start', {
@@ -3065,6 +3108,19 @@
 							await updateChatById(localStorage.token, res.chat_id, {
 								params: params
 							});
+						}
+
+						// hive (#1358): the project this conversation was started
+						// from, for the same reason as params above. The backend
+						// creates the chat row from the completion request and
+						// never sees the binding, so it is written here, once, on
+						// the request that created the chat. The chat is
+						// deliberately not pre created on the project page: a chat
+						// that already exists makes the first request carry a
+						// chat_id, and the backend then skips title and tag
+						// generation for it forever (is_new_chat, main.py).
+						if (hiveProjectId) {
+							await bindChatToProject(localStorage.token, res.chat_id, hiveProjectId);
 						}
 					}
 				}
