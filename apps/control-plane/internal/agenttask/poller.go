@@ -147,6 +147,22 @@ type PollerConfig struct {
 	// unwired posture and means no revocation, which leaves the credential to
 	// its own expiry rather than failing the transition.
 	Credentials TaskCredentials
+	// FlushEvents records everything the task's session can still tell us,
+	// and is called immediately before a terminal status is written for it
+	// (issues #1622, #1504). Wired to EventSyncer.FlushTask; see its doc
+	// comment for why the ordering is the fix rather than a nicety. Nil is
+	// the unwired posture (a deployment with no engine has no events to
+	// flush) and simply skips the call.
+	//
+	// It sits on PollerConfig rather than on the syncer's own loop because
+	// this is the one place every task's terminal status is published, and a
+	// guarantee that holds for one status transition and not the others is
+	// not a guarantee. Deliberately not consulted on the two paths where the
+	// poller declares a task dead itself (an engine with no memory of the
+	// session, an exhausted failure budget): both mean the session cannot be
+	// read at all, so the call would only add a socket timeout in front of a
+	// transition that has to happen.
+	FlushEvents func(ctx context.Context, t Task)
 }
 
 // Poller periodically advances every active (queued/running, launched) task
@@ -160,6 +176,7 @@ type Poller struct {
 	interval time.Duration
 	logger   *slog.Logger
 	creds    TaskCredentials
+	flush    func(ctx context.Context, t Task)
 
 	// taskFailuresMu guards taskFailures. RunOnce is exported, so a caller
 	// besides loop (which Start/Stop's own mutex serializes) could call it
@@ -195,7 +212,7 @@ func NewPoller(repo Repository, checker StatusChecker, cfg PollerConfig) *Poller
 		logger = slog.Default()
 	}
 	return &Poller{repo: repo, checker: checker, interval: interval, logger: logger,
-		creds: cfg.Credentials, taskFailures: make(map[uuid.UUID]int)}
+		creds: cfg.Credentials, flush: cfg.FlushEvents, taskFailures: make(map[uuid.UUID]int)}
 }
 
 // taskFailureBudget converts maxTaskFailureDuration to a pass count using
@@ -368,6 +385,13 @@ func (p *Poller) pollTask(ctx context.Context, t Task) pollResult {
 		p.logger.WarnContext(ctx, "agenttask: task failed, engine detail",
 			"task_id", t.ID, "engine_detail", errMessage)
 		errMessage = "agent task failed"
+	}
+
+	// Before the transition, never after: the chat transcript stops following
+	// a run the instant it reads a terminal status, so a step recorded on the
+	// far side of this line is recorded for nobody (issues #1622, #1504).
+	if p.flush != nil {
+		p.flush(ctx, t)
 	}
 
 	if _, transErr := p.repo.Transition(ctx, t.TenantID, t.UserID, t.ID, status, "", resultSummary, errMessage); transErr != nil {

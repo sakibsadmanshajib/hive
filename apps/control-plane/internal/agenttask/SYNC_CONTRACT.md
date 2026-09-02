@@ -224,3 +224,37 @@ only exists once the real `SandboxEngine` is configured) — interval via
 `HIVE_AGENT_TASK_POLL_INTERVAL` (Go duration string, default 15s), bound to
 the same process-lifetime context the other background workers use so it
 stops cleanly on shutdown.
+
+## Step events reach the transcript before the terminal status (issues #1622, #1504)
+
+A run's steps are read by a follower in the chat transcript
+(`followCoworkRun`, `vendor/open-webui/src/lib/components/chat/Chat.svelte`)
+that polls `GET /v1/agent/tasks/{id}` and `.../events` every three seconds and
+**stops the moment it reads a terminal status**. So an event row written after
+the transition that made a task `succeeded` is written for nobody.
+
+Two loops therefore have an ordering relationship, not just a cadence:
+
+* `EventSyncer` pulls each active task's sandbox events and workspace listing
+  and appends them to `public.agent_task_events`. Its interval is
+  `HIVE_AGENT_TASK_EVENT_INTERVAL` (Go duration string, default
+  `DefaultEventSyncInterval`, 2s). It is deliberately not the poller's
+  interval: a status is a fact about a run that is either over or not, while a
+  step is something a person is waiting to watch happen.
+* `Poller` calls `PollerConfig.FlushEvents` (wired to `EventSyncer.FlushTask`)
+  **immediately before** it writes a terminal status. `FlushTask` reads the
+  session's event log from the beginning, so it is the reconciliation pass as
+  well as the last one; dedup on `source_event_id` makes the overlap free.
+
+Before that hook existed the two loops ran on unrelated schedules and a run
+shorter than the sync interval lost the race every time: it rendered as
+"Queued. Waiting for a sandbox." for its whole life and then as a bare summary
+with no steps at all, which is the live observation in issue #1504.
+
+Incremental pulls are what make the faster cadence affordable. The source hands
+back the conversation's whole event log on every call and `AppendEvents` issues
+one INSERT per event inside a transaction holding a per-task advisory lock, so
+re-appending the history every pass costs work that grows with the square of
+the run's length. `EventSyncer` tracks how many of a task's sandbox events it
+has already appended and writes only the tail; `FlushTask` is the one pass that
+still reads everything.

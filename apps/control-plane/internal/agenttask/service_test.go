@@ -35,11 +35,21 @@ type fakeRepository struct {
 	failTransitionErr error
 	appendedEvents    [][]agenttask.TaskEvent
 	eventsByID        map[uuid.UUID][]agenttask.TaskEvent
+
+	// atTransition is the event list this repository held for a task at the
+	// instant its status was last written. It exists because the ordering is
+	// the defect in issues #1622 and #1504: the events do land eventually
+	// either way, and reading them after the fact would pass over a chain
+	// that publishes a terminal status first and the steps describing the run
+	// afterwards, which is a run the transcript renders as a blank box.
+	atTransition map[uuid.UUID][]agenttask.TaskEvent
 }
 
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
-		eventsByID: make(map[uuid.UUID][]agenttask.TaskEvent), tasks: make(map[uuid.UUID]agenttask.Task)}
+		eventsByID:   make(map[uuid.UUID][]agenttask.TaskEvent),
+		atTransition: make(map[uuid.UUID][]agenttask.TaskEvent),
+		tasks:        make(map[uuid.UUID]agenttask.Task)}
 }
 
 func (f *fakeRepository) Create(_ context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string, projectID uuid.UUID) (agenttask.Task, error) {
@@ -101,6 +111,7 @@ func (f *fakeRepository) Transition(_ context.Context, tenantID, userID, id uuid
 	}
 	t.ErrorMessage = errMsg
 	f.tasks[id] = t
+	f.atTransition[id] = append([]agenttask.TaskEvent(nil), f.eventsByID[id]...)
 	return t, nil
 }
 
@@ -801,12 +812,43 @@ func TestService_Cancel_UnknownTaskReturnsNotFound(t *testing.T) {
 	}
 }
 
-func (f *fakeRepository) AppendEvents(_ context.Context, _ agenttask.Task, events []agenttask.TaskEvent) error {
+func (f *fakeRepository) AppendEvents(_ context.Context, task agenttask.Task, events []agenttask.TaskEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.appendedEvents = append(f.appendedEvents, events)
+	// Stored per task as well, with the same source-id dedup and monotonic
+	// seq the real repository gives them, so a test can ask what a reader
+	// would have seen at a given moment.
+	seen := make(map[string]bool, len(f.eventsByID[task.ID]))
+	for _, ev := range f.eventsByID[task.ID] {
+		if ev.SourceEventID != "" {
+			seen[ev.SourceEventID] = true
+		}
+	}
+	for _, ev := range events {
+		if ev.SourceEventID != "" && seen[ev.SourceEventID] {
+			continue
+		}
+		if ev.SourceEventID != "" {
+			seen[ev.SourceEventID] = true
+		}
+		ev.Seq = int64(len(f.eventsByID[task.ID]) + 1)
+		f.eventsByID[task.ID] = append(f.eventsByID[task.ID], ev)
+	}
 	return nil
 }
 
+// eventsAtTransition returns the events this repository held when id's status
+// was last written. See the atTransition field.
+func (f *fakeRepository) eventsAtTransition(id uuid.UUID) []agenttask.TaskEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]agenttask.TaskEvent(nil), f.atTransition[id]...)
+}
+
 func (f *fakeRepository) ListEvents(_ context.Context, _, _ uuid.UUID, id uuid.UUID, afterSeq int64, limit int) ([]agenttask.TaskEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	all := f.eventsByID[id]
 	var out []agenttask.TaskEvent
 	for _, ev := range all {

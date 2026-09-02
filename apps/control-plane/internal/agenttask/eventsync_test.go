@@ -380,3 +380,165 @@ func TestNormalizeSourceID(t *testing.T) {
 		t.Error("a short present id must pass through unchanged")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Incremental pulls (issues #1622, #1504)
+//
+// The syncer runs often enough now that a step reaches the transcript while
+// the step is still happening, which is the whole point of the change. What
+// makes that affordable is this: AppendEvents issues one INSERT per event
+// inside one transaction holding a per-task advisory lock, so re-appending
+// the run's entire history every pass and leaning on the dedup index to throw
+// it away is work that grows with the square of the run's length. It was
+// already the shape at the old cadence; at the new one it would be the reason
+// to refuse the new cadence.
+// ---------------------------------------------------------------------------
+
+func TestEventSyncer_AppendsOnlyTheStepsItHasNotStoredYet(t *testing.T) {
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	all := []SandboxEvent{
+		{ID: "e1", Kind: "ActionEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "list the workspace"},
+		{ID: "e2", Kind: "ObservationEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "AGENTS.md"},
+		{ID: "e3", Kind: "ActionEvent", ToolName: "str_replace_editor", ToolCallID: "c2", TextPreview: "write sixcap.txt"},
+	}
+	// Pass one sees the first two, pass two sees all three: the shape of a
+	// live conversation's event store, which only ever grows.
+	visible := 2
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) { return all[:visible], nil },
+		files:  func(context.Context, string) ([]WorkspaceFile, error) { return nil, nil },
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	visible = 3
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+
+	if len(repo.appends) != 2 {
+		t.Fatalf("appends=%d, want one per pass", len(repo.appends))
+	}
+	second := repo.appends[1]
+	var sandboxIDs []string
+	for _, ev := range second {
+		if strings.HasPrefix(ev.SourceEventID, statusEventPrefix) {
+			continue // the synthetic status row rides on every pass by design
+		}
+		sandboxIDs = append(sandboxIDs, ev.SourceEventID)
+	}
+	if len(sandboxIDs) != 1 || sandboxIDs[0] != "e3" {
+		t.Fatalf("second pass appended %v, want only the step that is new since the first pass", sandboxIDs)
+	}
+}
+
+func TestEventSyncer_TerminalFlushReconcilesTheWholeRun(t *testing.T) {
+	// The incremental pull above is an optimisation over a source this
+	// process does not control, so the one pass that has to be complete, the
+	// last one, reads the run from the beginning. Dedup makes the overlap
+	// free and anything the incremental pulls missed still lands.
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	all := []SandboxEvent{
+		{ID: "e1", Kind: "ActionEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "list"},
+		{ID: "e2", Kind: "ObservationEvent", ToolName: "bash", ToolCallID: "c1", TextPreview: "ok"},
+	}
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) { return all, nil },
+		files:  func(context.Context, string) ([]WorkspaceFile, error) { return nil, nil },
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	repo.appends = nil
+	syncer.FlushTask(context.Background(), task)
+
+	if len(repo.appends) != 1 {
+		t.Fatalf("appends=%d, want one flush", len(repo.appends))
+	}
+	var ids []string
+	for _, ev := range repo.appends[0] {
+		ids = append(ids, ev.SourceEventID)
+	}
+	if len(ids) != 2 || ids[0] != "e1" || ids[1] != "e2" {
+		t.Fatalf("flush appended %v, want the whole run", ids)
+	}
+}
+
+func TestEventSyncer_FlushTaskIgnoresATaskWithNoSession(t *testing.T) {
+	repo := &fakeRepoForSync{}
+	called := false
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) {
+			called = true
+			return nil, nil
+		},
+		files: func(context.Context, string) ([]WorkspaceFile, error) { return nil, nil },
+	}
+	NewEventSyncer(repo, src, PollerConfig{}).
+		FlushTask(context.Background(), Task{ID: uuid.New(), Status: StatusQueued})
+
+	if called || len(repo.appends) != 0 {
+		t.Fatal("a task that never launched has no session to read events from")
+	}
+}
+
+func TestEventSyncer_DoesNotRewriteAWorkspaceFileThatHasNotChanged(t *testing.T) {
+	// The workspace listing arrives whole on every pass, so without this the
+	// per-pass write grows with the number of files the run produced: the same
+	// square-of-the-run cost the sandbox-event offset removes, by the other
+	// door.
+	task := Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(),
+		Status: StatusRunning, EngineSessionRef: "session-1"}
+	repo := &fakeRepoForSync{listActive: []Task{task}, get: map[uuid.UUID]Task{task.ID: task}}
+
+	files := []WorkspaceFile{{Name: "sixcap.txt", Size: 13, ModTime: time.Unix(1000, 0)}}
+	src := &fakeEventSource{
+		events: func(context.Context, string) ([]SandboxEvent, error) { return nil, nil },
+		files:  func(context.Context, string) ([]WorkspaceFile, error) { return files, nil },
+	}
+	syncer := NewEventSyncer(repo, src, PollerConfig{})
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if countKind(repo.appends[0], EventFile) != 1 {
+		t.Fatalf("first pass recorded %d file events, want 1", countKind(repo.appends[0], EventFile))
+	}
+
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if got := countKind(repo.appends[1], EventFile); got != 0 {
+		t.Fatalf("second pass rewrote %d unchanged file events", got)
+	}
+
+	// A rewritten file is a different fact and still lands: same name, new
+	// size and mtime, so a new deterministic id.
+	files = []WorkspaceFile{{Name: "sixcap.txt", Size: 26, ModTime: time.Unix(2000, 0)}}
+	if err := syncer.RunOnce(context.Background()); err != nil {
+		t.Fatalf("third pass: %v", err)
+	}
+	if got := countKind(repo.appends[2], EventFile); got != 1 {
+		t.Fatalf("third pass recorded %d file events for a rewritten file, want 1", got)
+	}
+}
+
+func countKind(events []TaskEvent, kind TaskEventKind) int {
+	n := 0
+	for _, ev := range events {
+		if ev.Kind == kind {
+			n++
+		}
+	}
+	return n
+}

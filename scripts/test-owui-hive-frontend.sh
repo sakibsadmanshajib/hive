@@ -72,6 +72,8 @@ for rel in \
 	chat/Chat.svelte \
 	chat/Placeholder.svelte \
 	chat/Messages.svelte \
+	chat/Messages/ResponseMessage.svelte \
+	chat/Messages/ResponseMessage/StatusHistory.svelte \
 	chat/ModelSelector.svelte \
 	layout/Sidebar.svelte \
 	layout/SearchModal.svelte \
