@@ -261,6 +261,17 @@ if [ "$oauth_server" = "1" ]; then
 fi
 
 log "==> GoTrue"
+# Pulled on its own, with retries, before the run that needs it. Docker Hub
+# answers 500 often enough to matter: run 33679008470 died on "received
+# unexpected HTTP status: 500 Internal Server Error" fetching this digest, with
+# nothing else in the job wrong. A registry hiccup should cost seconds, not a
+# whole proof run. If every attempt fails, the run below pulls again and fails
+# with the registry's own error, so nothing is swallowed.
+for attempt in 1 2 3; do
+  if docker pull -q "$gotrue_image" >/dev/null 2>&1; then break; fi
+  log "::warning::pulling $gotrue_image failed (attempt $attempt), retrying"
+  sleep 5
+done
 docker rm -f supabase-auth >/dev/null 2>&1 || true
 docker run -d --name supabase-auth --network "$network" \
   -e GOTRUE_API_HOST=0.0.0.0 \

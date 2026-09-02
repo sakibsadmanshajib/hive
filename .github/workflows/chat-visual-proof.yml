@@ -120,11 +120,18 @@ jobs:
   capture:
     name: Capture signed-in chat proof
     runs-on: ubuntu-latest
-    # Measured on run 17998806243: npm ci and browsers ~2 min, the stack build
-    # (which compiles the forked Open WebUI frontend from source, about 9 min on
-    # its own) ~14 min, console build ~3 min, sign-in and capture ~4 min. 60
-    # leaves headroom without letting a wedged stream burn two hours.
-    timeout-minutes: 60
+    # Measured end to end on run 33677630521, 10m53s: this run's own Supabase
+    # 27s, the stack build and boot 7m36s (most of it compiling the forked Open
+    # WebUI frontend from source), harness dependencies and a browser 42s, the
+    # console build 25s, the whole sign-in journey 13s, the capture 7s, posting
+    # 9s.
+    #
+    # 40 rather than 15, because the two things most likely to stretch are the
+    # two this job does not control: a cold Open WebUI boot has its own 420s
+    # deadline below, and the captured turn waits up to 180s for a provider to
+    # finish streaming. A wedged one of either should still fail inside the
+    # budget rather than sit until GitHub's own six hour ceiling.
+    timeout-minutes: 40
     # Two kinds of pull request never receive repository secrets, so a run on
     # either would fail on a blank secret rather than on the change under test.
     # Same gate, and the same measured reasoning, as agent-visual-proof.yml:
