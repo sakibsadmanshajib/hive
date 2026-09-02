@@ -7,7 +7,11 @@ services:
       context: ../../
       dockerfile: deploy/docker/Dockerfile.edge-api
     ports:
-      - "8080:8080"
+      # Loopback only (issue #1754). Public through Cloudflare Tunnel, and
+      # cloudflared dials http://localhost:8080 from this box, so the edge path
+      # is unchanged. A wider binding only adds a way to reach the gateway
+      # without passing Cloudflare at all.
+      - "127.0.0.1:8080:8080"
     depends_on:
       control-plane:
         condition: service_healthy
@@ -270,7 +274,11 @@ services:
     # this container by name regardless of the Compose project name.
     container_name: litellm
     ports:
-      - "4000:4000"
+      # Loopback only (issue #1754). No tunnel route and no host consumer:
+      # every caller reaches it over the compose network as http://litellm:4000.
+      # It holds the provider master key and talks to paid upstreams, so it has
+      # no business listening past this box.
+      - "127.0.0.1:4000:4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
@@ -447,7 +455,10 @@ services:
       context: ../../
       dockerfile: deploy/docker/Dockerfile.control-plane
     ports:
-      - "8081:8081"
+      # Loopback only (issue #1754). Same shape as edge-api above: cloudflared
+      # dials http://localhost:8081, so the public path is unchanged, and the
+      # binding stops being a way around the edge.
+      - "127.0.0.1:8081:8081"
     # `required: false` makes the redis dependency optional at the Compose
     # level. When the `local` or `enterprise` profile is active the in-stack
     # redis service exists and control-plane waits for it to be healthy before
@@ -843,7 +854,11 @@ services:
       context: ../../
       dockerfile: deploy/docker/Dockerfile.web-console
     ports:
-      - "3000:3000"
+      # Loopback only (issue #1754), on top of the `dev` profile gate described
+      # below. Nothing dials this from off-box: NEXT_PUBLIC_APP_URL defaults to
+      # http://localhost:3000 and the served console is web-console-prod behind
+      # caddy-console.
+      - "127.0.0.1:3000:3000"
     depends_on:
       - control-plane
     environment:
@@ -2041,7 +2056,10 @@ services:
       - enterprise
       - chat
     ports:
-      - "3003:80"
+      # Loopback only (issue #1754). cloudflared dials http://localhost:3003 for
+      # chat-hive.scubed.co, so the chat origin is unchanged; the binding stops
+      # being a way to reach Open WebUI without Cloudflare in front.
+      - "127.0.0.1:3003:80"
     depends_on:
       open-webui:
         condition: service_healthy
@@ -2075,7 +2093,9 @@ services:
       - enterprise
       - chat
     ports:
-      - "3004:80"
+      # Loopback only (issue #1754), same rationale as caddy-owui: cloudflared
+      # dials http://localhost:3004 for artifacts-hive.scubed.co.
+      - "127.0.0.1:3004:80"
     environment:
       ARTIFACTS_DOMAIN: ${ARTIFACTS_DOMAIN:-artifacts.localhost}
     depends_on:
@@ -2200,7 +2220,13 @@ services:
     profiles:
       - monitoring
     ports:
-      - "9090:9090"
+      # Loopback only (issue #1754). This image runs with no web.config.file and
+      # no auth flags, so its query API answers any caller, and it holds exactly
+      # the series control-plane and edge-api keep off their public listeners
+      # (provider names, payment-rail event counts, ledger posting counts, the
+      # /internal/* inventory). Grafana and alertmanager reach it over the
+      # compose network as http://prometheus:9090.
+      - "127.0.0.1:9090:9090"
     volumes:
       - ../../deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../../deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro

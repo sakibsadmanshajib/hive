@@ -55,6 +55,7 @@ test-scripts:
 	python3 scripts/register-owui-oauth-client.py --self-check
 	python3 scripts/test_check_oauth_scopes.py
 	python3 scripts/test_caddy_supabase_routes.py
+	python3 scripts/test_compose_port_bindings.py
 	python3 scripts/test_selfhost_supabase_seam.py
 	python3 scripts/test_litellm_config_seam.py
 	python3 scripts/check-env-supabase-target.py --self-check
