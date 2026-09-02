@@ -171,16 +171,22 @@ function BudgetUsageCell({ row }: { row: ApiKey }) {
             : "[&::-webkit-progress-value]:bg-[var(--color-accent)] [&::-moz-progress-bar]:bg-[var(--color-accent)]",
         )}
       />
-      {row.spend_credits === budgetSpend ? null : (
+      {row.spend_credits > budgetSpend ? (
         // The two counters differ whenever the cap resets (a monthly window is
         // this month, the lifetime total is every month) or when the key spent
         // before it was capped. Printing the lifetime figure here keeps the
         // number this column has always carried, without letting it near the
         // ratio above.
+        //
+        // Only when the lifetime figure is the larger one. The enforced figure
+        // includes reserved credits and the rollup does not, so a key holding a
+        // stranded reservation has the smaller lifetime total, and printing it
+        // beneath a larger "used" figure explains nothing and reads as a
+        // contradiction.
         <span className="text-2xs text-[var(--color-ink-3)] whitespace-nowrap">
           {lifetimeText} lifetime
         </span>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -2,6 +2,7 @@ package apikeys
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -286,6 +287,67 @@ func TestListKeysExposeSpendAndNullBudgetLimit(t *testing.T) {
 		t.Fatal("budget_limit_credits must be present even when null")
 	} else if limit != nil {
 		t.Fatalf("expected budget_limit_credits null for a capless key, got %#v", limit)
+	}
+	// Same contract for the enforced counter, and it is the only Go-side
+	// assertion that reads this key off the wire: the console's own fixtures
+	// are hand-built, so deleting the map entry in keyViewItem would leave
+	// every test green while the field vanished from the response and the
+	// console fell back to its no-bar branch (issue #1683).
+	if spend, ok := item["budget_spend_credits"]; !ok {
+		t.Fatal("budget_spend_credits must be present even when null")
+	} else if spend != nil {
+		t.Fatalf("expected budget_spend_credits null for a capless key, got %#v", spend)
+	}
+}
+
+// TestListKeysExposeTheEnforcedBudgetSpend covers the list path specifically.
+// The keys table is the only surface that loads it, and its numerator was
+// assigned there with nothing reading it back over HTTP.
+func TestListKeysExposeTheEnforcedBudgetSpend(t *testing.T) {
+	h, repo := newTestHandler(ownerVC())
+	base := "/api/v1/accounts/current/api-keys"
+
+	create := doRequest(t, h, http.MethodPost, base, map[string]string{"nickname": "capped"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", create.Code, create.Body.String())
+	}
+	keyID := decodeBody(t, create)["id"].(string)
+
+	update := doRequest(t, h, http.MethodPost, base+"/"+keyID+"/policy", map[string]interface{}{
+		"budget_kind":          "lifetime",
+		"budget_limit_credits": 1000,
+	})
+	if update.Code != http.StatusOK {
+		t.Fatalf("policy update: expected 200, got %d: %s", update.Code, update.Body.String())
+	}
+
+	// Written through the only writer of api_key_budget_windows, so the wire
+	// value has to come from that table rather than from the usage rollup.
+	parsed, err := uuid.Parse(keyID)
+	if err != nil {
+		t.Fatalf("parse key id: %v", err)
+	}
+	if err := repo.ApplyReservationDelta(context.Background(), parsed, "lifetime", 40, 210, time.Now().UTC()); err != nil {
+		t.Fatalf("ApplyReservationDelta: %v", err)
+	}
+
+	rr := doRequest(t, h, http.MethodGet, base, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	item := decodeBody(t, rr)["items"].([]interface{})[0].(map[string]interface{})
+
+	spend, ok := item["budget_spend_credits"]
+	if !ok || spend == nil {
+		t.Fatalf("expected budget_spend_credits on a capped key, got %#v", item["budget_spend_credits"])
+	}
+	if spend.(float64) != 250 {
+		t.Fatalf("expected consumed 210 plus reserved 40, got %#v", spend)
+	}
+	// The lifetime rollup is untouched by a reservation delta, so the two
+	// fields must not be the same number here.
+	if item["spend_credits"].(float64) != 0 {
+		t.Fatalf("expected the lifetime rollup to stay 0, got %#v", item["spend_credits"])
 	}
 }
 

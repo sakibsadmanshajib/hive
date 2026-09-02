@@ -244,6 +244,26 @@ describe("ApiKeyList budget usage bar", () => {
     expect(screen.getByText("$2.97 lifetime")).toBeTruthy();
   });
 
+  it("keeps the lifetime note off a key whose enforced figure is the larger of the two", () => {
+    // The enforced counter includes reserved credits and the lifetime rollup
+    // does not, so a key holding a stranded reservation has the smaller
+    // lifetime figure. Printing "$2.97 lifetime" beneath "$3.20 of $5.00
+    // total" explains nothing and reads as a contradiction.
+    render(
+      <ApiKeyList
+        keys={[
+          lifetimeKey(3_200_000_000, 5_000_000_000, {
+            spend_credits: 2_970_000_000,
+          }),
+        ]}
+        canManage={false}
+      />,
+    );
+
+    expect(screen.getByText("$3.20")).toBeTruthy();
+    expect(screen.queryByText("$2.97 lifetime")).toBeNull();
+  });
+
   it("draws the bar for a monthly cap too, because the enforced counter is that month's window", () => {
     render(
       <ApiKeyList

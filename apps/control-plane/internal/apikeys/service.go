@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -96,12 +97,27 @@ func (s *Service) ListKeyViews(ctx context.Context, accountID uuid.UUID) ([]KeyV
 		}
 		view := buildKeyView(key, policy, spend)
 		// One more per-key read, on top of the policy and lifetime-spend reads
-		// this loop already does. A key list is a page of a customer's own
-		// keys, so the row count is small; batch all three into one query if
-		// that ever stops being true.
-		view.BudgetSpendCredits, err = s.budgetSpendCredits(ctx, key.ID, policy)
-		if err != nil {
-			return nil, err
+		// this loop already does, so three per row plus the list itself. A key
+		// list is a page of a customer's own keys and this is its only caller,
+		// so the row count is small; batch them if that stops being true, and
+		// note ListPolicies already exists for the policy read.
+		//
+		// Its failure is swallowed on purpose, and the rule is general rather
+		// than specific to this field: an ornament on a row must never be able
+		// to take down the page that manages the rows. handleListKeys turns any
+		// error out of here into a 500, getApiKeys throws on that, and
+		// ApiKeysPage has no catch around it, so a transient read failure on a
+		// usage bar would blank the page an operator opens to revoke a leaked
+		// key. Every other degradable read on that page already behaves this
+		// way. nil is a meaning this field already carries end to end: the
+		// console renders the cap with no proportion beside it, which is a true
+		// statement about a number that could not be read.
+		if budgetSpend, budgetErr := s.budgetSpendCredits(ctx, key.ID, policy); budgetErr != nil {
+			slog.WarnContext(ctx, "apikeys: budget window read failed, key listed without a usage proportion",
+				slog.String("key_id", key.ID.String()),
+				slog.String("err", budgetErr.Error()))
+		} else {
+			view.BudgetSpendCredits = budgetSpend
 		}
 		views = append(views, view)
 	}
@@ -123,6 +139,9 @@ func (s *Service) GetKeyView(ctx context.Context, accountID, keyID uuid.UUID) (K
 		return KeyView{}, fmt.Errorf("apikeys: get lifetime spend: %w", err)
 	}
 	view := buildKeyView(key, policy, spend)
+	// Strict here, unlike the list above, and the difference is deliberate:
+	// this reads one key for one caller, so a failure has no sibling rows to
+	// protect and reporting it is better than hiding it.
 	view.BudgetSpendCredits, err = s.budgetSpendCredits(ctx, keyID, policy)
 	if err != nil {
 		return KeyView{}, err
