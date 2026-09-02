@@ -2490,6 +2490,13 @@
 		}
 	};
 
+	/**
+	 * True while submitHandler is reading the attachments for a run (#1065).
+	 * Component scoped rather than module scoped: two chat panes are two
+	 * independent composers, and a shared flag would make one block the other.
+	 */
+	let coworkGatherInFlight = false;
+
 	const submitCoworkRun = async (
 		userPrompt: string,
 		attachments: CoworkAttachment[] = [],
@@ -2706,15 +2713,38 @@
 		// cleared, so a refusal leaves the person's prompt and their file chips
 		// exactly where they were. Gathering them after the clear would make
 		// every refusal cost them the message they had just written.
+		//
+		// That ordering is what makes the guard below necessary. This is the
+		// first await on the cowork path that sits before the clear, and it is
+		// up to five getFileById round trips long, with `files` and `prompt`
+		// still populated throughout. A second Enter in that window used to run
+		// the whole handler again: two createTask calls, two credit holds, two
+		// sandboxes, from one person pressing a key twice.
+		//
+		// The flag is released the moment the reads finish rather than held for
+		// the send, deliberately. Everything between the release and the clear
+		// is synchronous, so nothing can interleave there, and holding it any
+		// longer would block the message queue path below, which is a feature
+		// rather than a race.
 		let coworkAttachments: CoworkAttachment[] = [];
 		if ($composerMode === 'cowork') {
-			const gathered = await collectCoworkAttachments(files, async (id) => {
-				// The authoritative copy of the text Open WebUI extracted at
-				// upload. Read here rather than trusted from the upload response,
-				// which returns the row before processing has filled it in.
-				const file = await getFileById(localStorage.token, id).catch(() => null);
-				return file?.data?.content ?? '';
-			});
+			if (coworkGatherInFlight) {
+				return;
+			}
+			coworkGatherInFlight = true;
+			let gathered: Awaited<ReturnType<typeof collectCoworkAttachments>>;
+			try {
+				gathered = await collectCoworkAttachments(files, async (id) => {
+					// The authoritative copy of the text Open WebUI extracted at
+					// upload. Read here rather than trusted from the upload
+					// response, which returns the row before processing has
+					// filled it in.
+					const file = await getFileById(localStorage.token, id).catch(() => null);
+					return file?.data?.content ?? '';
+				});
+			} finally {
+				coworkGatherInFlight = false;
+			}
 			if (!gathered.ok) {
 				toast.error(coworkAttachmentRefusal(gathered));
 				return;

@@ -139,8 +139,17 @@ type createRequest struct {
 	// validated by edge-api's handler. Same posture as ProjectID: this is a
 	// service-to-service surface behind RequireInternalToken, so carrying
 	// them here widens no trust boundary, and this handler is not where the
-	// validation lives. The launcher validates the names again because it is
-	// the process that turns one into a path.
+	// validation lives.
+	//
+	// Precisely what is and is not re-checked downstream, because "validated
+	// at every hop" is true of one field and not of the others. The NAME is
+	// checked again by the launcher, which is the process that turns one into
+	// a path. The COUNT and the 256 KiB total are enforced in the browser and
+	// in edge-api's validateAttachments and nowhere after that, so past
+	// edge-api the only bound left is maxBodyBytes below. Deliberate rather
+	// than an omission: a second copy of the quantity policy here would be
+	// the two disagreeing copies this package already refuses to keep for
+	// packs, and this surface is not customer reachable.
 	Attachments []attachmentWire `json:"attachments"`
 }
 

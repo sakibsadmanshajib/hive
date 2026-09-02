@@ -200,3 +200,24 @@ describe('the composer no longer refuses every attachment in Work mode', () => {
 		expect(chat).toContain('createTask(localStorage.token, $composerPack, userPrompt, attachments)');
 	});
 });
+
+// Source-level guards for the two review findings that live in Chat.svelte,
+// which this repository has no component harness for. Both are properties a
+// later edit could drop without any other test noticing.
+describe('the composer guards the window it opened (#1065 review)', () => {
+	const chat = readFileSync(
+		fileURLToPath(new URL('../components/chat/Chat.svelte', import.meta.url)),
+		'utf8'
+	);
+
+	// Gathering before the clear is what keeps a refusal from costing the
+	// person their message, and it is also what put an await in front of the
+	// clear with `files` and `prompt` still populated. Two Enter presses in
+	// that window meant two createTask calls and two credit holds.
+	it('refuses a second submit while the attachment reads are outstanding', () => {
+		expect(chat).toContain('if (coworkGatherInFlight) {');
+		expect(chat).toContain('coworkGatherInFlight = true;');
+		// Released in a finally, so a thrown read cannot wedge the composer.
+		expect(chat).toMatch(/finally\s*\{\s*coworkGatherInFlight = false;/);
+	});
+});
