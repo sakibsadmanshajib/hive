@@ -479,7 +479,14 @@ async function seedBilling(admin, ids) {
       entry_type: "grant",
       credits_delta: FIXTURE_GRANT_CREDITS,
       idempotency_key: fixtureGrantIdempotencyKey(pair.account_id),
-      metadata: { source: "e2e-fixture-seed" },
+      // credit_unit is the stamp ledger.stampCreditUnit puts on every entry
+      // the control-plane writes. This insert goes straight to PostgREST and
+      // never reaches that code, so it makes the claim itself: these credits
+      // are in today's unit (1 USD = 1e9). Without it the row is unstamped,
+      // and unstamped rows are what issue #1704's detector mistook for
+      // pre-rescale ones. Two of the seven live false positives came from
+      // exactly this line.
+      metadata: { source: "e2e-fixture-seed", credit_unit: "v2-1usd-1e9" },
     })),
     { onConflict: "account_id,entry_type,idempotency_key", ignoreDuplicates: true }
   );

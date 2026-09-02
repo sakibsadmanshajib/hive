@@ -401,6 +401,13 @@ def grant_ledger_row(account_id: str, credits: int) -> dict:
         "metadata": {
             "reason": "operator-specified demo provisioning grant (HIVE_DEMO_CREDITS)",
             "source": "scripts/seed-demo-owner.py",
+            # The stamp ledger.stampCreditUnit puts on every entry the
+            # control-plane writes. This row is posted through PostgREST and
+            # never reaches that writer, so it states its own unit: the amount
+            # above is in today's credits (1 USD = 1e9). An unstamped row is
+            # what issue #1704's straggler detector read as pre-rescale, and
+            # the remedy documented beside it would have multiplied it 10,000x.
+            "credit_unit": "v2-1usd-1e9",
         },
     }
 

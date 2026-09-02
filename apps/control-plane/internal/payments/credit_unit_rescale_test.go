@@ -269,3 +269,74 @@ func TestRescaledChargeKeepsRealUSDParity(t *testing.T) {
 		t.Fatalf("implied USD diverged by more than one pre-rescale credit: %s", diff.FloatString(12))
 	}
 }
+
+// =============================================================================
+// Issue #1704: the detector this migration documented, and the remedy next to
+// it, are the thing under test here. Nothing was wrong with the DATA; the
+// danger was the instruction. These two guards keep the correction in place.
+// =============================================================================
+
+const stragglerMigrationRelPath = "../../../../supabase/migrations/20260902_02_credit_unit_straggler_detector.sql"
+
+// TestRescaleMigrationDocumentsNoBlanketRemedy asserts the header no longer
+// carries a query that reads a missing stamp as an old unit, nor an
+// instruction to multiply its matches by the rescale factor. On the live box
+// that pair pointed at seven correctly scaled grants worth 221 billion
+// credits, and following it would have inflated them ten thousand fold.
+func TestRescaleMigrationDocumentsNoBlanketRemedy(t *testing.T) {
+	raw := loadRescaleMigration(t)
+
+	for _, banned := range []struct{ what, needle string }{
+		{"the unstamped-equals-unscaled predicate", "NOT (metadata ? 'credit_unit')"},
+		{"the blanket multiply remedy", "UPDATE x10000"},
+	} {
+		if strings.Contains(raw, banned.needle) {
+			t.Errorf("the rescale migration still documents %s (%q); a missing stamp is evidence of a writer that does not stamp, not of an old unit (issue #1704)",
+				banned.what, banned.needle)
+		}
+	}
+
+	// The replacement has to be reachable from here, or the correction is just
+	// a deletion and the next operator writes the naive query again.
+	if !strings.Contains(raw, "credit_unit_straggler_candidates") {
+		t.Error("the rescale migration's post-deploy section must point at public.credit_unit_straggler_candidates, the only sanctioned detector")
+	}
+}
+
+// TestStragglerMigrationWritesMetadataOnly is the money bound on the backfill:
+// it stamps rows whose unit is already known and must never touch an amount.
+// Every SET target in the file is required to be metadata, so a credits column
+// appearing in one is a failing test rather than a silent repricing.
+func TestStragglerMigrationWritesMetadataOnly(t *testing.T) {
+	raw, err := os.ReadFile(stragglerMigrationRelPath)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", stragglerMigrationRelPath, err)
+	}
+	body := string(raw)
+
+	sets := regexp.MustCompile(`(?i)\bSET\s+([a-z_]+)\s*=`).FindAllStringSubmatch(body, -1)
+	if len(sets) == 0 {
+		t.Fatal("no UPDATE ... SET found; this migration is supposed to stamp rows")
+	}
+	for _, m := range sets {
+		if strings.ToLower(m[1]) != "metadata" {
+			t.Errorf("migration assigns %q; the stamping backfill must write metadata and nothing else", m[1])
+		}
+	}
+
+	// The stamp values are the two the audit scheme defines. A third spelling
+	// would be invisible to every reader that knows only these.
+	for _, needle := range []string{"'credit_unit', 'v2-1usd-1e9'", "'credit_unit', 'legacy-1usd-100k-credits'"} {
+		if !strings.Contains(body, needle) {
+			t.Errorf("migration does not stamp with %s", needle)
+		}
+	}
+
+	// The detector is a view over money tables. It must not become a
+	// PostgREST-readable surface for the published keys.
+	for _, needle := range []string{"security_invoker = true", "revoke all on public.credit_unit_straggler_candidates from anon"} {
+		if !strings.Contains(body, needle) {
+			t.Errorf("migration is missing %q, so the detector view is not locked down like the marker table it reads", needle)
+		}
+	}
+}
