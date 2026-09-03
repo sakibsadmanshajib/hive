@@ -1264,7 +1264,9 @@ jobs:
             exit 1
           fi
           caption="Signed-in Hive chat, captured in CI against a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase, its own registered OAuth client and a real streamed completion. Run ${GITHUB_RUN_ID}."
-          if [ "${SCENARIO:-chat}" = "webtools" ]; then
+          if [ "${SCENARIO:-chat}" = "voice" ]; then
+            caption="Signed-in Hive voice mode on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. Chrome's fake capture device plays a generated track into the call overlay: one utterance, then three interruptions spoken while the first is still being transcribed. The frames are the overlay listening, the overlay busy with the turn it captured, and the conversation carrying the transcribed message and its reply. The claim is in the log below, not the pictures: the number of transcription requests the page made. Run ${GITHUB_RUN_ID}."
+          elif [ "${SCENARIO:-chat}" = "webtools" ]; then
             caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. A question needing live data, sent with the web search toggle off and features.web_search absent from the outgoing request, answered with the model's own tool call and a rendered source list; then the same question on ${PROOF_CONTROL_MODEL:-a non tool capable alias}, whose every enabled route reports tools_supported = false, settling with no source list. Run ${GITHUB_RUN_ID}."
           fi
           scripts/post-pr-visual-proof.sh "$PR" "${images[@]}" --caption "$caption"

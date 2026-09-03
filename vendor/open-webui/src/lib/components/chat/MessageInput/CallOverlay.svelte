@@ -417,7 +417,6 @@
 					return;
 				}
 
-
 				// performance.now(), not Date.now(): the wall clock can move backwards
 				// on an NTP correction or a resume from sleep, and both the silence
 				// timeout and the hard cap are differences against it, so a backward
