@@ -272,26 +272,39 @@ func TestFragmentStream_TwoHundredCumulativeFragmentsNeverExceedTheCeiling(t *te
 // while a false incremental verdict is the overcharge.
 func TestFragmentStream_ClassifiesTheStreamNotTheFragment(t *testing.T) {
 	cases := []struct {
-		name      string
-		fragments []string
-		want      string
+		name       string
+		nameStream bool
+		fragments  []string
+		want       string
 	}{
-		{"single fragment is its own value", []string{`{"a":1}`}, `{"a":1}`},
-		{"no fragments at all", nil, ""},
-		{"empty fragments contribute nothing", []string{`{"a"`, "", `:1}`, ""}, `{"a":1}`},
-		{"incremental partial pieces concatenate", []string{`{"a"`, `:1,"b"`, `:2}`}, `{"a":1,"b":2}`},
-		{"cumulative byte prefixes keep the last", []string{`{"a"`, `{"a":1`, `{"a":1}`}, `{"a":1}`},
-		{"cumulative repaired JSON keeps the last", []string{`{"a":1}`, `{"a":1,"b":2}`}, `{"a":1,"b":2}`},
-		{"cumulative map order keeps the last", []string{`{"a":1}`, `{"b":2,"a":1}`}, `{"b":2,"a":1}`},
-		{"an identical repeat is one value, not two", []string{"get_weather", "get_weather", "get_weather"}, "get_weather"},
-		{"a name streamed in pieces still concatenates", []string{"get_", "weather"}, "get_weather"},
-		{"the latch is sticky once anything shows the shape", []string{`{"a":1}`, `{"a":1,"b":2}`, `{"c"`}, `{"c"`},
-		{"a bare valid-JSON token is not a complete object", []string{`1`, `2`}, `12`},
-		{"a quoted string fragment is not a complete object", []string{`"a`, `"b`}, `"a"b`},
+		{name: "single fragment is its own value", fragments: []string{`{"a":1}`}, want: `{"a":1}`},
+		{name: "no fragments at all", fragments: nil, want: ""},
+		{name: "empty fragments contribute nothing", fragments: []string{`{"a"`, "", `:1}`, ""}, want: `{"a":1}`},
+		{name: "incremental partial pieces concatenate", fragments: []string{`{"a"`, `:1,"b"`, `:2}`}, want: `{"a":1,"b":2}`},
+		{name: "cumulative byte prefixes keep the last", fragments: []string{`{"a"`, `{"a":1`, `{"a":1}`}, want: `{"a":1}`},
+		{name: "cumulative repaired JSON keeps the last", fragments: []string{`{"a":1}`, `{"a":1,"b":2}`}, want: `{"a":1,"b":2}`},
+		{name: "cumulative map order keeps the last", fragments: []string{`{"a":1}`, `{"b":2,"a":1}`}, want: `{"b":2,"a":1}`},
+		{name: "the latch is sticky once anything shows the shape", fragments: []string{`{"a":1}`, `{"a":1,"b":2}`, `{"c"`}, want: `{"c"`},
+		{name: "a bare valid-JSON token is not a complete object", fragments: []string{`1`, `2`}, want: `12`},
+		{name: "a quoted string fragment is not a complete object", fragments: []string{`"a`, `"b`}, want: `"a"b`},
+
+		// The NAME stream, where a byte-identical repeat IS the cumulative
+		// shape: nearly every provider repeats the function name on every
+		// argument fragment.
+		{name: "name: an identical repeat is one value, not two", nameStream: true, fragments: []string{"get_weather", "get_weather", "get_weather"}, want: "get_weather"},
+		{name: "name: a name streamed in pieces still concatenates", nameStream: true, fragments: []string{"get_", "weather"}, want: "get_weather"},
+
+		// The ARGUMENTS stream, where the same repeat is the MODEL'S OWN
+		// TOKENS and latching on it discards the whole call. Both fixtures
+		// come from the third review on PR #1762, which measured them
+		// settling at `"}` against the full value.
+		{name: "arguments: a repeated path segment is not the cumulative shape", fragments: []string{`{"path":"`, `a/`, `b/`, `b/`, `c`, `"}`}, want: `{"path":"a/b/b/c"}`},
+		{name: "arguments: a repeated token run is not the cumulative shape", fragments: []string{`{"q":"`, `aa`, `aa`, `aa`, `"}`}, want: `{"q":"aaaaaa"}`},
+		{name: "arguments: control, the same shape with no duplicate", fragments: []string{`{"q":"`, `ab`, `cd`, `"}`}, want: `{"q":"abcd"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var f fragmentStream
+			f := fragmentStream{repeatIsCumulative: tc.nameStream}
 			for _, frag := range tc.fragments {
 				f.add(frag)
 			}
@@ -299,6 +312,32 @@ func TestFragmentStream_ClassifiesTheStreamNotTheFragment(t *testing.T) {
 				t.Errorf("settled %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestAccumulateToolCalls_RepeatedArgumentTokensDoNotDiscardTheCall is the same
+// defect through the real accumulator rather than the classifier alone, because
+// the wiring is half the fix: the byte-identical arm has to be off for the
+// arguments stream and ON for the name stream, and only foldToolCall decides
+// which stream is which.
+//
+// The name is repeated on every fragment exactly as providers send it, so a
+// regression that enabled the arm everywhere would settle at `"}` and one that
+// disabled it everywhere would count the name six times.
+func TestAccumulateToolCalls_RepeatedArgumentTokensDoNotDiscardTheCall(t *testing.T) {
+	acc := &UsageAccumulator{}
+	for _, fragment := range []string{`{"path":"`, `a/`, `b/`, `b/`, `c`, `"}`} {
+		raw, err := json.Marshal([]map[string]any{{
+			"index":    0,
+			"function": map[string]string{"name": "read_file", "arguments": fragment},
+		}})
+		if err != nil {
+			t.Fatalf("marshalling the fixture frame: %v", err)
+		}
+		acc.accumulateToolCalls(raw, nil)
+	}
+	if got, want := acc.ToolCallOutput(), `read_file{"path":"a/b/b/c"}`; got != want {
+		t.Errorf("tool-call output = %q, want %q: the duplicated path segment is the model's own tokens, not a provider repeating its buffer", got, want)
 	}
 }
 

@@ -267,8 +267,11 @@ type fragmentStream struct {
 	// prevParsed records whether last parsed as a standalone JSON object, so
 	// the "both parse" test costs one json.Valid per fragment and not two.
 	prevParsed bool
-	cumulative bool
-	count      int
+	// repeatIsCumulative enables the byte-identical arm, and ONLY the NAME
+	// stream sets it. See the arm itself in add for why arguments must not.
+	repeatIsCumulative bool
+	cumulative         bool
+	count              int
 }
 
 // add folds one fragment in. An empty fragment is not a fragment: providers
@@ -282,7 +285,22 @@ func (f *fragmentStream) add(fragment string) {
 	parsed := isJSONObject(fragment)
 	if f.count > 0 && !f.cumulative {
 		switch {
-		case fragment == f.last:
+		// BYTE-IDENTICAL, NAME STREAM ONLY. On the name stream it is
+		// load-bearing: nearly every provider repeats the function name on
+		// every argument fragment, and without this the name is counted once
+		// per fragment. On the ARGUMENTS stream it is both wrong and
+		// redundant. Wrong because the trigger is the MODEL'S OWN TOKEN
+		// STREAM rather than provider framing, so an ordinary incremental
+		// call whose arguments repeat a token, `{"path":"` `a/` `b/` `b/` `c`
+		// `"}`, latches on the duplicated `b/`, and the latch being sticky
+		// then discards everything before it and settles the whole call at
+		// `"}`. That is issue #928's original defect, a tool call priced at
+		// nearly nothing, reintroduced through the fix for it (third review on
+		// PR #1762). Redundant because every cumulative framing already
+		// reaches one of the two arms below: a repeated raw prefix latches on
+		// the next fragment that extends it, and a repeated complete object
+		// latches on both parsing.
+		case f.repeatIsCumulative && fragment == f.last:
 			f.cumulative = true
 		case len(fragment) > len(f.last) && strings.HasPrefix(fragment, f.last):
 			f.cumulative = true
@@ -376,7 +394,7 @@ func (a *UsageAccumulator) foldToolCall(index int, name, arguments string) {
 	}
 	call, ok := a.toolCalls[index]
 	if !ok {
-		call = &toolCallOutput{}
+		call = &toolCallOutput{name: fragmentStream{repeatIsCumulative: true}}
 		a.toolCalls[index] = call
 	}
 	call.name.add(name)
