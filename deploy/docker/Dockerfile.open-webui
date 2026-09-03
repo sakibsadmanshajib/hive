@@ -582,6 +582,17 @@ RUN python3 /tmp/apply_credits_patch.py \
     && grep -q 'hive_credits_router' /app/backend/open_webui/main.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_credits.py').read_text())"
 
+# #1363: the signed-in person's own custom instructions. The storage and the
+# chat injection both live in edge-api, so this is a two-verb hop that carries
+# the user's own token upstream on X-Hive-Upstream-Auth, the same mechanism the
+# agent proxy above uses. Nothing is stored in Open WebUI's database: the text
+# a person reads in settings is the text edge-api prepends to their turns.
+COPY deploy/docker/owui-patches/hive_instructions.py /app/backend/open_webui/utils/hive_instructions.py
+COPY deploy/docker/owui-patches/apply_instructions_patch.py /tmp/apply_instructions_patch.py
+RUN python3 /tmp/apply_instructions_patch.py \
+    && grep -q 'hive_instructions_router' /app/backend/open_webui/main.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/hive_instructions.py').read_text())"
+
 # issue #1056: ownership enforcement on the Knowledge by-id read routes. The
 # listing routes honour BYPASS_ADMIN_ACCESS_CONTROL (PR #960), but GET /{id},
 # GET /{id}/files (which takes include_content), GET /{id}/files/pending and
