@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Self-check for the skill group-grant filter patch (issue #1396, skills half).
+"""Self-check for the group-grant filter patch (issue #1396, the two routers
+whose payload reaches a model prompt).
 
-A skill's body is appended verbatim to the chat request as a system message,
-so a skill is an instruction that lands in somebody's prompt. Open WebUI's
-shared grant filter never inspects group grants, so a hand-built create or
-access-update carrying another tenant's group id is stored unquestioned on
-this shared instance.
+A skill's body is appended verbatim to the chat request as a system message and
+a knowledge collection's passages arrive as retrieved context, so both are text
+that lands in somebody's prompt. Open WebUI's shared grant filter never
+inspects group grants, so a hand-built create or access-update carrying another
+tenant's group id is stored unquestioned on this shared instance.
+
+Knowledge joined the patch in #1505, which is the change that first lets a
+non-admin own a collection and therefore the change that first makes granting
+one reachable.
 
 This runs the real build-time patch script against a copy of the vendored
 router, then exercises the inserted helper's logic directly against fake
@@ -29,7 +34,12 @@ VENDORED_ROUTERS = REPO_ROOT / "vendor/open-webui/backend/open_webui/routers"
 PATCH = REPO_ROOT / "deploy/docker/owui-patches/apply_skill_group_grants_patch.py"
 
 MARKER = "# hive (#1396)"
-CALL_SITES = 3
+# Router -> the number of filter_allowed_access_grants call sites in it, which
+# is also the marker count minus the one on the inserted helper. Mirrors
+# TARGETS in the patch script; asserted against the vendored source below, so a
+# vendor bump that adds or removes a site fails here rather than half-applying.
+CALL_SITES = {"skills.py": 3, "knowledge.py": 6}
+PUBLIC_KEYS = {"skills.py": "sharing.public_skills", "knowledge.py": "sharing.public_knowledge"}
 
 
 class FakeGroup:
@@ -54,12 +64,14 @@ class FakeUser:
         self.role = role
 
 
-def patched_router_source(tmp: Path) -> str:
-    shutil.copy(VENDORED_ROUTERS / "skills.py", tmp / "skills.py")
+def patched_router_sources(tmp: Path) -> dict:
+    """Run the real build-time script once, over copies of every target."""
+    for name in CALL_SITES:
+        shutil.copy(VENDORED_ROUTERS / name, tmp / name)
     env = dict(os.environ)
     env["HIVE_OWUI_ROUTERS_DIR"] = str(tmp)
     subprocess.run([sys.executable, str(PATCH)], check=True, env=env, capture_output=True)
-    return (tmp / "skills.py").read_text()
+    return {name: (tmp / name).read_text() for name in CALL_SITES}
 
 
 def load_helper(source: str):
@@ -100,46 +112,98 @@ def main() -> None:
         if not condition:
             failures.append(name)
 
-    vendored = (VENDORED_ROUTERS / "skills.py").read_text()
-
-    # Negative controls. If either of these stops holding, the vendored source
-    # moved and every assertion below is measuring the wrong file.
-    check(
-        "vendored skills.py still carries the unfiltered grant assignment (negative control)",
-        vendored.count("'sharing.public_skills',\n    )\n") == CALL_SITES,
-    )
-    check(
-        "vendored skills.py is unpatched before the build runs (negative control)",
-        MARKER not in vendored,
-    )
+    # Negative controls, per router. If any of these stops holding, the
+    # vendored source moved and every assertion below is measuring the wrong
+    # file.
+    for name, sites in CALL_SITES.items():
+        vendored = (VENDORED_ROUTERS / name).read_text()
+        check(
+            f"vendored {name} still carries {sites} unfiltered grant assignments (negative control)",
+            vendored.count(f"'{PUBLIC_KEYS[name]}',\n    )\n") == sites,
+        )
+        check(
+            f"vendored {name} is unpatched before the build runs (negative control)",
+            MARKER not in vendored,
+        )
 
     tmp = Path(tempfile.mkdtemp())
-    try:
-        patched = patched_router_source(tmp)
-    finally:
-        pass
+    patched_by_router = patched_router_sources(tmp)
 
-    check(
-        f"the patch marks the helper plus all {CALL_SITES} write sites",
-        patched.count(MARKER) == CALL_SITES + 1,
-    )
-    check(
-        "the patched router is still valid Python",
-        _parses(patched),
-    )
-    check(
-        "every filter_allowed_access_grants call is followed by the group filter",
-        patched.count("_hive_filter_group_grants(") == CALL_SITES + 1,
-    )
+    for name, sites in CALL_SITES.items():
+        patched = patched_by_router[name]
+        check(
+            f"the patch marks the helper plus all {sites} write sites in {name}",
+            patched.count(MARKER) == sites + 1,
+        )
+        check(
+            f"the patched {name} is still valid Python",
+            _parses(patched),
+        )
+        check(
+            f"every filter_allowed_access_grants call in {name} is followed by the group filter",
+            patched.count("_hive_filter_group_grants(") == sites + 1,
+        )
 
-    helper = load_helper(patched)
+    # EVERY NAME THE INSERTED CALL USES MUST EXIST WHERE IT IS INSERTED.
+    #
+    # This is not a hypothetical. The first version of the knowledge half
+    # passed `db` to the helper, copied from the skills call sites where the
+    # route declares that dependency. knowledge.py's create deliberately does
+    # not (it says so in a comment: it must not hold a connection across an
+    # embedding call), so the inserted line raised NameError and answered 500
+    # to the very request this whole change exists to make work. Nothing
+    # caught it: the patch applied cleanly, the module parsed, the marker
+    # counts matched and every assertion here passed. Only a live capture did.
+    #
+    # An anchor-based patch cannot know which locals a route has, so the check
+    # is structural: for every function containing an inserted call, every bare
+    # name that call passes has to be a parameter of that function or something
+    # assigned in it before the call.
+    for name, source in patched_by_router.items():
+        for fn in ast.walk(ast.parse(source)):
+            if not isinstance(fn, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                continue
+            calls = [
+                node
+                for node in ast.walk(fn)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "_hive_filter_group_grants"
+            ]
+            if not calls:
+                continue
+            params = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+            assigned = [
+                (node.lineno, node.id)
+                for node in ast.walk(fn)
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+            ]
+            for call in calls:
+                # Ordering, not just binding. A name first assigned BELOW the
+                # inserted call raises UnboundLocalError, which is the same 500
+                # in a different disguise, so only assignments above it count.
+                bound = params | {n for lineno, n in assigned if lineno < call.lineno}
+                passed = [a.id for a in call.args if isinstance(a, ast.Name)]
+                passed += [
+                    kw.value.id for kw in call.keywords if isinstance(kw.value, ast.Name)
+                ]
+                unbound = [n for n in passed if n not in bound]
+                check(
+                    f"{name}: the call in {fn.name} passes only names that exist there "
+                    f"(unbound: {unbound})",
+                    not unbound,
+                )
+
+    # The helper is byte-identical in every target, so its behaviour is
+    # exercised once, from the router that has the most call sites.
+    helper = load_helper(patched_by_router["knowledge.py"])
     groups = FakeGroups({"member": ["tenant-a"], "attacker": ["tenant-b"]})
 
     foreign = [{"principal_type": "group", "principal_id": "tenant-a", "permission": "read"}]
     own = [{"principal_type": "group", "principal_id": "tenant-b", "permission": "read"}]
 
     check(
-        "a member cannot grant a skill to a group they are not in",
+        "a member cannot grant a resource to a group they are not in",
         run(helper, groups, FakeUser("attacker"), list(foreign)) == [],
     )
     check(
@@ -186,7 +250,11 @@ def main() -> None:
         print(f"FAIL: {failure}")
     if failures:
         sys.exit(1)
-    print("ok: owui skill group-grant filter (issue #1396)")
+    print(
+        "ok: owui group-grant filter over "
+        + ", ".join(sorted(CALL_SITES))
+        + " (issues #1396, #1505)"
+    )
 
 
 def _parses(source: str) -> bool:

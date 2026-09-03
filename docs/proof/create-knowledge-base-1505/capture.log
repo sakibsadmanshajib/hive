@@ -1,0 +1,88 @@
+An ordinary user creates a knowledge base, adds a document, and gets a grounded answer
+Date: 2026-09-03
+Branch: feat/1505-create-knowledge-base
+Issue: 1505
+Pull request: 1769
+Workflow run: 33716778836 (chat visual proof, scenario=projects)
+
+WHAT THIS IS
+
+The browser capture the visual-proof rule asks for, produced in CI by
+.github/workflows/chat-visual-proof.yml against a stack booted from
+refs/pull/1769/merge on a hosted runner, with that run's own Supabase, its own
+registered OAuth client and a real streamed completion. The session is minted
+through the real "Continue with Hive" journey, not stubbed.
+
+The account is an ordinary one, and this run is the first that can say so
+honestly. See the section at the bottom: three earlier green captures were taken
+as an instance admin, which proved the surface works and proved nothing about
+the permission this issue grants. The capture now reads the session's own role
+and refuses anything but `user`, so the claim is measured rather than argued.
+
+WHAT IT SHOWS, IN ORDER
+
+  01-signed-in          the signed-in chat surface, session live, role `user`
+  01b-project-created   POST /api/v1/knowledge/create answered 200, and the
+                        browser is on the new project's page
+  01c-document-added    the uploaded document listed on that project
+  02-model-picker       the alias the turn will run on, hive-free
+  03-streamed-reply     the answer, 47
+  04-sources-expanded   the source list, naming kb-1505-field-note.txt
+
+The document's fact is invented, so a correct answer cannot be recall. The
+source list is required outright on top of it: an answer with no rendered
+source would prove the document was read somewhere, not that the surface told
+the customer where from.
+
+The images are on the visual-proof-assets release and are linked from the pull
+request, per .wolf/decisions.md D-042. This file is the text half, committed
+here because npm run lint:proof-tokens scans docs/proof/ and nothing else.
+
+THE CAPTURE LOG, VERBATIM
+
+2026-09-03T05:06:12.800Z  commit under proof: 4bda9bb+local-edits
+2026-09-03T05:06:12.800Z  chat origin: http://localhost:3003
+2026-09-03T05:06:12.800Z  session: storage state minted by owui.setup.ts through the real Continue with Hive journey
+2026-09-03T05:06:12.918Z  landed on http://localhost:3003/
+2026-09-03T05:06:14.308Z  composer is present, so the session is live
+2026-09-03T05:06:14.390Z  signed-in account role, read from the session: user
+2026-09-03T05:06:15.819Z  POST /api/v1/knowledge/create answered 200
+2026-09-03T05:06:15.830Z  project created: KB-1505 proof 2026-09-03T05-06-14-371Z (46739f09-c322-48e4-be89-57a18eef8a31)
+2026-09-03T05:06:18.701Z  document added to the project: kb-1505-field-note.txt
+2026-09-03T05:06:18.867Z  new chat bound to the project: http://localhost:3003/?project=46739f09-c322-48e4-be89-57a18eef8a31
+2026-09-03T05:06:18.887Z  model in the composer: Hive Free
+2026-09-03T05:06:19.171Z  the Integrations menu carries no web search control on this surface
+2026-09-03T05:06:19.261Z  chat completion request left the browser: model=hive-free features={"voice":false,"image_generation":false,"code_interpreter":false,"web_search":false}
+2026-09-03T05:06:21.078Z  assistant turn settled: Retrieved 1 source 47 kb-1505-field-note.txt 1 Source
+2026-09-03T05:06:21.150Z  source list on the assistant turn: Toggle 1 source
+2026-09-03T05:06:21.203Z  sources: kb-1505-field-note.txt | 1 kb-1505-field-note.txt
+2026-09-03T05:06:21.265Z  captured 6 screenshot(s)
+
+The model-picker line is the only one elided, and only for length: it lists the
+eight aliases this tenant can see. It is in the run's own log on the pull
+request.
+
+TWO RED RUNS CAME FIRST, AND BOTH ARE THE POINT
+
+Run 33711437643 failed with "creating a knowledge base answered 500". The
+security hardening had added a group-grant filter call to knowledge.py that
+passed `db`, a local the create route deliberately does not have. The patch
+applied cleanly, the module parsed, the marker counts matched and every unit
+assertion passed. Only this capture went red.
+scripts/test_owui_skill_group_grants.py now carries a structural guard that
+refuses any inserted call naming a name the enclosing function has not bound
+above it.
+
+Run 33715826859 failed with "the capturing account's role is admin, not user".
+That assertion had just been added at a reviewer's request, and it went red on
+its first run. owui.setup.ts promotes the fixture to Open WebUI instance admin
+so it can install the JWT-forward Function, the capture reuses that same
+session, and the promotion is undone only by the account's next login, which
+never happens inside a run. So the three green captures before it, 33710378904,
+33712312976 and their predecessor, were all admin captures: they show the
+surface working and say nothing about the permission, because an admin passes
+the gate this issue is about. The promotion script now takes the role to write,
+and the projects scenario hands the role back before capturing.
+
+Both defects were found by an assertion added in review, not by the code it
+guards, and neither was visible to any static check.

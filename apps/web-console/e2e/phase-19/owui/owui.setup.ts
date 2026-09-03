@@ -319,5 +319,25 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
   // matches OWUI_E2E_PASSWORD, and any native (non-OAuth) sign-in with it
   // 400s at POST /api/v1/auths/signin.
   await syncOwuiLocalPassword(page, owuiOrigin, password);
+  // #1505: hand the role back when the caller needs an ORDINARY account.
+  //
+  // The promotion above exists for the Function install and nothing else, but
+  // it outlives it: the proof capture reuses this very session, so it was an
+  // instance admin at capture time. That is fatal to a capture whose whole
+  // claim is "an ordinary customer can do this", because an admin passes the
+  // permission gate the claim is about. Opt-in, because every other consumer of
+  // this storage state wants the admin session it has always had.
+  if (process.env.PROOF_ORDINARY_ACCOUNT === "1") {
+    execFileSync(HIVE_INSTANCE_ADMIN_PROMOTER, [], {
+      env: {
+        ...process.env,
+        OWUI_PROMOTE_EMAIL: email,
+        OWUI_PROMOTE_ROLE: "user",
+        HIVE_COMPOSE_FLAGS,
+      },
+      stdio: "inherit",
+      timeout: 60_000,
+    });
+  }
   await page.context().storageState({ path: STATE });
 });

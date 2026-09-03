@@ -139,10 +139,15 @@ REWRITES = (
         # /workspace itself is an index that redirects to the first surface the
         # session may see, and its admin branch redirects to /workspace/models.
         # With Models gone that lands an admin on a page reachable from nowhere,
-        # so the index becomes an unconditional redirect to Knowledge, the one
-        # workspace surface Hive keeps. A session without knowledge permission
-        # is then bounced to / by +layout.svelte's own onMount guard, which is
-        # unchanged.
+        # so the index becomes an unconditional redirect rather than a chain.
+        #
+        # The destination named here is the pinned bundle's, and this rewrite
+        # is inert: the frontend stage discards the bundle it edits, so the
+        # entry only guards against digest drift. The source route that
+        # actually ships now redirects to /projects instead (#1505), because
+        # granting the knowledge permission would otherwise have made
+        # /workspace/knowledge a live second Knowledge destination beside
+        # Projects.
         surface="workspace-index-redirect",
         upstream="src/routes/(app)/workspace/+page.svelte, the whole onMount redirect chain",
         find=(

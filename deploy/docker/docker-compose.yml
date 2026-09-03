@@ -1377,6 +1377,50 @@ services:
       # box. Sharing is deliberately not granted alongside it: a skill stays
       # private to the account that wrote it.
       USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS: "true"
+      # The right to author a knowledge collection, which is what a Project is
+      # on this backend (issue #1505). Upstream defaults it false and it gates
+      # exactly one route, POST /api/v1/knowledge/create; every other knowledge
+      # route is scoped by ownership or an access grant. So an ordinary
+      # customer could open a project and never create one, and the Projects
+      # page went on rendering a New project button that answered 401. Invisible
+      # until supabase/migrations/20260823_03_owui_role_never_admin.sql, for the
+      # same reason the skills permission above was.
+      #
+      # Reaches an already-booted deployment through the same seam as the line
+      # above: `user.permissions` is one persisted row holding the whole tree,
+      # and owui-patches/hive_rag_env_config.py merges both leaves into it on
+      # every start. Sharing is deliberately not granted alongside it.
+      USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: "true"
+      # And the refusal that has to travel with it. Owning a resource is what
+      # makes sharing one reachable, so the grant above is the moment this has
+      # to be decided. Upstream defaults it true, and the one shared filter
+      # every router's grant list passes through
+      # (utils/access_control.filter_allowed_access_grants) then admits an
+      # individual-user grant from any non-admin owner. Nothing but a frontend
+      # control refused it, which is not an authorization check, and
+      # GET /api/v1/users/search answers to any verified user on this shared
+      # instance, so the id such a grant names is not a secret. False here
+      # makes a resource private to the account that authored it, on knowledge,
+      # skills, models, prompts, tools, notes and folders alike. An admin is
+      # unaffected: the filter returns early for that role.
+      #
+      # It also reaches chat sharing, which is demo visible and deliberate:
+      # ShareChatModal.svelte and FolderShareModal.svelte both read this leaf,
+      # so a non-admin can no longer share a conversation or a chat folder with
+      # a named person. Sharing to a link is untouched.
+      #
+      # A default, not an invariant, and worth knowing which. has_permission
+      # walks the caller's groups first and returns on the first group whose own
+      # permissions tree sets the leaf, reaching this stored default only after.
+      # It holds today because the control plane creates tenant groups with a
+      # name and nothing else, so group.permissions is null. It stops holding
+      # the moment a platform admin opens such a group in the stock Groups panel
+      # and saves it, because that panel seeds from lib/constants/permissions.ts
+      # where allow_users is true: one save on an unrelated setting would
+      # restore individual-user sharing for that whole tenant. Acceptable for
+      # the demo, where the only admin is us and the panel is not part of it. A
+      # structural guard on the group path is issue #1396's territory.
+      USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS: "false"
       # Model visibility belongs to the gateway, not to Open WebUI. edge-api
       # already filters /v1/models per tenant (AliasVisibleToTenant, PR #205),
       # so a second independent filter here adds nothing and actively hides

@@ -46,6 +46,17 @@ from pathlib import Path
 
 TARGET_ROLE = "admin"
 
+# The role to write, overridable so the promotion can be UNDONE (issue #1505).
+# The chat visual proof's projects scenario has to photograph an ORDINARY
+# account creating a knowledge base, and this script's own promotion is what
+# stood in its way: the fixture is promoted after login so the setup can install
+# the JWT-forward Function, and the capture then reuses that same session, so it
+# was an instance admin at capture time. The claim "an ordinary customer can do
+# this" is the whole point of that capture, and an admin's create call answers
+# 200 too, so the capture proved nothing about the permission this issue grants.
+# Setting OWUI_PROMOTE_ROLE=user after the install puts the account back.
+VALID_ROLES = ("admin", "user", "pending")
+
 
 def server_environment() -> dict[str, str]:
     """The environment of the Open WebUI server process.
@@ -91,8 +102,8 @@ def sqlite_path(environment: dict[str, str]) -> Path:
     return Path(database_url[len("sqlite:///") :])
 
 
-def promote(database: Path, email: str) -> str:
-    """Set one account's role to admin. Returns the role it held before.
+def promote(database: Path, email: str, role: str = TARGET_ROLE) -> str:
+    """Set one account's role. Returns the role it held before.
 
     Matched case-insensitively because Open WebUI lower-cases an address on
     provisioning while a caller may pass whatever the fixture printed.
@@ -112,9 +123,7 @@ def promote(database: Path, email: str) -> str:
                 "can authenticate."
             )
         user_id, previous = row
-        connection.execute(
-            'UPDATE "user" SET role = ? WHERE id = ?', (TARGET_ROLE, user_id)
-        )
+        connection.execute('UPDATE "user" SET role = ? WHERE id = ?', (role, user_id))
         connection.commit()
     finally:
         connection.close()
@@ -147,6 +156,20 @@ def self_check() -> int:
         # A second run is a no-op rather than an error: the nightly re-runs.
         assert promote(database, "fixture@example.invalid") == "admin"
 
+        # Both directions, because the undo is what #1505's capture depends on
+        # and a one-way script is what made an admin capture look ordinary.
+        assert promote(database, "fixture@example.invalid", "user") == "admin"
+        readback = sqlite3.connect(database)
+        try:
+            assert (
+                readback.execute(
+                    'SELECT role FROM "user" WHERE id = ?', ("u1",)
+                ).fetchone()[0]
+                == "user"
+            )
+        finally:
+            readback.close()
+
         try:
             promote(database, "nobody@example.invalid")
         except SystemExit as error:
@@ -162,7 +185,7 @@ def self_check() -> int:
         else:
             raise AssertionError("a missing database must fail loudly")
 
-    print("owui-promote-instance-admin self-check: OK (5 cases)")
+    print("owui-promote-instance-admin self-check: OK (7 cases)")
     return 0
 
 
@@ -174,9 +197,13 @@ def main() -> int:
     if not email:
         raise SystemExit("OWUI_PROMOTE_EMAIL is empty; nothing to promote")
 
+    role = os.environ.get("OWUI_PROMOTE_ROLE", "").strip() or TARGET_ROLE
+    if role not in VALID_ROLES:
+        raise SystemExit(f"OWUI_PROMOTE_ROLE={role!r} is not one of {VALID_ROLES}")
+
     environment = server_environment()
-    previous = promote(sqlite_path(environment), email)
-    print(f"{email}: role {previous} -> {TARGET_ROLE} (this instance only)")
+    previous = promote(sqlite_path(environment), email, role)
+    print(f"{email}: role {previous} -> {role} (this instance only)")
     return 0
 
 

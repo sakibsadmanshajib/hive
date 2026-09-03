@@ -78,8 +78,11 @@ on:
           #1718 instead: a question needing live data, sent with the globe
           untouched, answered with the model's own web_search or web_fetch call
           and a rendered source list, plus a control turn on an alias the
-          catalog reports as not tool capable. instructions photographs the
-          claim in issue #1363: a standing instruction written in Settings,
+          catalog reports as not tool capable. projects photographs the claim
+          in issue #1505: an ordinary signed-in user creates a knowledge base,
+          adds a document to it, and asks a question only that document can
+          answer, with the source shown on the turn. instructions photographs
+          the claim in issue #1363: a standing instruction written in Settings,
           read back from the backend after a full page reload, and an answer to
           an unrelated question that obeys it.
         required: false
@@ -88,6 +91,7 @@ on:
         options:
           - chat
           - webtools
+          - projects
           - instructions
   pull_request:
     branches: [main]
@@ -679,6 +683,39 @@ jobs:
             echo "::error::the run tenant has a zero credit balance, so the capture would show the out-of-credits state"
             exit 1
           fi
+
+      - name: Aim the capture at the knowledge work claim
+        # Only for the `projects` scenario. Every variable here defaults off in
+        # the capture script, so a `chat` or `webtools` run reaches it with the
+        # values it had before this step existed.
+        #
+        # The question is answerable only from the document the capture uploads
+        # a moment earlier, and the fact in that document is invented, so a
+        # model cannot answer it from memory. That is what makes a correct
+        # answer evidence of retrieval rather than of recall, and it is why the
+        # source list is required outright on top of it: an answer with no
+        # rendered source proves the document was read somewhere, not that the
+        # surface told the customer where from.
+        if: github.event.inputs.scenario == 'projects'
+        run: |
+          set -euo pipefail
+          {
+            echo "PROOF_SCENARIO=projects"
+            echo "PROOF_CAPTURE_PROJECT=1"
+            # Hand the fixture's Open WebUI role back before the capture. The
+            # setup promotes it to instance admin so it can install the
+            # JWT-forward Function, and the capture reuses that same session, so
+            # without this the images show an ADMIN creating a knowledge base.
+            # An admin passes the permission gate this whole issue is about, so
+            # that capture would prove nothing. The capture asserts the role and
+            # goes red rather than publishing the wrong claim.
+            echo "PROOF_ORDINARY_ACCOUNT=1"
+            echo "PROOF_PROMPT=According to the document in this project, how many milligrams per litre of dissolved silica did borehole KB-1505 measure? Answer with the number only."
+            # Word bounded, not a bare substring: a bare 47 would also match a
+            # turn that answered 147 or 470, and publish that as proof.
+            echo "PROOF_REPLY_PATTERN=\\b47\\b"
+            echo "PROOF_REQUIRE_SOURCES=1"
+          } >> "$GITHUB_ENV"
 
       - name: Aim the capture at the custom instructions claim
         # Only for the `instructions` scenario. Everything here is environment
@@ -1282,6 +1319,20 @@ jobs:
             exit 1
           fi
           caption="Signed-in Hive chat, captured in CI against a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase, its own registered OAuth client and a real streamed completion. Run ${GITHUB_RUN_ID}."
+          if [ "${SCENARIO:-chat}" = "projects" ]; then
+            # Read from the capture's own log rather than from the input that
+            # asked for it. The caption is chosen here and the journey is
+            # switched on by an environment variable a separate step exports,
+            # so nothing but this check ties the two: a skipped aim step would
+            # otherwise publish a knowledge-base claim over a plain chat
+            # capture, which is a caption asserting something the images do not
+            # show.
+            if ! grep -q "project created:" "$CAPTURE_DIR/proof-log.txt"; then
+              echo "::error::the projects scenario was requested but the capture log records no project creation, so the images do not show the journey this caption would claim"
+              exit 1
+            fi
+            caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. An ordinary account, with no admin role and no hand-granted permission, creates a knowledge base on the Projects page, adds a document to it, and asks a question whose answer appears only in that document; the turn answers it and renders the document as its source. Run ${GITHUB_RUN_ID}."
+          fi
           if [ "${SCENARIO:-chat}" = "instructions" ]; then
             caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. A standing custom instruction is written in Settings and saved, the page is fully reloaded and the text is read back from the Hive backend rather than from the browser, and an unrelated question is then answered in a way that obeys it. Run ${GITHUB_RUN_ID}."
           fi

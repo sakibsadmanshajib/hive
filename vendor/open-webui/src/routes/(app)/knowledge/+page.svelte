@@ -1,9 +1,28 @@
-<script>
-	// #1109: the Knowledge nav row pointed at /workspace/knowledge, which sits
-	// behind the workspace layout's permission guard and bounced a non-admin
-	// without the workspace.knowledge permission straight back home. This route
-	// lives outside that guard; see hive/KnowledgeIndex.svelte for the surface.
-	import KnowledgeIndex from '$lib/hive/KnowledgeIndex.svelte';
-</script>
+<script lang="ts">
+	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
 
-<KnowledgeIndex />
+	/*
+	 * Hive (#1505): this used to render KnowledgeIndex.svelte, a list of the
+	 * collections shared with you and nothing else. It had no create control and
+	 * no file input, so the one thing a customer needed to do here was the one
+	 * thing it could not do, and its own empty state said so: "No knowledge
+	 * bases are shared with you yet."
+	 *
+	 * Projects is the surface that can do it. A Project IS a knowledge
+	 * collection on this backend (lib/hive/projects/projects.ts), so this is not
+	 * two stores with a link between them: the rows behind the two destinations
+	 * were always the same rows, and Projects is the one that can create, upload
+	 * and delete. D-045 eliminates Knowledge rather than renaming it, and issue
+	 * #1595 settles that the whole destination goes.
+	 *
+	 * A redirect rather than a deleted route, so the bookmarks and the shell's
+	 * own older links land somewhere real instead of on a 404. replaceState
+	 * because of those bookmarks: without it, arriving here and pressing Back
+	 * returns to this route and is pushed forward again, which makes the Back
+	 * button useless for exactly the visitor this redirect exists for.
+	 */
+	onMount(() => {
+		goto('/projects', { replaceState: true });
+	});
+</script>

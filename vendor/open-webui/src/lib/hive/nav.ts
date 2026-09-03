@@ -72,9 +72,11 @@ export const HIVE_NAV: readonly HiveNavItem[] = [
 	 * upload and delete. D-045 ruling 2 eliminates Knowledge rather than
 	 * renaming it.
 	 *
-	 * The '/knowledge' ROUTE survives, unlinked, exactly as '/agents' does
-	 * above: removing a row is not deleting a page, and what should become of
-	 * that page is issue #1505, not this change.
+	 * The '/knowledge' ROUTE survives and now redirects to '/projects'
+	 * (#1505). What it used to render could list the collections shared with
+	 * you and author nothing, so the answer to that issue was not to add a
+	 * create control to a destination D-045 eliminates: it was to send the
+	 * visitor to the one that already has one.
 	 */
 	{
 		/*

@@ -164,9 +164,19 @@
   # the admin block above.
   #
   # Scoped to the page routes only. Open WebUI's own APIs live under /api, so
-  # this never touches /api/v1/notes and friends, and /workspace and
-  # /workspace/knowledge stay reachable because Knowledge is the one workspace
-  # surface Hive keeps.
+  # this never touches /api/v1/notes and friends, nor /api/v1/knowledge, which
+  # is what the Projects surface is built on and must keep working.
+  #
+  # /workspace/knowledge joined the list in #1505. It used to be described here
+  # as the one workspace surface Hive keeps, and it was reachable-in-principle
+  # and dead-in-practice: the layout's own guard bounced every session without
+  # the workspace.knowledge permission, and no ordinary account held it.
+  # Granting that permission, which is what let a customer create a knowledge
+  # base at all, would otherwise have revived the stock create, upload, delete
+  # and sharing surface as a second Knowledge destination beside Projects, over
+  # the same rows and able to delete a project. D-045 eliminates that
+  # destination. /workspace itself stays reachable because it is now a redirect
+  # to /projects rather than a door into the page blocked here.
   #
   # `agent-workspace` is here for a different reason than the rest of the list,
   # and it is the whole of issue #540. That prefix used to reverse_proxy a
@@ -196,7 +206,7 @@
   # The deletion, and everything wired to it, is issue #1464.
   # Structural guard: scripts/test_caddy_one_front_door.py.
   @removedSurfaces {
-    path_regexp removed (?i)^/+(?:agent-workspace|playground|notes|calendar|automations|workspace/+(?:models|prompts|skills|tools))/?(?:/.*)?$
+    path_regexp removed (?i)^/+(?:agent-workspace|playground|notes|calendar|automations|workspace/+(?:knowledge|models|prompts|skills|tools))/?(?:/.*)?$
   }
   respond @removedSurfaces 404
 
