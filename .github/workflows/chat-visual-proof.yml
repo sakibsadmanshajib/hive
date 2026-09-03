@@ -78,13 +78,17 @@ on:
           #1718 instead: a question needing live data, sent with the globe
           untouched, answered with the model's own web_search or web_fetch call
           and a rendered source list, plus a control turn on an alias the
-          catalog reports as not tool capable.
+          catalog reports as not tool capable. voice photographs issue #1627:
+          the call overlay speaking into a synthetic microphone, asserting that
+          utterances spoken while a turn is in flight open no second
+          transcription.
         required: false
         default: chat
         type: choice
         options:
           - chat
           - webtools
+          - voice
   pull_request:
     branches: [main]
     # Deliberately the Hive-owned chat paths and not vendor/open-webui as a
@@ -675,6 +679,29 @@ jobs:
             echo "::error::the run tenant has a zero credit balance, so the capture would show the out-of-credits state"
             exit 1
           fi
+
+      - name: Aim the capture at the voice claim
+        # Only for the `voice` scenario (issue #1627). The capture builds its
+        # own microphone track from espeak-ng and hands it to Chrome's fake
+        # capture device, so this step only has to provide the synthesiser and
+        # name the scenario.
+        #
+        # espeak-ng rather than a committed WAV: the pauses in that track are
+        # the entire experiment, and a binary blob cannot be reviewed. Generated
+        # from a phrase list, the timing sits in the source in seconds where it
+        # can be checked against the two second silence threshold the fix uses.
+        # See apps/web-console/e2e/phase-19/owui/fixtures/build-voice-fixture.mjs.
+        #
+        # No prompt is set here. The words spoken are in that file, and the
+        # assertion the run turns on is the number of transcription requests the
+        # page made, not what any of them said.
+        if: github.event.inputs.scenario == 'voice'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y espeak-ng
+          espeak-ng --version
+          echo "PROOF_SCENARIO=voice" >> "$GITHUB_ENV"
 
       - name: Aim the capture at the web tools claim
         # Only for the `webtools` scenario. Everything here is environment for
