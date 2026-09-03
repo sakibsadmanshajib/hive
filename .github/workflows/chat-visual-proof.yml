@@ -1265,6 +1265,17 @@ jobs:
           fi
           caption="Signed-in Hive chat, captured in CI against a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase, its own registered OAuth client and a real streamed completion. Run ${GITHUB_RUN_ID}."
           if [ "${SCENARIO:-chat}" = "projects" ]; then
+            # Read from the capture's own log rather than from the input that
+            # asked for it. The caption is chosen here and the journey is
+            # switched on by an environment variable a separate step exports,
+            # so nothing but this check ties the two: a skipped aim step would
+            # otherwise publish a knowledge-base claim over a plain chat
+            # capture, which is a caption asserting something the images do not
+            # show.
+            if ! grep -q "project created:" "$CAPTURE_DIR/proof-log.txt"; then
+              echo "::error::the projects scenario was requested but the capture log records no project creation, so the images do not show the journey this caption would claim"
+              exit 1
+            fi
             caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. An ordinary account, with no admin role and no hand-granted permission, creates a knowledge base on the Projects page, adds a document to it, and asks a question whose answer appears only in that document; the turn answers it and renders the document as its source. Run ${GITHUB_RUN_ID}."
           fi
           if [ "${SCENARIO:-chat}" = "webtools" ]; then
