@@ -44,6 +44,22 @@ const (
 	StatusCancelled Status = "cancelled"
 )
 
+// Terminal reports whether a task in this status has stopped for good.
+//
+// Two places have to agree on this and used to spell it out separately: the
+// poller, deciding whether a status is one it publishes and stops polling,
+// and the event stream, deciding whether to send its last frame and hang up.
+// A run held open because one of them read the set differently is a browser
+// connection that never closes.
+func (s Status) Terminal() bool {
+	switch s {
+	case StatusSucceeded, StatusFailed, StatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Task is one row of public.agent_tasks, plus one transient field that is
 // never a column.
 type Task struct {

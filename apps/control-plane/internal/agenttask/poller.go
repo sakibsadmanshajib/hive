@@ -383,7 +383,7 @@ func (p *Poller) pollTask(ctx context.Context, t Task) pollResult {
 	}
 	p.clearTaskFailure(t.ID) // a clean answer this pass, whatever it was
 
-	if status != StatusSucceeded && status != StatusFailed && status != StatusCancelled {
+	if !status.Terminal() {
 		return pollResult{}
 	}
 

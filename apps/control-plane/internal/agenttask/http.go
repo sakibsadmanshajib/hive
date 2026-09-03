@@ -27,6 +27,10 @@ import (
 //	POST /internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/cancel — cancel
 type Handler struct {
 	svc *Service
+
+	// streamTick is how often an open event stream re-reads its task; zero
+	// means defaultStreamTick. See stream.go.
+	streamTick time.Duration
 }
 
 // NewHandler constructs the agenttask HTTP handler.
@@ -108,6 +112,20 @@ func (h *Handler) serveInternal(w http.ResponseWriter, r *http.Request) {
 		case parts[3] == "files" && r.Method == http.MethodGet:
 			h.handleFiles(w, r, tenantID, userID, taskID)
 		case parts[3] == "cancel" || parts[3] == "events" || parts[3] == "files":
+			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
+		default:
+			writeJSON(w, http.StatusNotFound, errBody("not found"))
+		}
+	case 5:
+		taskID, err := uuid.Parse(parts[2])
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errBody("invalid task id"))
+			return
+		}
+		switch {
+		case parts[3] == "events" && parts[4] == "stream" && r.Method == http.MethodGet:
+			h.handleEventStream(w, r, tenantID, userID, taskID)
+		case parts[3] == "events" && parts[4] == "stream":
 			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
 		default:
 			writeJSON(w, http.StatusNotFound, errBody("not found"))
