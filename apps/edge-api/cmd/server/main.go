@@ -946,8 +946,16 @@ func registerMediaFileBatchRoutes(mux httpMux, imagesHandler, audioHandler, file
 // can register it in isolation and exercise assertMatrixCoverage against it.
 // See the call site in main() for why this route deliberately sits outside
 // every auth gate.
+// audioVoicesPath is the voice roster route. One constant, for the same reason
+// webToolsListPath below is one: it is named at registration and again in
+// authSelectorMiddleware, which exempts exactly this path and method from
+// authentication. Two string literals could drift apart, and the drift would
+// be silent in the safe-looking direction, leaving the route registered and
+// unreachable. That is precisely what issue #1377 reported.
+const audioVoicesPath = "/v1/audio/voices"
+
 func registerAudioVoicesRoute(mux httpMux) {
-	mux.Handle("/v1/audio/voices", audio.VoicesHandler())
+	mux.Handle(audioVoicesPath, audio.VoicesHandler())
 }
 
 // registerWebToolRoutes attaches the two web tool endpoints. Named rather
@@ -1471,22 +1479,32 @@ func authSelectorMiddleware(jwtMW func(http.Handler) http.Handler, next http.Han
 			next.ServeHTTP(w, r)
 			return
 		}
-		// GET /v1/tools is the one /v1/ route with no principal, and the
-		// selector is where that has to be honoured: everything under /v1/
-		// with no Authorization header falls through to the JWT handler,
-		// which answers 401 on a missing bearer before any mux entry runs.
-		// The handler's own doc comment already calls this route
-		// "deliberately unauthenticated" (webtools.Handler.handleList), and
-		// the chat shim reads it with no credential on purpose, so without
-		// this the shim would receive 401 on every read, advertise nothing,
-		// and put every turn back on the legacy path. That is a merged
-		// feature that never runs, which is the exact shape of issue #776.
+		// The two /v1/ reads that carry no principal, and the selector is
+		// where that has to be honoured: everything under /v1/ with no
+		// Authorization header falls through to the JWT handler, which
+		// answers 401 on a missing bearer before any mux entry runs. Both
+		// routes are registered with no authorizer on purpose, and for both
+		// that registration is inert without this exemption.
 		//
-		// Exact path and method only. POST /v1/tools/web_search and
-		// /v1/tools/web_fetch spend credits and keep their authentication;
-		// so does anything else, including a non-GET to this same path,
-		// which the handler answers 405 for itself.
-		if r.Method == http.MethodGet && r.URL.Path == webToolsListPath {
+		// GET /v1/tools is the descriptor list. Its handler's own doc comment
+		// calls it "deliberately unauthenticated" (webtools.Handler.handleList)
+		// and the chat shim reads it with no credential, so without this the
+		// shim received 401 on every read, advertised nothing, and put every
+		// turn back on the legacy path: a merged feature that never runs,
+		// which is the shape of issue #776.
+		//
+		// GET /v1/audio/voices is the voice roster (issue #1377). Open WebUI's
+		// voice dropdowns fetch it with no Authorization header at all, so a
+		// 401 there sends get_available_voices to its hardcoded alloy-style
+		// fallback, which is the exact shape issue #996 was closed to prevent.
+		// The names in that fallback are not the voices the provider offers.
+		//
+		// Exact paths and exact method only. Everything else keeps its
+		// authentication, including the three audio routes one segment away
+		// that spend credits, POST /v1/tools/web_search and /v1/tools/web_fetch
+		// which do the same, and any non-GET to either exempt path, which each
+		// handler answers 405 for itself.
+		if r.Method == http.MethodGet && (r.URL.Path == webToolsListPath || r.URL.Path == audioVoicesPath) {
 			next.ServeHTTP(w, r)
 			return
 		}
