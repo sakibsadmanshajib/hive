@@ -204,7 +204,13 @@ func injectAfterLeadingSystem(raw []byte, block string) ([]byte, error) {
 	}
 	// Built into a fresh slice rather than spliced in place: append onto a
 	// subslice of messages would overwrite the element it is about to copy.
-	out := make([]json.RawMessage, 0, len(messages)+1)
+	//
+	// No capacity hint. `len(messages)+1` is what CodeQL's
+	// go/allocation-size-overflow flags, and while a slice long enough to
+	// overflow that cannot come out of a 10 MiB body, arguing with the
+	// analyser costs more than letting append size the slice itself. The
+	// growth is amortised and this runs once per turn.
+	var out []json.RawMessage
 	out = append(out, messages[:at]...)
 	out = append(out, system)
 	out = append(out, messages[at:]...)
