@@ -10,6 +10,23 @@
 
 	import AdvancedParams from './Advanced/AdvancedParams.svelte';
 	import Textarea from '$lib/components/common/Textarea.svelte';
+	/*
+	 * Issue #1363. Custom instructions are Hive state, not Open WebUI state.
+	 * Upstream's "System Prompt" field, which this replaces, wrote
+	 * `$settings.system` into Open WebUI's own database and was delivered by
+	 * the browser attaching a system message to each outgoing request. Both
+	 * halves were wrong for this product: the value is invisible to every
+	 * client that is not this browser, it does not survive a volume reset, and
+	 * `.wolf/decisions.md` D-044 puts the source of truth in the backend Hive
+	 * owns. The Hive control below reads and writes edge-api, which is also
+	 * what injects the text into every chat turn, so what a person sees here
+	 * is what shapes their replies.
+	 */
+	import {
+		MAX_INSTRUCTIONS_LENGTH,
+		getCustomInstructions,
+		saveCustomInstructions
+	} from '$lib/hive/customInstructions';
 	export let saveSettings: Function;
 	export let getModels: Function;
 
@@ -36,7 +53,13 @@
 	let languages: Awaited<ReturnType<typeof getLanguages>> = [];
 	let lang = $i18n.language;
 	let notificationEnabled = false;
-	let system = '';
+
+	// Custom instructions (#1363). `instructionsLoaded` gates the save: writing
+	// before the read has landed would post an empty box over text the person
+	// already had, which is silent data loss disguised as a save.
+	let customInstructions = '';
+	let instructionsLoaded = false;
+	let savingInstructions = false;
 
 	let showAdvanced = false;
 
@@ -91,8 +114,23 @@
 	};
 
 	const saveHandler = async () => {
+		// Instructions go to Hive's own backend first, and a failure there stops
+		// the save rather than being swallowed: a pane that closes on a failed
+		// write tells the person their instructions were stored when they were
+		// not, and they will not find out until an answer ignores them.
+		if (instructionsLoaded) {
+			savingInstructions = true;
+			try {
+				customInstructions = await saveCustomInstructions(customInstructions);
+			} catch (error) {
+				toast.error(error instanceof Error ? error.message : String(error));
+				savingInstructions = false;
+				return;
+			}
+			savingInstructions = false;
+		}
+
 		saveSettings({
-			system: system !== '' ? system : undefined,
 			params: {
 				stream_response: params.stream_response !== null ? params.stream_response : undefined,
 				stream_delta_chunk_size:
@@ -144,7 +182,11 @@
 		}
 
 		notificationEnabled = $settings.notificationEnabled ?? false;
-		system = $settings.system ?? '';
+
+		// Never throws: an unavailable surface reads as an empty box, and the
+		// loud half of this feature is the save, not the load.
+		customInstructions = await getCustomInstructions();
+		instructionsLoaded = true;
 
 		params = { ...params, ...$settings.params };
 		params.stop = $settings?.params?.stop ? ($settings?.params?.stop ?? []).join(',') : null;
@@ -316,22 +358,43 @@
 			</div>
 		</div>
 
-		{#if $user?.role === 'admin' || (($user?.permissions.chat?.controls ?? true) && ($user?.permissions.chat?.system_prompt ?? true))}
-			<hr class="border-gray-100/30 dark:border-gray-850/30 my-3" />
+		<!--
+			Custom instructions (#1363). Deliberately NOT behind
+			`permissions.chat.system_prompt`, which gated the upstream control
+			this replaces. That permission exists to decide who may override a
+			model's system prompt, which is an operator concern. Telling the
+			assistant how to address you is not that: it is the single most
+			ordinary setting a chat product has, every competitor ships it on
+			the free tier, and a deployment that switched the operator gate off
+			would silently take it away from everyone.
+		-->
+		<hr class="border-gray-100/30 dark:border-gray-850/30 my-3" />
 
-			<div>
-				<div class=" my-2.5 text-sm font-medium">{$i18n.t('System Prompt')}</div>
-				<Textarea
-					bind:value={system}
-					className={'w-full text-sm outline-hidden resize-vertical' +
-						($settings.highContrastMode
-							? ' p-2.5 border-2 border-gray-300 dark:border-gray-700 rounded-lg bg-transparent text-gray-900 dark:text-gray-100 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 overflow-y-hidden'
-							: '  dark:text-gray-300 ')}
-					rows="4"
-					placeholder={$i18n.t('Enter system prompt here')}
-				/>
+		<div>
+			<div class="flex justify-between items-center">
+				<div class=" my-2.5 text-sm font-medium">{$i18n.t('Custom instructions')}</div>
+				<div
+					class=" text-xs {customInstructions.length > MAX_INSTRUCTIONS_LENGTH
+						? 'text-red-500'
+						: 'text-gray-400 dark:text-gray-500'}"
+				>
+					{customInstructions.length}/{MAX_INSTRUCTIONS_LENGTH}
+				</div>
 			</div>
-		{/if}
+			<div class=" mb-2 text-xs text-gray-500 dark:text-gray-400">
+				{$i18n.t('Applied to every conversation. Tell the assistant how you want it to respond.')}
+			</div>
+			<Textarea
+				bind:value={customInstructions}
+				disabled={!instructionsLoaded || savingInstructions}
+				className={'w-full text-sm outline-hidden resize-vertical' +
+					($settings.highContrastMode
+						? ' p-2.5 border-2 border-gray-300 dark:border-gray-700 rounded-lg bg-transparent text-gray-900 dark:text-gray-100 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 overflow-y-hidden'
+						: '  dark:text-gray-300 ')}
+				rows="4"
+				placeholder={$i18n.t('For example: be concise, and always show your reasoning.')}
+			/>
+		</div>
 
 		{#if $user?.role === 'admin' || (($user?.permissions.chat?.controls ?? true) && ($user?.permissions.chat?.params ?? true))}
 			<div class="mt-2 space-y-3 pr-1.5">
