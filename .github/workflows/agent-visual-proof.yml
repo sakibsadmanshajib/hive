@@ -280,27 +280,43 @@ jobs:
       # driver, never main's.
       #
       # HARNESS is replaced below, from the same ref this workflow's YAML was
-      # itself read from. These are the scripts the steps invoke by name, so
-      # their command lines live in this file and move with it. Before this
-      # step existed they came from the target instead, and a dispatch at any
-      # pull request branched before a harness change died on the argument:
-      # run 33690589909 exited 2 on `unknown argument: --oauth-server` nine
-      # seconds into chat-visual-proof.yml, having proven nothing.
+      # itself read from. These are the paths the steps invoke by name, plus
+      # the ones a script on this list reads from the tree and is coupled to,
+      # so their command lines and their inputs live in this file's world and
+      # move with it. Before this step existed they came from the target
+      # instead, and a dispatch at any pull request branched before a harness
+      # change died on the argument: run 33690589909 exited 2 on `unknown
+      # argument: --oauth-server` nine seconds into chat-visual-proof.yml,
+      # having proven nothing.
       #
-      # github.sha is the default branch's head on a workflow_dispatch and the
-      # pull request's own merge commit on a pull_request event. So a dispatch
-      # at a stale pull request runs current harness, while a pull request
-      # that deliberately edits a harness script is still proven against its
-      # own version of that script, which is also why those scripts sit in the
-      # paths: filter above.
+      # github.sha is the head of the ref this run was dispatched at, which is
+      # the default branch unless the dispatch names another with --ref, and
+      # the pull request's own merge commit on a pull_request event. So a
+      # dispatch at a stale pull request runs current harness, and a pull
+      # request that deliberately edits a harness script is still proven
+      # against its own version of it. The --ref arm is also what let this
+      # change be proven before it merged, by dispatching its own branch's
+      # YAML at a deliberately stale pull request.
       #
-      # Which side a new file lands on: a script this file calls by name is
-      # harness and belongs on the list below. Data those scripts read is not.
-      # They resolve it relative to their own location, which is the
-      # workspace, so supabase/migrations/ and scripts/migration-baseline.conf
-      # stay the target's. scripts/apply-migrations.sh stays the target's too:
-      # ci-throwaway-db.sh calls it with no arguments, so it has no interface
-      # with this file, and it has to agree with the baseline file it reads.
+      # Four of the seven entries below are in the paths: filter above.
+      # A pull request that edits only one of the other three, say a systemd
+      # unit template, gets no automatic run of this job, so its harness
+      # pinning stays untested until someone dispatches. Left that way
+      # deliberately: this job costs twenty minutes and a real provider turn,
+      # and widening the trigger to a script ci.yml also uses would spend both
+      # on changes this capture cannot go red on.
+      #
+      # Which side a new path lands on. A script this file calls by name is
+      # harness. So is a file a listed script reads and is coupled to, which
+      # is how the health probe and the systemd templates below got here: the
+      # installer renders them, so main's installer against the target's
+      # templates is this same defect one hop down. Data those scripts read
+      # and are not coupled to is not harness: they resolve it relative to
+      # their own location, which is the workspace, so supabase/migrations/
+      # and scripts/migration-baseline.conf stay the target's.
+      # tools/lint-visual-proof-harness-split.mjs enforces both halves and
+      # carries the reason for every path deliberately left on the target's
+      # side, scripts/apply-migrations.sh among them.
       - name: Take the harness scripts from this workflow's own ref
         env:
           HARNESS_SHA: ${{ github.sha }}
@@ -311,6 +327,8 @@ jobs:
             scripts/ci-throwaway-db.sh
             scripts/generate-enterprise-jwt-keys.py
             scripts/install-agent-engine-host.sh
+            scripts/agent-engine-health-probe.sh
+            deploy/systemd-user
             scripts/redact-log-credentials.py
           )
           git fetch --no-tags --depth=1 origin "$HARNESS_SHA"
