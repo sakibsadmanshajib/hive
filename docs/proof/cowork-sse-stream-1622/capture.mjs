@@ -49,7 +49,10 @@ const EXPECTED = [
 	{ at: 4.2, match: 'AGENTS.md' },
 	{ at: 5.4, match: 'write sixcap.txt' },
 	{ at: 6.6, match: 'wrote 14 bytes' },
-	{ at: 7.8, match: 'sixcap.txt' },
+	// 'Workspace file: sixcap.txt', not 'sixcap.txt': the bare name also
+	// occurs in the tool call two steps earlier, so the short matcher reported
+	// this step as having appeared before it happened.
+	{ at: 7.8, match: 'Workspace file: sixcap.txt' },
 	{ at: 9.0, match: 'cat sixcap.txt' },
 	{ at: 10.2, match: 'HIVE-COWORK-OK' }
 ];

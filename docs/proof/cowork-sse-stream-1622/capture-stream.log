@@ -1,0 +1,35 @@
+[+  0.23s] capture start, label=stream, app=http://127.0.0.1:3423
+[+  9.29s] signed in, url=http://127.0.0.1:3423/
+[+ 12.34s] shot 01-composer
+[+ 13.25s] composer switched to Work
+[+ 13.82s] shot 02-brief-typed
+[+ 13.96s] submitted
+[+ 17.57s] step "list the workspace" happened at +3.0s, first on screen at +3.7s
+[+ 17.69s] shot 03-run-t3p5s
+[+ 19.23s] step "AGENTS.md" happened at +4.2s, first on screen at +5.4s
+[+ 19.31s] shot 03-run-t5p0s
+[+ 20.34s] step "write sixcap.txt" happened at +5.4s, first on screen at +6.5s
+[+ 20.44s] shot 03-run-t6p5s
+[+ 20.95s] step "wrote 14 bytes" happened at +6.6s, first on screen at +7.1s
+[+ 22.09s] shot 03-run-t8p0s
+[+ 22.60s] step "Workspace file: sixcap.txt" happened at +7.8s, first on screen at +8.8s
+[+ 23.64s] step "cat sixcap.txt" happened at +9.0s, first on screen at +9.8s
+[+ 23.79s] shot 03-run-t9p5s
+[+ 25.32s] step "HIVE-COWORK-OK" happened at +10.2s, first on screen at +11.5s
+[+ 25.42s] shot 03-run-t11p0s
+[+ 27.63s] shot 03-run-t13p5s
+[+ 34.39s] shot 04-finished
+[+ 34.39s] --- how late each step was ---
+[+ 34.39s]   "list the workspace": happened +3.0s, shown +3.7s, late by 0.7s
+[+ 34.39s]   "AGENTS.md": happened +4.2s, shown +5.4s, late by 1.2s
+[+ 34.39s]   "write sixcap.txt": happened +5.4s, shown +6.5s, late by 1.1s
+[+ 34.39s]   "wrote 14 bytes": happened +6.6s, shown +7.1s, late by 0.5s
+[+ 34.39s]   "Workspace file: sixcap.txt": happened +7.8s, shown +8.8s, late by 1.0s
+[+ 34.39s]   "cat sixcap.txt": happened +9.0s, shown +9.8s, late by 0.8s
+[+ 34.39s]   "HIVE-COWORK-OK": happened +10.2s, shown +11.5s, late by 1.3s
+[+ 34.39s] --- summary ---
+[+ 34.39s] steps that appeared: 7 of 7
+[+ 34.39s] worst lateness: 1.3s
+[+ 34.39s] mean lateness: 1.0s
+[+ 34.39s] most step lines on screen at once: 5
+[+ 34.39s] final step lines: ["Hive ran this as a knowledge work task.","Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt","Used bash: HIVE-COWORK-OK"]

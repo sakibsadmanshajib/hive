@@ -1,0 +1,11 @@
+mode=poll listening on 3423, upstream http://127.0.0.1:3422
+[run +  0.00s] composer submitted the run
+[run +  0.09s] stream route refused (control run)
+[run +  3.10s] task read -> running
+[run +  3.11s] cursor read after_seq=0 -> 1 step(s)
+[run +  6.22s] task read -> running
+[run +  6.23s] cursor read after_seq=1 -> 2 step(s)
+[run +  9.34s] task read -> running
+[run +  9.35s] cursor read after_seq=3 -> 3 step(s)
+[run + 12.43s] task read -> succeeded
+[run + 12.44s] cursor read after_seq=6 -> 1 step(s)
