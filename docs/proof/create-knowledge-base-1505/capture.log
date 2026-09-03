@@ -1,0 +1,75 @@
+An ordinary user creates a knowledge base, adds a document, and gets a grounded answer
+Date: 2026-09-03
+Branch: feat/1505-create-knowledge-base
+Issue: 1505
+Pull request: 1769
+Workflow run: 33712312976 (chat visual proof, scenario=projects)
+
+WHAT THIS IS
+
+The browser capture the visual-proof rule asks for, produced in CI by
+.github/workflows/chat-visual-proof.yml against a stack booted from
+refs/pull/1769/merge on a hosted runner, with that run's own Supabase, its own
+registered OAuth client and a real streamed completion. The session is minted
+through the real "Continue with Hive" journey, not stubbed.
+
+The account is an ordinary one. It holds no Open WebUI admin role and no
+hand-granted permission: the run seeds a tenant owner, and
+supabase/migrations/20260823_03_owui_role_never_admin.sql keeps that role at
+`user`. That is the whole point of the capture. The journey it photographs was
+impossible for exactly this class of account before this branch, and the
+permission that makes it possible has to arrive through the deployment's own
+configuration or the create call answers 401 in the frame.
+
+WHAT IT SHOWS, IN ORDER
+
+  01-signed-in          the signed-in chat surface, session live
+  01b-project-created   POST /api/v1/knowledge/create answered 200, and the
+                        browser is on the new project's page
+  01c-document-added    the uploaded document listed on that project
+  02-model-picker       the alias the turn will run on, hive-free
+  03-streamed-reply     the answer, 47
+  04-sources-expanded   the source list, naming kb-1505-field-note.txt
+
+The document's fact is invented, so a correct answer cannot be recall. The
+source list is required outright on top of it: an answer with no rendered
+source would prove the document was read somewhere, not that the surface told
+the customer where from.
+
+The images are on the visual-proof-assets release and are linked from the pull
+request, per .wolf/decisions.md D-042. This file is the text half, committed
+here because npm run lint:proof-tokens scans docs/proof/ and nothing else.
+
+THE CAPTURE LOG, VERBATIM
+
+2026-09-03T03:52:13.952Z  commit under proof: 98baa1b+local-edits
+2026-09-03T03:52:13.953Z  chat origin: http://localhost:3003
+2026-09-03T03:52:13.953Z  session: storage state minted by owui.setup.ts through the real Continue with Hive journey
+2026-09-03T03:52:14.056Z  landed on http://localhost:3003/
+2026-09-03T03:52:14.971Z  composer is present, so the session is live
+2026-09-03T03:52:16.431Z  POST /api/v1/knowledge/create answered 200
+2026-09-03T03:52:16.439Z  project created: KB-1505 proof 2026-09-03T03-52-15-078Z (a6444d56-1fe4-438b-b441-4d2088c44e92)
+2026-09-03T03:52:18.321Z  document added to the project: kb-1505-field-note.txt
+2026-09-03T03:52:18.485Z  new chat bound to the project: http://localhost:3003/?project=a6444d56-1fe4-438b-b441-4d2088c44e92
+2026-09-03T03:52:18.502Z  model in the composer: Hive Free
+2026-09-03T03:52:18.739Z  the Integrations menu carries no web search control on this surface
+2026-09-03T03:52:18.831Z  chat completion request left the browser: model=hive-free features={"voice":false,"image_generation":false,"code_interpreter":false,"web_search":false}
+2026-09-03T03:52:20.187Z  assistant turn settled: Retrieved 1 source 47 kb-1505-field-note.txt 1 Source
+2026-09-03T03:52:20.258Z  source list on the assistant turn: Toggle 1 source
+2026-09-03T03:52:20.302Z  sources: kb-1505-field-note.txt | 1 kb-1505-field-note.txt
+2026-09-03T03:52:20.368Z  captured 6 screenshot(s)
+
+The model-picker line is the only one elided, and only for length: it lists the
+eight aliases this tenant can see. It is in the run's own log on the pull
+request.
+
+THE RUN BEFORE THIS ONE WENT RED, AND THAT IS WORTH RECORDING
+
+Run 33711437643, on the same branch one commit earlier, failed with
+"creating a knowledge base answered 500". The security hardening added a
+group-grant filter call to knowledge.py that passed `db`, a local the create
+route deliberately does not have. The patch applied cleanly, the module parsed,
+the marker counts matched and every unit assertion passed. Only this capture
+went red. scripts/test_owui_skill_group_grants.py now carries a structural
+guard that refuses any inserted call naming a name the enclosing function does
+not bind.
