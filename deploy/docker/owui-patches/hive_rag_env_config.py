@@ -543,7 +543,29 @@ FEATURE_CONFIG_ENV = {
 #
 # Sharing stays untouched here too. The grant is the right to author a
 # collection of one's own, not the right to hand it to another member.
+#
+# `access_grants.allow_users` is the third, and it is a refusal rather than a
+# grant (issue #1505, raised by the mandatory security review). Owning a
+# resource is what makes sharing one reachable, so granting the right to author
+# a collection is also the moment the right to hand it to somebody else has to
+# be decided. Upstream defaults this leaf TRUE, and
+# `utils/access_control.filter_allowed_access_grants` is the single place every
+# router's grant list passes through, so leaving it true meant any non-admin
+# could store an individual-user grant on a resource they own, through a
+# hand-built POST, on knowledge, skills, models, prompts, tools, notes and
+# folders alike. The only thing refusing it was a frontend control, which is
+# not an authorization check; the Projects surface does not render one at all.
+#
+# The target id is not a secret either: GET /api/v1/users/search answers to any
+# verified user on this shared instance, so a grant can name any account on it,
+# including one in another tenant. Setting this false makes the refusal the
+# server's, which is what the surrounding comments already claim.
+#
+# Group grants remain unfiltered by that upstream function, and
+# apply_skill_group_grants_patch.py is what closes them for the two routers
+# whose payload reaches a model prompt. #1396 tracks the rest.
 PERMISSION_ENV = {
+    ("access_grants", "allow_users"): "USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS",
     ("workspace", "knowledge"): "USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS",
     ("workspace", "skills"): "USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS",
 }

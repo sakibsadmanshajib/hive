@@ -619,6 +619,16 @@ def test_removed_routes_are_unreachable_by_url() -> None:
         "/workspace/skills",
         "/workspace/skills/create",
         "/workspace/tools",
+        # Issue #1505. Knowledge stopped being the one workspace surface Hive
+        # keeps: D-045 eliminates the destination and Projects replaces it over
+        # the same rows. It was reachable-in-principle and dead-in-practice
+        # while no ordinary account held the workspace.knowledge permission,
+        # and granting that permission is what would otherwise have revived the
+        # stock create, upload, delete and sharing surface as a second
+        # Knowledge destination beside Projects, able to delete a project.
+        "/workspace/knowledge",
+        "/workspace/knowledge/",
+        "/workspace/knowledge/abc",
     ]
     for path in must_block:
         assert pattern.match(path), path
@@ -628,10 +638,11 @@ def test_the_block_spares_the_surfaces_hive_keeps() -> None:
     pattern = _removed_surface_pattern()
     must_pass = [
         "/",
+        # The index itself stays, because it is now a redirect to /projects
+        # (routes/(app)/workspace/+page.svelte) rather than a door into the
+        # surface blocked above.
         "/workspace",
         "/workspace/",
-        "/workspace/knowledge",
-        "/workspace/knowledge/abc",
         # Open WebUI's own APIs, including the ones the sidebar and the chat
         # request path call on every load. This regex is scoped to page routes
         # and must not reach any of them; the separate `blocked` regex is where

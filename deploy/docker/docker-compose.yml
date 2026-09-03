@@ -1391,6 +1391,19 @@ services:
       # and owui-patches/hive_rag_env_config.py merges both leaves into it on
       # every start. Sharing is deliberately not granted alongside it.
       USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: "true"
+      # And the refusal that has to travel with it. Owning a resource is what
+      # makes sharing one reachable, so the grant above is the moment this has
+      # to be decided. Upstream defaults it true, and the one shared filter
+      # every router's grant list passes through
+      # (utils/access_control.filter_allowed_access_grants) then admits an
+      # individual-user grant from any non-admin owner. Nothing but a frontend
+      # control refused it, which is not an authorization check, and
+      # GET /api/v1/users/search answers to any verified user on this shared
+      # instance, so the id such a grant names is not a secret. False here
+      # makes a resource private to the account that authored it, on knowledge,
+      # skills, models, prompts, tools, notes and folders alike. An admin is
+      # unaffected: the filter returns early for that role.
+      USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS: "false"
       # Model visibility belongs to the gateway, not to Open WebUI. edge-api
       # already filters /v1/models per tenant (AliasVisibleToTenant, PR #205),
       # so a second independent filter here adds nothing and actively hides

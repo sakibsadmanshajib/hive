@@ -721,6 +721,44 @@ def test_reconcile_grants_knowledge_without_disturbing_skills() -> None:
     assert config.stored[PERMISSIONS_KEY]["workspace"]["models"] is False
 
 
+def test_individual_user_sharing_is_refused_to_a_non_admin() -> None:
+    """The other half of #1505's grant, found by the mandatory security review.
+
+    Owning a collection is what makes sharing one reachable, so the right to
+    author one cannot ship without deciding what it may be handed to. Upstream
+    defaults `access_grants.allow_users` to TRUE, `filter_allowed_access_grants`
+    is the one place every router's grant list passes through, and the only
+    thing refusing an individual-user grant today is a frontend control the
+    Projects surface does not even render. GET /api/v1/users/search answers to
+    any verified user on this shared instance, so the id needed for such a
+    grant is not a secret either."""
+    assert hive_rag_env_config.permission_overrides(
+        {"USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS": "false"}
+    ) == {("access_grants", "allow_users"): False}
+
+
+def test_reconcile_writes_the_sharing_refusal_into_the_stored_tree() -> None:
+    """A branch the older stored trees may not carry at all, so this also
+    covers the create-a-missing-branch path on a real reconcile."""
+    config = FakeConfig({PERMISSIONS_KEY: _tree()})
+    reconcile(config, {"USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS": "false"})
+
+    assert config.stored[PERMISSIONS_KEY]["access_grants"]["allow_users"] is False
+    # The tree it was merged into is still whole.
+    assert config.stored[PERMISSIONS_KEY]["chat"] == {"controls": True, "system_prompt": True}
+
+
+def test_compose_refuses_individual_user_sharing() -> None:
+    """Read from the file that reaches the box, for the same reason the two
+    grants above are."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text()
+    assert re.search(
+        r"USER_PERMISSIONS_ACCESS_GRANTS_ALLOW_USERS:\s*\"?false\"?", compose
+    ), "docker-compose.yml does not refuse individual-user access grants"
+
+
 def test_compose_grants_the_knowledge_permission() -> None:
     """Same reason the skills assertion below exists: a reconcile that works
     and a compose file that never sets the variable changes nothing on the

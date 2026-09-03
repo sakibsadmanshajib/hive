@@ -618,11 +618,19 @@ RUN python3 /tmp/apply_retrieval_authz_patch.py \
 # than an over-broad share. Not reachable today (a non-admin cannot enumerate
 # another tenant's group id) but that is secrecy of an identifier rather than
 # an authorization check. #1396 tracks the general case across the other
-# routers; this closes the one whose payload reaches a model prompt.
+# routers; this closes the ones whose payload reaches a model prompt.
+#
+# Knowledge is the second of those, added by #1505. That change grants
+# workspace.knowledge, which is what first lets a non-admin OWN a collection
+# and therefore what first makes granting one reachable at all; a collection's
+# passages reach another member's prompt as retrieved context. Six write sites
+# there rather than three, so seven markers.
 COPY deploy/docker/owui-patches/apply_skill_group_grants_patch.py /tmp/apply_skill_group_grants_patch.py
 RUN python3 /tmp/apply_skill_group_grants_patch.py \
     && test "$(grep -c '# hive (#1396)' /app/backend/open_webui/routers/skills.py)" -eq 4 \
-    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/skills.py').read_text())"
+    && test "$(grep -c '# hive (#1396)' /app/backend/open_webui/routers/knowledge.py)" -eq 7 \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/skills.py').read_text())" \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/routers/knowledge.py').read_text())"
 
 # issue #1397: skill.name (and, one check earlier, the primary-key id
 # slugified from it) was unique instance wide on a chat backend shared by
