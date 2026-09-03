@@ -17,9 +17,12 @@
 	 * #1595 settles that the whole destination goes.
 	 *
 	 * A redirect rather than a deleted route, so the bookmarks and the shell's
-	 * own older links land somewhere real instead of on a 404.
+	 * own older links land somewhere real instead of on a 404. replaceState
+	 * because of those bookmarks: without it, arriving here and pressing Back
+	 * returns to this route and is pushed forward again, which makes the Back
+	 * button useless for exactly the visitor this redirect exists for.
 	 */
 	onMount(() => {
-		goto('/projects');
+		goto('/projects', { replaceState: true });
 	});
 </script>

@@ -187,6 +187,26 @@ async function settledTurn(page) {
 async function createProjectWithDocument(page, shots) {
   const name = `KB-1505 proof ${new Date().toISOString().replace(/[:.]/g, "-")}`;
 
+  // The account's own role, measured rather than argued. It is the load bearing
+  // claim of this whole capture: an admin's create call answers 200 too, so
+  // without this line nothing in the frames or the log separates "the
+  // permission reached this deployment through its own configuration" from
+  // "this account never needed the permission". Read from the session endpoint
+  // the shell itself reads, on the page's origin, with the session's own token.
+  const role = await page.evaluate(async () => {
+    const res = await fetch("/api/v1/auths/", {
+      headers: { authorization: `Bearer ${localStorage.getItem("token") ?? ""}` },
+    });
+    if (!res.ok) return `(unreadable: ${res.status})`;
+    return (await res.json())?.role ?? "(absent)";
+  });
+  record(`signed-in account role, read from the session: ${role}`);
+  if (role !== "user") {
+    throw new Error(
+      `the capturing account's role is "${role}", not "user", so this run cannot show that an ORDINARY customer can create a knowledge base`,
+    );
+  }
+
   await page.goto(`${OWUI_URL}/projects`, { waitUntil: "domcontentloaded" });
   const newProject = page.locator("#projects-new-button");
   try {

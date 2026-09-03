@@ -84,18 +84,18 @@
 					<div
 						class="flex gap-1 scrollbar-none overflow-x-auto w-fit text-center text-sm font-medium rounded-full bg-transparent py-1 touch-auto pointer-events-auto"
 					>
-						{#if $user?.role === 'admin' || $user?.permissions?.workspace?.knowledge}
-							<a
-								draggable="false"
-								aria-current={$page.url.pathname.includes('/workspace/knowledge') ? 'page' : null}
-								class="min-w-fit p-1.5 {$page.url.pathname.includes('/workspace/knowledge')
-									? ''
-									: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} transition select-none"
-								href="/workspace/knowledge"
-							>
-								{$i18n.t('Knowledge')}
-							</a>
-						{/if}
+						<!--
+							Hive (#1505): the Knowledge tab is gone. Its condition was
+							`role === 'admin' || permissions.workspace.knowledge`, which is
+							exactly the permission that issue grants to every ordinary
+							account, so keeping it would have made the tab appear for
+							everyone at the moment a customer gained the right to create a
+							knowledge base. Caddyfile.owui 404s the path it pointed at, but
+							this is an ordinary SvelteKit anchor: a click is client-side
+							navigation and never issues a request the proxy could refuse.
+							D-045 eliminates the Knowledge destination; Projects holds the
+							same rows and can create, upload and delete.
+						-->
 
 						<!--
 							Hive: Models, Prompts, Skills and Tools removed. Knowledge is the one

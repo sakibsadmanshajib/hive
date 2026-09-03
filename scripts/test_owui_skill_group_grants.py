@@ -172,11 +172,17 @@ def main() -> None:
             ]
             if not calls:
                 continue
-            bound = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
-            for node in ast.walk(fn):
-                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-                    bound.add(node.id)
+            params = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+            assigned = [
+                (node.lineno, node.id)
+                for node in ast.walk(fn)
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+            ]
             for call in calls:
+                # Ordering, not just binding. A name first assigned BELOW the
+                # inserted call raises UnboundLocalError, which is the same 500
+                # in a different disguise, so only assignments above it count.
+                bound = params | {n for lineno, n in assigned if lineno < call.lineno}
                 passed = [a.id for a in call.args if isinstance(a, ast.Name)]
                 passed += [
                     kw.value.id for kw in call.keywords if isinstance(kw.value, ast.Name)

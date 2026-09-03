@@ -18,10 +18,15 @@
 	 * Knowledge rather than keeping two of it, so the index points at Projects,
 	 * which is where the same collections live.
 	 *
-	 * /workspace/knowledge itself is untouched and keeps its route, unlinked,
-	 * exactly as /agents has since #944.
+	 * /workspace/knowledge is gone rather than merely unlinked: Caddyfile.owui
+	 * 404s the path, and this change also deletes the tab in +layout.svelte
+	 * that pointed at it, which the granted permission would otherwise have
+	 * made visible to every ordinary account.
+	 *
+	 * replaceState, so a visitor who arrives here and presses Back is not
+	 * pushed straight forward again.
 	 */
 	onMount(() => {
-		goto('/projects');
+		goto('/projects', { replaceState: true });
 	});
 </script>
