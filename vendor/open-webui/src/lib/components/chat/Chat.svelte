@@ -115,6 +115,7 @@
 		EVENT_PAGE_SIZE,
 		getTask,
 		getTaskEvents,
+		streamTaskEvents,
 		TERMINAL_STATUSES
 	} from '$lib/hive/agentTasks';
 	import {
@@ -2245,12 +2246,16 @@
 	 * is no second surface.
 	 * ------------------------------------------------------------------ */
 
-	// How often the run is re-read, and how long this tab keeps following one.
-	// ponytail: a poll, not a stream. The event feed added in #1073 is a cursor
-	// read, not a subscription, so there is nothing to subscribe to yet; when a
-	// stream exists this loop becomes one and nothing else in this file moves.
+	// The fallback cadence, and how long this tab keeps following one run.
+	//
+	// A run is followed over the event stream now (#1622). This interval is
+	// what the follower drops back to when that stream cannot be opened or
+	// dies mid-run: the cursor read is still there, still correct, and still
+	// the thing a reconnect resumes from, so a browser that cannot hold a
+	// connection open sees a slower run rather than a stranded one.
+	//
 	// The ceiling exists so a task wedged in `running` cannot leave a browser
-	// tab polling until it is closed.
+	// tab following it until the tab is closed.
 	const COWORK_POLL_INTERVAL_MS = 3000;
 	const COWORK_FOLLOW_CEILING_MS = 30 * 60 * 1000;
 
@@ -2377,9 +2382,139 @@
 		return { task, applied };
 	};
 
+	/**
+	 * Follows a run over its event stream, writing each batch onto the turn.
+	 *
+	 * Returns false when the turn is gone or the user has moved to another
+	 * conversation, which is the caller's signal to stop for good rather than
+	 * reconnect. Throws what streamTaskEvents throws, so the caller can tell a
+	 * refusal from a transport problem.
+	 *
+	 * The cursor is read off the turn rather than tracked here, so a
+	 * reconnect after a dropped connection resumes where the transcript
+	 * actually is instead of replaying a run into a chain that already holds
+	 * it.
+	 */
+	const streamCoworkRun = async (_chatId, messageId: string, taskId: string) => {
+		let steps = coworkSteps(messageId);
+		let task = null;
+		let live = true;
+		const controller = new AbortController();
+
+		await streamTaskEvents(
+			localStorage.token,
+			taskId,
+			latestStepSeq(steps),
+			async (update) => {
+				if (update.task) {
+					task = update.task;
+				}
+				if (update.events.length > 0) {
+					steps = foldRunSteps(steps, update.events);
+				}
+				if (!task) {
+					// Only step frames so far. There is nothing authoritative
+					// to write the turn from yet, and inventing a status to go
+					// with them would put a state on screen the run is not in.
+					return;
+				}
+				if (!(await applyCoworkRun(_chatId, messageId, task, steps))) {
+					// The conversation moved out from under us. Hang up rather
+					// than holding a connection for a transcript nobody is
+					// looking at.
+					live = false;
+					controller.abort();
+				}
+			},
+			controller.signal
+		);
+		return live;
+	};
+
+	/**
+	 * Follows one run for as long as this tab has it open.
+	 *
+	 * The stream is the path a run takes (#1622): a step reaches the
+	 * transcript when the agent takes it, rather than when this browser next
+	 * asks. Everything below is about the ways that connection ends.
+	 *
+	 * A refusal settles the turn, because asking a settled question again is
+	 * how one outage becomes a permanent load on the gateway. A stream that
+	 * could not be opened at all falls back to the poll, which is the same
+	 * feed read the slow way and is strictly better than a run that stops
+	 * updating. A stream that ended is re-read once for its status: terminal
+	 * means done, and anything else means the connection dropped mid-run and
+	 * is worth reconnecting for.
+	 */
 	const followCoworkRun = async (_chatId, messageId: string, taskId: string) => {
 		const deadline = Date.now() + COWORK_FOLLOW_CEILING_MS;
 
+		while (Date.now() < deadline) {
+			if ($chatId !== _chatId || !coworkTurn(messageId)) {
+				// Not an error and not a lost run: the run continues server
+				// side and the turn is picked back up by resumeCoworkRun when
+				// this conversation is opened again.
+				return;
+			}
+
+			try {
+				if (!(await streamCoworkRun(_chatId, messageId, taskId))) {
+					return;
+				}
+			} catch (error) {
+				const refusal = describeRefusal(error);
+				if (refusal) {
+					await applyCoworkRun(_chatId, messageId, {
+						status: 'failed',
+						error_message: refusal.message
+					});
+					return;
+				}
+				await pollCoworkRun(_chatId, messageId, taskId, deadline);
+				return;
+			}
+
+			// The stream ended. Its own last frame is not the authority on
+			// what that meant, so the task is read once: the server may have
+			// finished the run, or the connection may simply have dropped.
+			let reading;
+			try {
+				reading = await readCoworkRun(_chatId, messageId, taskId);
+			} catch (error) {
+				if (describeRefusal(error)) {
+					await applyCoworkRun(_chatId, messageId, {
+						status: 'failed',
+						error_message: describeRefusal(error)?.message ?? ''
+					});
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, COWORK_POLL_INTERVAL_MS));
+				continue;
+			}
+			if (!reading.applied) {
+				return;
+			}
+			if (TERMINAL_STATUSES.has(reading.task.status) || reading.task.status === 'unknown') {
+				return;
+			}
+			// Still going, so the connection dropped rather than the run
+			// ending. Reconnect from where the transcript is.
+		}
+
+		await applyCoworkRun(_chatId, messageId, {
+			status: 'unknown',
+			error_message: ''
+		});
+	};
+
+	/**
+	 * Follows a run by re-reading it on a timer.
+	 *
+	 * The fallback, not the path a run normally takes: see followCoworkRun.
+	 * Unchanged in substance from what every run used before #1622, including
+	 * the load-bearing read order inside readCoworkRun.
+	 */
+	const pollCoworkRun = async (_chatId, messageId: string, taskId: string, deadline: number) => {
 		while (Date.now() < deadline) {
 			await new Promise((resolve) => setTimeout(resolve, COWORK_POLL_INTERVAL_MS));
 

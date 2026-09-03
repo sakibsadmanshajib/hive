@@ -669,3 +669,213 @@ export const describeTask = (task: AgentTask, nowMs: number): TaskView => {
 		}
 	}
 };
+
+/*
+ * The per-run subscription (issue #1622).
+ *
+ * getTaskEvents above is a cursor a caller re-asks on a timer, and that timer
+ * is the floor on how late a step can be: a tool call the agent took half a
+ * second ago cannot appear until the next poll. This is the same feed as a
+ * connection the server writes to, so a step reaches the transcript when the
+ * agent takes it.
+ *
+ * The route is Open WebUI's own backend, same as every call above, and it is
+ * read with fetch rather than EventSource on purpose: EventSource cannot set
+ * a request header, and this deployment's session token travels on
+ * `authorization`.
+ */
+
+/** One decoded server-sent event: its name and its data payload. */
+export interface SSEFrame {
+	event: string;
+	data: string;
+}
+
+/**
+ * Splits a buffer into complete frames plus the bytes after the last one.
+ *
+ * The tail matters more than the frames. A chunk off the network ends
+ * wherever TCP decided, routinely mid-frame and even mid-character, so a
+ * parser that consumed its whole input would silently drop the remainder of
+ * every split frame. The caller keeps `rest` and prepends it to the next
+ * chunk.
+ *
+ * Comment lines (a leading colon) are the heartbeat that stops an idle
+ * connection being closed by something in the middle. They carry no event
+ * name, so they produce no frame, which is what makes them a heartbeat rather
+ * than a step nobody can render.
+ */
+export const parseSSEFrames = (buffer: string): { frames: SSEFrame[]; rest: string } => {
+	const frames: SSEFrame[] = [];
+	const normalised = buffer.replace(/\r\n/g, '\n');
+	let start = 0;
+	for (;;) {
+		const end = normalised.indexOf('\n\n', start);
+		if (end === -1) {
+			break;
+		}
+		const block = normalised.slice(start, end);
+		start = end + 2;
+
+		let event = '';
+		const data: string[] = [];
+		for (const line of block.split('\n')) {
+			if (line.startsWith(':') || line === '') {
+				continue;
+			}
+			// `field: value` and `field:value` are both legal, and the space
+			// after the colon is separator rather than content.
+			const colon = line.indexOf(':');
+			const field = colon === -1 ? line : line.slice(0, colon);
+			let value = colon === -1 ? '' : line.slice(colon + 1);
+			if (value.startsWith(' ')) {
+				value = value.slice(1);
+			}
+			if (field === 'event') {
+				event = value;
+			} else if (field === 'data') {
+				data.push(value);
+			}
+		}
+		if (event !== '') {
+			frames.push({ event, data: data.join('\n') });
+		}
+	}
+	return { frames, rest: normalised.slice(start) };
+};
+
+/**
+ * One batch of stream frames: everything that arrived in one chunk.
+ *
+ * A batch rather than a callback per frame, and that is a decision about
+ * writes rather than about parsing. The transcript turn is persisted every
+ * time it changes, so a handler fired per step would save the chat once per
+ * step; the server writes a pass's frames back to back, so batching by chunk
+ * keeps the save rate where the three second poll had it while the steps
+ * themselves arrive as they happen.
+ */
+export interface RunStreamUpdate {
+	/** The newest status frame in this batch, or null if it carried none. */
+	task: AgentTask | null;
+	/** Every step frame in this batch, oldest first. */
+	events: TaskEvent[];
+	/** Whether the server said the run has settled. */
+	ended: boolean;
+}
+
+/**
+ * Follows one run until the server closes the stream, the caller aborts, or
+ * the connection drops.
+ *
+ * Resolves rather than throwing when the stream ends: an ended stream is not
+ * an error, and the caller decides what it means by re-reading the task. It
+ * throws only for a stream that could not be opened, carrying the same
+ * AgentTaskError vocabulary as every other call here, so describeRefusal
+ * still tells a refusal apart from a blip.
+ */
+export const streamTaskEvents = async (
+	token: string,
+	id: string,
+	afterSeq: number,
+	onUpdate: (update: RunStreamUpdate) => void | Promise<void>,
+	signal?: AbortSignal,
+	apiBase: string = DEFAULT_AGENT_API_BASE_URL
+): Promise<void> => {
+	const cursor = Math.max(0, Math.floor(afterSeq));
+	const response = await fetch(
+		`${apiBase}/tasks/${encodeURIComponent(id)}/events/stream?after_seq=${cursor}`,
+		{
+			method: 'GET',
+			headers: {
+				Accept: 'text/event-stream',
+				authorization: `Bearer ${token}`
+			},
+			signal
+		}
+	);
+	if (!response.ok) {
+		await raise(response, 'Failed to open the task stream');
+	}
+	if (!response.body) {
+		// A build or environment with no streaming body. Throwing sends the
+		// caller to its fallback, which is the cursor read that has always
+		// worked, rather than leaving it watching a stream that cannot arrive.
+		throw new Error('This browser cannot read the task stream');
+	}
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = '';
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) {
+				break;
+			}
+			buffer += decoder.decode(value, { stream: true });
+			const parsed = parseSSEFrames(buffer);
+			buffer = parsed.rest;
+			const update = decodeStreamFrames(parsed.frames);
+			if (update.task || update.events.length > 0 || update.ended) {
+				await onUpdate(update);
+			}
+			if (update.ended) {
+				break;
+			}
+		}
+	} finally {
+		// Releasing the lock lets the body be cancelled; without it an aborted
+		// follow leaves the connection held until the tab is closed.
+		reader.cancel().catch(() => {});
+	}
+};
+
+/**
+ * Turns one batch of frames into an update.
+ *
+ * Exported for its own test: the folding is where a frame gets dropped, and a
+ * dropped step is invisible in the surface it is dropped from.
+ */
+export const decodeStreamFrames = (frames: SSEFrame[]): RunStreamUpdate => {
+	let task: AgentTask | null = null;
+	const events: TaskEvent[] = [];
+	let ended = false;
+	for (const frame of frames) {
+		let payload: unknown;
+		try {
+			payload = JSON.parse(frame.data);
+		} catch {
+			// A frame this build cannot read is skipped rather than ending the
+			// stream. The run is still going and the rest of it is still worth
+			// showing.
+			continue;
+		}
+		switch (frame.event) {
+			case 'status': {
+				const decoded = decodeTask(payload);
+				if (decoded) {
+					// The newest wins: a batch carrying two status frames is a
+					// run that moved twice, and only where it ended up is true.
+					task = decoded;
+				}
+				break;
+			}
+			case 'step': {
+				const decoded = decodeEvent(payload);
+				if (decoded) {
+					events.push(decoded);
+				}
+				break;
+			}
+			case 'end':
+				ended = true;
+				break;
+			default:
+				// A frame kind this build does not know. Ignored rather than
+				// treated as the end, so a future server can add one without
+				// truncating every older client's run.
+				break;
+		}
+	}
+	return { task, events, ended };
+};
