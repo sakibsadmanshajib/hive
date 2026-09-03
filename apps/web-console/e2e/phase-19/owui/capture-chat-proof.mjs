@@ -52,8 +52,15 @@ if (SCENARIO !== "chat" && SCENARIO !== "voice") {
 }
 const VOICE = SCENARIO === "voice";
 // How long the transcription response is held open in the voice capture. Long
-// enough that the first two interruptions each complete an utterance and its
-// silence window while the upload is still in flight. See captureVoice.
+// enough that the FIRST interruption completes an utterance and its silence
+// window while the upload is still in flight, which is all the assertion needs.
+//
+// Do not trim this. An utterance opens its upload when it CLOSES, which is
+// silenceMs (2000 ms) after its last loud frame, not the 2.4 s gap the fixture
+// writes between phrases. Interruption 1 is spoken 8.24 s to 9.64 s and so
+// closes at 11.64 s. Six seconds keeps the window past that even if the
+// provider answers instantly; four would end it near 11.4 s, just ahead of the
+// close, and the capture would quietly stop being a control. See captureVoice.
 const TRANSCRIPTION_HOLD_MS = 6_000;
 // The prompt is deliberately one whose right answer is one word, so "the model
 // replied" is checkable rather than eyeballed. Same reasoning, and the same
@@ -256,11 +263,19 @@ async function captureVoice(page, shots, fixture) {
   // Holding the response keeps the page's own fetch pending, which is exactly
   // what a loaded provider does and exactly the condition the issue reports. It
   // is not a fabricated state: it is the slow provider that produced the 429 in
-  // the first place, reproduced on demand. The hold covers the first two
-  // interruptions in full, so each of them has a complete utterance and a
-  // complete silence window inside the transcription interval. Without the fix
-  // each opens its own concurrent upload, and the peak concurrency this records
-  // goes above one.
+  // the first place, reproduced on demand.
+  //
+  // The hold covers the FIRST interruption in full, not two. An utterance opens
+  // its upload when it closes, which is silenceMs (2000 ms) after its last loud
+  // frame rather than the 2.4 s gap the fixture writes between phrases.
+  // Interruption 1 is spoken 8.24 s to 9.64 s and closes at 11.64 s, which on
+  // the measured window of 7.42 s to 15.03 s leaves 3.4 seconds of margin.
+  // Interruption 2 closes at 15.70 s and falls just outside it.
+  //
+  // One is enough: a single concurrent upload already trips the peak
+  // concurrency assertion below, and 3.4 seconds of margin is a real
+  // improvement on the 0.8 seconds the unheld window gave. Without the fix that
+  // interruption opens its own concurrent upload.
   await page.route("**/audio/transcriptions", async (route) => {
     const response = await route.fetch();
     record(`holding the transcription response for ${TRANSCRIPTION_HOLD_MS}ms, so the interruptions land inside the window this fix closes`);
