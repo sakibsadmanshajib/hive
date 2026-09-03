@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/httpserver"
 )
 
 // The agent-task event stream survives the API server's own WriteTimeout.
@@ -26,14 +27,14 @@ import (
 // the heartbeat and the failure budget all unreachable code behind it.
 //
 // So this one stands up newAPIServer, the same constructor main uses, with
-// apiWriteTimeout unchanged, and holds a stream open past it.
+// httpserver.WriteTimeout unchanged, and holds a stream open past it.
 func TestAgentEventStream_SurvivesTheAPIServersWriteTimeout(t *testing.T) {
 	if testing.Short() {
 		// It has to outlast a real fifteen second deadline. There is no
 		// shorter version of this assertion: the number under test is the
 		// production one, and a scaled-down copy would be a test of a
 		// different server.
-		t.Skip("holds a connection past apiWriteTimeout")
+		t.Skip("holds a connection past httpserver.WriteTimeout")
 	}
 
 	repo := newStreamTestRepo()
@@ -45,7 +46,7 @@ func TestAgentEventStream_SurvivesTheAPIServersWriteTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	srv := newAPIServer(listener.Addr().String(), handler.InternalMux())
+	srv := httpserver.New(listener.Addr().String(), handler.InternalMux())
 	go func() { _ = srv.Serve(listener) }()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -65,7 +66,7 @@ func TestAgentEventStream_SurvivesTheAPIServersWriteTimeout(t *testing.T) {
 	}
 
 	reader := bufio.NewReader(resp.Body)
-	deadline := time.Now().Add(apiWriteTimeout + 10*time.Second)
+	deadline := time.Now().Add(httpserver.WriteTimeout + 10*time.Second)
 	firstStep := time.Time{}
 	lastStep := time.Time{}
 	seen := 0
@@ -92,7 +93,7 @@ func TestAgentEventStream_SurvivesTheAPIServersWriteTimeout(t *testing.T) {
 		if readErr != nil {
 			// The failure this test exists to catch. Before the per-frame
 			// deadline, this arrived as "unexpected EOF" a fraction over
-			// apiWriteTimeout, every time.
+			// httpserver.WriteTimeout, every time.
 			t.Fatalf("the stream was cut after %s with %v, having delivered %d step(s)",
 				time.Since(firstStep).Round(time.Second), readErr, seen)
 		}
@@ -107,15 +108,15 @@ func TestAgentEventStream_SurvivesTheAPIServersWriteTimeout(t *testing.T) {
 	}
 
 	unbroken := lastStep.Sub(firstStep)
-	if unbroken <= apiWriteTimeout {
+	if unbroken <= httpserver.WriteTimeout {
 		t.Fatalf("the stream carried steps for only %s, which does not clear the %s write timeout",
-			unbroken.Round(time.Second), apiWriteTimeout)
+			unbroken.Round(time.Second), httpserver.WriteTimeout)
 	}
 	if seen < 5 {
 		t.Fatalf("only %d step(s) arrived over %s", seen, unbroken.Round(time.Second))
 	}
 	t.Logf("longest unbroken stream: %s carrying %d steps, against a %s write timeout",
-		unbroken.Round(time.Second), seen, apiWriteTimeout)
+		unbroken.Round(time.Second), seen, httpserver.WriteTimeout)
 }
 
 // streamTestRepo is the smallest agenttask.Repository this test needs: one

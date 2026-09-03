@@ -44,7 +44,18 @@ const INSTRUCTIONS =
  * when it happens, and a mismatch shows up as a step that never appears rather
  * than as a silent pass.
  */
-const EXPECTED = [
+/*
+ * MODE=live drives streamproofserver, whose run is its own: a numbered step
+ * every two seconds for as long as it is told to. Its previews are matched
+ * here so the lateness table means something in that mode too, rather than
+ * reporting every step of the scripted run as never having appeared.
+ */
+const LIVE_EXPECTED = Array.from({ length: 12 }, (_, i) => ({
+	at: 2 * (2 * i + 2),
+	match: `step ${i + 1} finished`
+}));
+
+const SCRIPTED_EXPECTED = [
 	{ at: 3.0, match: 'list the workspace' },
 	{ at: 4.2, match: 'AGENTS.md' },
 	{ at: 5.4, match: 'write sixcap.txt' },
@@ -56,6 +67,8 @@ const EXPECTED = [
 	{ at: 9.0, match: 'cat sixcap.txt' },
 	{ at: 10.2, match: 'HIVE-COWORK-OK' }
 ];
+
+const EXPECTED = (process.env.MODE || 'stream') === 'live' ? LIVE_EXPECTED : SCRIPTED_EXPECTED;
 
 const mono0 = performance.now();
 const since = () => performance.now() - mono0;
@@ -157,9 +170,14 @@ say('submitted');
  */
 const timeline = [];
 const firstSeen = new Map();
-const shotsAt = [3.5, 5.0, 6.5, 8.0, 9.5, 11.0, 13.5];
+const shotsAt = (process.env.SHOTS_AT || '3.5,5.0,6.5,8.0,9.5,11.0,13.5')
+	.split(',')
+	.map((n) => Number(n.trim()));
 let nextShot = 0;
-const deadline = Date.now() + 20000;
+// Long enough to clear the fifteen second write timeout in MODE=live, where
+// the whole point is that the connection outlives it. A window shorter than
+// that number cannot tell a working stream from the bug.
+const deadline = Date.now() + Number(process.env.CAPTURE_WINDOW_MS || 20000);
 
 while (Date.now() < deadline) {
 	await page.waitForTimeout(500);

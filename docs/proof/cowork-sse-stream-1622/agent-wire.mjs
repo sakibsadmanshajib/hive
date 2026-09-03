@@ -33,10 +33,21 @@
  * TestHandler_EventStream_DeliversAStepWrittenWhileTheClientIsListening and
  * its neighbours.
  *
- * MODE=stream serves the stream route. MODE=poll answers it 404, which is what
- * a deployment without this change does, and sends the front end down its
- * fallback: the same steps, read on the three second timer. That is the
- * control, and the difference between the two captures is the whole claim.
+ * MODE=stream serves the stream route from this process. MODE=poll answers it
+ * 404, which is what a deployment without this change does, and sends the
+ * front end down its fallback: the same steps, read on the three second timer.
+ * That is the control, and the difference between the two captures is the
+ * whole claim.
+ *
+ * MODE=live is the third, and it is the one that answers the review finding
+ * the first two could not have caught. It proxies the stream to a real Go
+ * listener built by httpserver.New, the same constructor cmd/server calls,
+ * with its fifteen second WriteTimeout unchanged
+ * (apps/control-plane/cmd/streamproofserver). Frames rendered under it have
+ * crossed the socket that used to cut every stream at fifteen seconds. Neither
+ * of the other two modes could show that, because Node has no equivalent of
+ * Go's whole-response write deadline, so a capture against this file alone was
+ * measuring a harness that could not reproduce the defect.
  */
 
 import http from 'node:http';
@@ -45,6 +56,10 @@ import net from 'node:net';
 const PORT = Number(process.env.PORT || 3423);
 const UPSTREAM = new URL(process.env.OWUI_URL || 'http://127.0.0.1:3422');
 const MODE = process.env.MODE || 'stream';
+// MODE=live only: the real control-plane stream this proxies to. No credential
+// is set, because streamproofserver mounts the internal mux directly rather
+// than behind RequireInternalToken; it holds no data and listens on loopback.
+const LIVE_STREAM_URL = process.env.LIVE_STREAM_URL || '';
 
 const TASK_ID = '6567c0fb-e34a-4609-9fc7-bbea32fde598';
 const INSTRUCTIONS =
@@ -166,6 +181,70 @@ const serveStream = (req, res) => {
 	});
 };
 
+/**
+ * MODE=live: pipe the real control-plane stream through, byte for byte.
+ *
+ * Nothing here parses or reshapes a frame. The point of this mode is that what
+ * the browser renders is exactly what a Go listener under a real WriteTimeout
+ * wrote, so anything this process rewrote on the way would be the stand-in it
+ * exists to remove.
+ */
+const relayLiveStream = (req, res, url) => {
+	if (!LIVE_STREAM_URL) {
+		res.writeHead(500, { 'Content-Type': 'application/json' });
+		return res.end(JSON.stringify({ error: { message: 'LIVE_STREAM_URL is not set' } }));
+	}
+	const cursor = url.searchParams.get('after_seq') || '0';
+	const target = new URL(`${LIVE_STREAM_URL}?after_seq=${encodeURIComponent(cursor)}`);
+	say(`live stream opened at after_seq=${cursor} against ${target.origin}`);
+
+	const upstream = http.request(
+		{
+			host: target.hostname,
+			port: target.port,
+			method: 'GET',
+			path: target.pathname + target.search,
+			headers: { Accept: 'text/event-stream' }
+		},
+		(upstreamRes) => {
+			res.writeHead(upstreamRes.statusCode ?? 502, {
+				'Content-Type': upstreamRes.headers['content-type'] || 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				'X-Accel-Buffering': 'no'
+			});
+			let frames = 0;
+			const opened = Date.now();
+			upstreamRes.on('data', (chunk) => {
+				const text = chunk.toString();
+				for (const line of text.split('\n')) {
+					if (line.startsWith('event: ')) {
+						frames += 1;
+						say(`live frame ${frames}: ${line.slice(7)} (+${((Date.now() - opened) / 1000).toFixed(1)}s into the connection)`);
+					}
+				}
+				res.write(chunk);
+				res.flushHeaders?.();
+			});
+			upstreamRes.on('end', () => {
+				say(`live stream ended after ${((Date.now() - opened) / 1000).toFixed(1)}s carrying ${frames} frame(s)`);
+				res.end();
+			});
+			upstreamRes.on('error', (err) => {
+				// The failure this mode exists to be able to observe. A cut
+				// mid-response is what a WriteTimeout looks like from here.
+				say(`live stream ERRORED after ${((Date.now() - opened) / 1000).toFixed(1)}s: ${err.message}`);
+				res.end();
+			});
+		}
+	);
+	upstream.on('error', (err) => {
+		say(`live stream could not be opened: ${err.message}`);
+		res.writeHead(502).end();
+	});
+	req.on('close', () => upstream.destroy());
+	upstream.end();
+};
+
 const serveAgent = (req, res) => {
 	const url = new URL(req.url, 'http://localhost');
 	const path = url.pathname;
@@ -191,6 +270,9 @@ const serveAgent = (req, res) => {
 		return sendJSON(res, taskAt(0));
 	}
 	if (path.endsWith('/events/stream')) {
+		if (MODE === 'live') {
+			return relayLiveStream(req, res, url);
+		}
 		if (MODE !== 'stream') {
 			// The control. A deployment without this change has no such route,
 			// and the front end has to notice and fall back rather than

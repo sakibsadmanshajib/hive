@@ -41,6 +41,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/httpserver"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/licensing"
@@ -1815,7 +1816,7 @@ func main() {
 	}()
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	srv := newAPIServer(addr, router)
+	srv := httpserver.New(addr, router)
 
 	// Graceful shutdown.
 	quit := make(chan os.Signal, 1)
@@ -2160,34 +2161,5 @@ func dbReadyFunc(pool *pgxpool.Pool, resolveHealth *platformdb.ResolveHealth) fu
 			return false
 		}
 		return resolveHealth == nil || !resolveHealth.Degraded()
-	}
-}
-
-// apiWriteTimeout is the API server's write timeout, and it is a named
-// constant because a streaming handler has to know about it.
-//
-// Go applies WriteTimeout as ONE absolute deadline for the whole response
-// rather than per write, so any handler that holds a response open past this
-// is cut mid-body with "i/o timeout". The agent-task event stream
-// (apps/control-plane/internal/agenttask/stream.go) pushes the deadline out
-// per frame with an http.ResponseController to survive it. Anything else added
-// here that streams has to do the same, or it silently dies at this number.
-const apiWriteTimeout = 15 * time.Second
-
-// newAPIServer builds the public API server with its real timeouts.
-//
-// Extracted from main so a test can stand up the same server rather than a
-// copy of it. That distinction is not academic: the event stream's tests all
-// used httptest.NewServer, which sets no WriteTimeout at all, so every one of
-// them passed against a handler that was being cut at fifteen seconds in
-// production. A test that builds its own http.Server with its own literals
-// would have the same hole one copy-paste later.
-func newAPIServer(addr string, handler http.Handler) *http.Server {
-	return &http.Server{
-		Addr:         addr,
-		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: apiWriteTimeout,
-		IdleTimeout:  60 * time.Second,
 	}
 }

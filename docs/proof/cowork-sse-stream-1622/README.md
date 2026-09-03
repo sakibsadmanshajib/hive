@@ -51,6 +51,42 @@ in a recording. The recordings are in `video-stream/` and `video-poll/` in the
 capture output directory and are linked from the pull request rather than
 committed.
 
+## The third run: through control-plane's real listener
+
+Added after review found that neither run above touched the socket that had the
+defect. control-plane's API server sets a fifteen second `WriteTimeout`, Go
+applies that as one absolute deadline for the whole response, and every stream
+was being cut at fifteen seconds. Nothing here could have shown it: the handler
+tests used `httptest.NewServer`, which sets no timeouts, and both runs above
+talk to `agent-wire.mjs`, which is Node and has no equivalent of Go's
+whole-response write deadline. A run shorter than fifteen seconds, which both
+of the above are, cannot tell a working stream from that bug.
+
+So `MODE=live` proxies the browser's stream to
+`apps/control-plane/cmd/streamproofserver`, which builds `httpserver.New`, the
+same constructor `cmd/server` calls, with `httpserver.WriteTimeout` unchanged,
+around the same `agenttask.Handler`.
+
+| | |
+| --- | --- |
+| Longest unbroken connection | 51.1s |
+| Frames on that one connection | 36 |
+| Reconnects | none |
+| Frames after the 15s write timeout | 18, the last at +50.0s |
+| Step lines on screen at the end | 19, the newest still open |
+
+`wire-live.log` is one `live stream opened` line and no second one. It ends
+with `ERRORED after 51.1s: aborted`, which is the capture closing the browser
+at the end of its window, not the server hanging up. `live-03-run-t46p0s.png`
+is the transcript forty six seconds into that connection, carrying a fifteen
+step chain.
+
+The lateness table in `capture-live.log` is not meaningful for this run and is
+not quoted: the proof server's run starts when it boots and the capture's clock
+starts when the browser submits, so every step reads as negative. What this run
+measures is the connection, not the latency; the two runs above measure the
+latency.
+
 ## What was real and what was scripted
 
 Real: the built front end, the composer and its mode toggle, the submit path,
@@ -62,7 +98,11 @@ of `deploy/docker/Dockerfile.open-webui` from this branch.
 
 Scripted: what the sandbox did. There is no Apptainer on the machine this was
 captured on. The SIF is linux/amd64 and cannot be built or launched on WSL2, so
-a live run is impossible here and the run is played back by `agent-wire.mjs`.
+a live run is impossible here and the run is played back, by `agent-wire.mjs`
+in the first two runs and by `streamproofserver`'s in-memory event log in the
+third. In the third run the handler, the write deadline, the listener and the
+network are all real; only the repository is not, and that is not where the
+defect lived.
 
 `agent-wire.mjs` is a real HTTP server in front of the real chat container
 rather than a browser interception, and that is the difference from the sibling
@@ -130,7 +170,23 @@ APP_URL=http://127.0.0.1:3423 OUT_DIR=/tmp/proof-1622-sse LABEL=poll \
   PROOF_PASSWORD="$PW" node docs/proof/cowork-sse-stream-1622/capture.mjs
 ```
 
-`@playwright/test` has to resolve for that last line. It is declared by
+The third run needs the Go listener up first, and needs its run to still be in
+progress when the browser attaches, which takes about twenty five seconds:
+
+```bash
+docker run -d --name cp-streamproof -p 127.0.0.1:8099:8099 \
+  -v "$PWD:/workspace" -w /workspace <toolchain image> \
+  "go run ./apps/control-plane/cmd/streamproofserver -addr 0.0.0.0:8099 -step-every 2s -steps 80"
+# It prints the stream path as JSON on stdout.
+MODE=live PORT=3423 OWUI_URL=http://127.0.0.1:3422 \
+  LIVE_STREAM_URL="http://127.0.0.1:8099<that path>" \
+  node docs/proof/cowork-sse-stream-1622/agent-wire.mjs &
+APP_URL=http://127.0.0.1:3423 OUT_DIR=/tmp/proof-live LABEL=live MODE=live \
+  CAPTURE_WINDOW_MS=50000 SHOTS_AT="5,10,16,22,30,38,46" \
+  PROOF_PASSWORD="$PW" node docs/proof/cowork-sse-stream-1622/capture.mjs
+```
+
+`@playwright/test` has to resolve for the capture. It is declared by
 `apps/web-console`, and Node resolves a bare specifier from the importing
 file's directory upwards, so running from that directory is not enough: the
 package has to be reachable from `docs/proof/` upwards, which on this machine
