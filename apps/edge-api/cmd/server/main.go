@@ -940,12 +940,6 @@ func registerMediaFileBatchRoutes(mux httpMux, imagesHandler, audioHandler, file
 	mux.Handle("/v1/batches/", batchesHandler)
 }
 
-// registerAudioVoicesRoute attaches GET /v1/audio/voices. Extracted (issue
-// #1079 shipped this as a bare inline mux.Handle call, which is exactly what
-// left it with no support-matrix.json entry) so route_matrix_guard_test.go
-// can register it in isolation and exercise assertMatrixCoverage against it.
-// See the call site in main() for why this route deliberately sits outside
-// every auth gate.
 // audioVoicesPath is the voice roster route. One constant, for the same reason
 // webToolsListPath below is one: it is named at registration and again in
 // authSelectorMiddleware, which exempts exactly this path and method from
@@ -954,6 +948,12 @@ func registerMediaFileBatchRoutes(mux httpMux, imagesHandler, audioHandler, file
 // unreachable. That is precisely what issue #1377 reported.
 const audioVoicesPath = "/v1/audio/voices"
 
+// registerAudioVoicesRoute attaches GET /v1/audio/voices. Extracted (issue
+// #1079 shipped this as a bare inline mux.Handle call, which is exactly what
+// left it with no support-matrix.json entry) so route_matrix_guard_test.go
+// can register it in isolation and exercise assertMatrixCoverage against it.
+// See the call site in main() for why this route deliberately sits outside
+// every auth gate.
 func registerAudioVoicesRoute(mux httpMux) {
 	mux.Handle(audioVoicesPath, audio.VoicesHandler())
 }

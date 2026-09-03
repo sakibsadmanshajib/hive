@@ -7,32 +7,19 @@ import (
 	"testing"
 )
 
-// TestVoiceRosterIsReachableWithoutACredential pins the second /v1/ route that
-// carries no principal (issue #1377).
+// exerciseAuthSelector drives the real authSelectorMiddleware construction,
+// the same one main() performs, with a JWT stand-in that always 401s.
 //
-// registerAudioVoicesRoute attaches audio.VoicesHandler() straight onto the
-// mux with no authorizer and no tenant voice gate, deliberately: Open WebUI's
-// voice dropdowns fetch this with no Authorization header at all, and gating
-// it silently reinstates the hardcoded alloy-style fallback list that issue
-// #996 exists to prevent.
+// One helper rather than a closure pair rebuilt at every call site: the table
+// below and webtools_list_auth_test.go were each carrying their own copy, and
+// several copies of a middleware harness is several places for the exemption's
+// meaning to drift.
 //
-// It was gated anyway, one layer out. authSelectorMiddleware intercepts every
-// path under /v1/, and auth.Selector sends anything that is not a "Bearer
-// hk_..." request, a request with no Authorization header included, to the JWT
-// middleware, which answers 401 before the mux is ever reached. So the
-// unauthenticated registration could not take effect while JWT auth was
-// configured, which it is on the box:
-//
-//	$ curl -s http://localhost:8080/v1/audio/voices
-//	{"error":{"code":"UNAUTHENTICATED","message":"missing bearer",...}}
-//
-// This drives the real authSelectorMiddleware construction, the same one
-// main() performs, with a jwtMW stand-in that always 401s, so reaching the mux
-// can only happen through the exemption.
-func TestVoiceRosterIsReachableWithoutACredential(t *testing.T) {
-	t.Setenv("OWUI_SHIM_KEY", "")
-
-	var jwtInvoked, reachedMux bool
+// The JWT stand-in is what makes the result readable. Reaching the mux can only
+// happen through an exemption, because every other path is answered by the
+// stand-in before the mux is consulted, so reachedMux is a direct statement
+// about the exemption rather than about any handler behind it.
+func exerciseAuthSelector(method, path string) (jwtInvoked, reachedMux bool) {
 	jwtMW := func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			jwtInvoked = true
@@ -43,129 +30,118 @@ func TestVoiceRosterIsReachableWithoutACredential(t *testing.T) {
 		reachedMux = true
 		w.WriteHeader(http.StatusOK)
 	})
-
-	handler := authSelectorMiddleware(jwtMW, next)
-
-	req := httptest.NewRequest(http.MethodGet, audioVoicesPath, nil)
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
-
-	if jwtInvoked {
-		t.Errorf("the voice roster must not be sent to the JWT path, where a missing bearer is a 401")
-	}
-	if !reachedMux {
-		t.Fatalf("GET %s with no credential did not reach the mux: status %d", audioVoicesPath, rr.Code)
-	}
+	req := httptest.NewRequest(method, path, nil)
+	authSelectorMiddleware(jwtMW, next).ServeHTTP(httptest.NewRecorder(), req)
+	return jwtInvoked, reachedMux
 }
 
-// TestOnlyTheTwoPublicReadsAreExemptFromAuth is the other half, and the half
-// issue #1377 asks for by name: proof that no other /v1/ path gained an
-// exemption alongside the voice roster.
+// TestAuthSelectorExemptions is the whole exemption set, in one table.
 //
-// The neighbouring audio routes are the ones that matter. All three spend
-// credits, all three sit one path segment away from the roster, and all three
-// keep their authentication. So does a non-GET to the roster path itself: the
-// exemption names one method, so an uncredentialed non-GET is refused at the
-// JWT path before the handler's own 405 ever applies.
-func TestOnlyTheTwoPublicReadsAreExemptFromAuth(t *testing.T) {
+// Two routes under /v1/ carry no principal, and both are registered with no
+// authorizer on purpose. GET /v1/tools is the descriptor list, which the chat
+// shim reads with no credential (issue #776, PR #1730). GET /v1/audio/voices is
+// the voice roster, which Open WebUI's voice dropdowns fetch with no
+// Authorization header at all; a 401 there sends get_available_voices to its
+// hardcoded fallback list, which is the shape issue #996 was closed to prevent.
+//
+// Both registrations are inert without an exemption here. authSelectorMiddleware
+// intercepts every path under /v1/, and auth.Selector routes to the API-key
+// handler only for a "Bearer hk_..." credential, sending everything else,
+// including a request with no Authorization header at all, to the JWT
+// middleware, which answers 401 before the mux is ever reached. That is what
+// issue #1377 reported, from a plain curl on the box:
+//
+//	$ curl -s http://localhost:8080/v1/audio/voices
+//	{"error":{"code":"UNAUTHENTICATED","message":"missing bearer",...}}
+//
+// One table for both routes, rather than a completeness claim per route file.
+// Two tests that each name themselves the complete exemption set cannot both
+// stay true, and the one that goes stale goes stale silently, in the direction
+// that still passes.
+func TestAuthSelectorExemptions(t *testing.T) {
 	t.Setenv("OWUI_SHIM_KEY", "")
 
-	exempt := []struct {
+	cases := []struct {
+		name   string
 		method string
 		path   string
+		exempt bool
 	}{
-		{http.MethodGet, audioVoicesPath},
-		{http.MethodGet, webToolsListPath},
+		{"the voice roster, unauthenticated", http.MethodGet, audioVoicesPath, true},
+		{"the descriptor list, unauthenticated", http.MethodGet, webToolsListPath, true},
+
+		// The neighbours that spend credits. All three audio routes sit one
+		// path segment from the roster and all three keep their authentication.
+		{"speech", http.MethodPost, "/v1/audio/speech", false},
+		{"transcriptions", http.MethodPost, "/v1/audio/transcriptions", false},
+		{"translations", http.MethodPost, "/v1/audio/translations", false},
+		{"web search", http.MethodPost, "/v1/tools/web_search", false},
+		{"web fetch", http.MethodPost, "/v1/tools/web_fetch", false},
+		{"models", http.MethodGet, "/v1/models", false},
+		{"chat completions", http.MethodPost, "/v1/chat/completions", false},
+
+		// The exemption names one method. An uncredentialed non-GET is refused
+		// at the JWT path, before the handler's own 405, which answers a
+		// credentialed caller.
+		{"POST to the roster", http.MethodPost, audioVoicesPath, false},
+		{"DELETE the roster", http.MethodDelete, audioVoicesPath, false},
+		{"HEAD the roster", http.MethodHead, audioVoicesPath, false},
+		{"POST to the descriptor list", http.MethodPost, webToolsListPath, false},
+		{"DELETE the descriptor list", http.MethodDelete, webToolsListPath, false},
+
+		// The shapes an exemption written with a prefix match or a cleaned path
+		// would let through. Each is a different string from the constant, so
+		// each stays gated; naming them is what turns a later rewrite to prefix
+		// matching red instead of letting it quietly open a paid route.
+		{"traversal onto speech", http.MethodGet, "/v1/audio/voices/../speech", false},
+		{"trailing slash on the roster", http.MethodGet, audioVoicesPath + "/", false},
+		{"suffixed roster", http.MethodGet, audioVoicesPath + "x", false},
+		{"doubled slash", http.MethodGet, "/v1//audio/voices", false},
+		{"case variant", http.MethodGet, "/v1/audio/Voices", false},
+		{"the audio prefix itself", http.MethodGet, "/v1/audio", false},
+		{"the audio prefix with a slash", http.MethodGet, "/v1/audio/", false},
+		{"trailing slash on the descriptor list", http.MethodGet, webToolsListPath + "/", false},
+		{"suffixed descriptor list", http.MethodGet, webToolsListPath + "x", false},
 	}
 
-	gated := []struct {
-		method string
-		path   string
-	}{
-		{http.MethodPost, "/v1/audio/speech"},
-		{http.MethodPost, "/v1/audio/transcriptions"},
-		{http.MethodPost, "/v1/audio/translations"},
-		{http.MethodPost, audioVoicesPath},
-		{http.MethodDelete, audioVoicesPath},
-		{http.MethodHead, audioVoicesPath},
-		{http.MethodGet, audioVoicesPath + "/"},
-		{http.MethodGet, audioVoicesPath + "x"},
-		{http.MethodGet, "/v1/audio"},
-		{http.MethodGet, "/v1/audio/"},
-		{http.MethodPost, "/v1/tools/web_search"},
-		{http.MethodPost, "/v1/tools/web_fetch"},
-		{http.MethodGet, "/v1/models"},
-		{http.MethodPost, "/v1/chat/completions"},
-		// The shapes an exemption written with HasPrefix or with a cleaned
-		// path would let through. The comparison is equality on the decoded
-		// r.URL.Path, so each of these is a different string and stays gated;
-		// naming them here is what makes a later rewrite to prefix matching
-		// turn this red instead of silently opening a paid route.
-		{http.MethodGet, "/v1/audio/voices/../speech"},
-		{http.MethodGet, "/v1//audio/voices"},
-		{http.MethodGet, "/v1/audio/Voices"},
-	}
-
-	for _, tc := range exempt {
-		var jwtInvoked, reachedMux bool
-		jwtMW := func(http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				jwtInvoked = true
-				w.WriteHeader(http.StatusUnauthorized)
-			})
-		}
-		next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			reachedMux = true
-			w.WriteHeader(http.StatusOK)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			jwtInvoked, reachedMux := exerciseAuthSelector(tc.method, tc.path)
+			if tc.exempt {
+				if jwtInvoked {
+					t.Errorf("%s %s was sent to the JWT path, where a missing bearer is a 401", tc.method, tc.path)
+				}
+				if !reachedMux {
+					t.Errorf("%s %s is meant to be exempt but did not reach the mux", tc.method, tc.path)
+				}
+				return
+			}
+			if reachedMux {
+				t.Errorf("%s %s reached the mux with no credential; the exemption is wider than it should be", tc.method, tc.path)
+			}
+			if !jwtInvoked {
+				t.Errorf("%s %s with no credential was not sent to the JWT path", tc.method, tc.path)
+			}
 		})
-		req := httptest.NewRequest(tc.method, tc.path, nil)
-		rr := httptest.NewRecorder()
-		authSelectorMiddleware(jwtMW, next).ServeHTTP(rr, req)
-
-		if jwtInvoked || !reachedMux {
-			t.Errorf("%s %s is meant to be exempt but did not reach the mux (jwt invoked: %v)", tc.method, tc.path, jwtInvoked)
-		}
-	}
-
-	for _, tc := range gated {
-		var jwtInvoked, reachedMux bool
-		jwtMW := func(http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				jwtInvoked = true
-				w.WriteHeader(http.StatusUnauthorized)
-			})
-		}
-		next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			reachedMux = true
-			w.WriteHeader(http.StatusOK)
-		})
-		req := httptest.NewRequest(tc.method, tc.path, nil)
-		rr := httptest.NewRecorder()
-		authSelectorMiddleware(jwtMW, next).ServeHTTP(rr, req)
-
-		if reachedMux {
-			t.Errorf("%s %s reached the mux with no credential; the exemption is wider than it should be", tc.method, tc.path)
-		}
-		if !jwtInvoked {
-			t.Errorf("%s %s with no credential was not sent to the JWT path", tc.method, tc.path)
-		}
 	}
 }
 
 // TestVoiceRosterServesTheRealRosterWithNoCredential joins the two halves that
 // each looked correct on their own while the route was unreachable.
 //
-// The exemption test above proves the middleware lets the request past. The
-// route-matrix tests prove the path is registered. Neither notices if the
-// handler behind it later grows an authorizer, or if the exemption and the
-// registration stop naming the same path, and #1377 is exactly what that gap
-// looks like from outside: a route registered "without the authorizer", a
-// middleware that 401s it anyway, and no test anywhere that put the two
-// together and read the body.
+// The table above proves the middleware lets the request past. The route-matrix
+// tests prove the path is registered. Neither notices if the handler behind it
+// later grows an authorizer, or if the exemption and the registration stop
+// naming the same path, and issue #1377 is exactly the shape of a defect that
+// hides between the two. So this drives the real registerAudioVoicesRoute onto
+// a real ServeMux, wraps it in the real authSelectorMiddleware, sends the
+// request Open WebUI sends, and reads the body.
 //
-// So this one drives the real registerAudioVoicesRoute onto a real ServeMux,
-// wraps it in the real authSelectorMiddleware, sends the request Open WebUI
-// sends, and asserts a roster comes back.
+// Reachability and shape only. What the roster actually contains is pinned in
+// internal/audio/handler_voices_test.go, which is where a change to the voices
+// themselves belongs, and asserting it again here would be a second copy to
+// keep in step. So this is deliberately not a guard against the wrong roster: a
+// hardcoded fallback list would satisfy it. It guards against no roster.
 func TestVoiceRosterServesTheRealRosterWithNoCredential(t *testing.T) {
 	t.Setenv("OWUI_SHIM_KEY", "")
 
@@ -188,15 +164,14 @@ func TestVoiceRosterServesTheRealRosterWithNoCredential(t *testing.T) {
 
 	var body struct {
 		Voices []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID string `json:"id"`
 		} `json:"voices"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 		t.Fatalf("voice roster is not the JSON the dropdown parses: %v (body %s)", err, rr.Body.String())
 	}
 	if len(body.Voices) == 0 {
-		t.Fatalf("voice roster came back empty, which sends the dropdown to its hardcoded fallback (issue #996): %s", rr.Body.String())
+		t.Fatalf("voice roster came back empty, so the dropdown has nothing to offer: %s", rr.Body.String())
 	}
 	for _, v := range body.Voices {
 		if v.ID == "" {

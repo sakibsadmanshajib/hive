@@ -2,13 +2,13 @@ package main
 
 import (
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
-// TestDescriptorListIsReachableWithoutACredential pins the one /v1/ route that
-// carries no principal.
+// TestDescriptorListIsReachableWithoutACredential pins the descriptor list,
+// one of the two /v1/ routes that carry no principal. The other is the voice
+// roster (issue #1377); TestAuthSelectorExemptions in audio_voices_auth_test.go
+// carries both, and every negative case for both.
 //
 // GET /v1/tools serves a compiled-in constant and the chat shim reads it with
 // no Authorization header on purpose (deploy/docker/owui-patches/
@@ -25,72 +25,24 @@ import (
 func TestDescriptorListIsReachableWithoutACredential(t *testing.T) {
 	t.Setenv("OWUI_SHIM_KEY", "")
 
-	var jwtInvoked, reachedMux bool
-	jwtMW := func(http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			jwtInvoked = true
-			w.WriteHeader(http.StatusUnauthorized)
-		})
-	}
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		reachedMux = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	handler := authSelectorMiddleware(jwtMW, next)
-
-	req := httptest.NewRequest(http.MethodGet, webToolsListPath, nil)
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
+	jwtInvoked, reachedMux := exerciseAuthSelector(http.MethodGet, webToolsListPath)
 
 	if jwtInvoked {
 		t.Errorf("the descriptor list must not be sent to the JWT path, where a missing bearer is a 401")
 	}
 	if !reachedMux {
-		t.Fatalf("GET %s with no credential did not reach the mux: status %d", webToolsListPath, rr.Code)
+		t.Fatalf("GET %s with no credential did not reach the mux", webToolsListPath)
 	}
 }
 
-// TestOnlyTheDescriptorListIsExemptFromAuth is the other half. The exemption
-// is one path and one method; the two routes that spend credits, a non-GET to
-// the list path, and every neighbouring path keep their authentication.
-func TestOnlyTheDescriptorListIsExemptFromAuth(t *testing.T) {
-	t.Setenv("OWUI_SHIM_KEY", "")
-
-	cases := []struct {
-		method string
-		path   string
-	}{
-		{http.MethodPost, "/v1/tools/web_search"},
-		{http.MethodPost, "/v1/tools/web_fetch"},
-		{http.MethodPost, webToolsListPath},
-		{http.MethodDelete, webToolsListPath},
-		{http.MethodGet, webToolsListPath + "/"},
-		{http.MethodGet, webToolsListPath + "x"},
-		{http.MethodGet, "/v1/models"},
-	}
-
-	for _, tc := range cases {
-		var jwtInvoked, reachedMux bool
-		jwtMW := func(http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				jwtInvoked = true
-				w.WriteHeader(http.StatusUnauthorized)
-			})
-		}
-		next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			reachedMux = true
-			w.WriteHeader(http.StatusOK)
-		})
-
-		handler := authSelectorMiddleware(jwtMW, next)
-		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}"))
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-
-		if !jwtInvoked || reachedMux {
-			t.Errorf("%s %s reached the mux with no credential: it must stay authenticated (jwtInvoked=%v reachedMux=%v)",
-				tc.method, tc.path, jwtInvoked, reachedMux)
-		}
-	}
-}
+// The other half, "and nothing else is exempt", used to live here as
+// TestOnlyTheDescriptorListIsExemptFromAuth. It moved to
+// TestAuthSelectorExemptions in audio_voices_auth_test.go when issue #1377
+// added the voice roster as a second exempt route, and it took the web tools
+// negative cases with it.
+//
+// It moved rather than gaining a neighbour because the claim is about the
+// middleware, not about either route: a test named for one route that asserts
+// the complete exemption set becomes quietly false the moment a second route
+// is exempted, and false in the direction that still passes. One table now
+// carries both routes and every negative case for both.
