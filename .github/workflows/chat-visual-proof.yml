@@ -271,6 +271,80 @@ jobs:
         with:
           ref: ${{ steps.target.outputs.ref }}
 
+      # Two trees, deliberately: issue #1758.
+      #
+      # APPLICATION comes from the target pull request, which is what the
+      # checkout above put in the workspace. That is everything this capture
+      # exists to prove: the compose files and Dockerfiles under
+      # deploy/, the Go services, the forked Open WebUI under vendor/,
+      # apps/web-console including the Playwright driver under e2e/phase-19/,
+      # the schema under supabase/migrations/ with the
+      # scripts/migration-baseline.conf that indexes it, and
+      # tools/lint-no-token-in-proof-captures.mjs. The Playwright driver is
+      # the one that reads like harness and is not: it selects against the
+      # target's own DOM, so a pull request that changes a selector and its
+      # driver together has to be proven with its own driver, never main's.
+      #
+      # HARNESS is replaced below, from the same ref this workflow's YAML was
+      # itself read from. These are the paths the steps invoke by name, plus
+      # the ones a script on this list reads from the tree and is coupled to,
+      # so their command lines and their inputs live in this file's world and
+      # move with it. Before this step existed they came from the target
+      # instead, and a dispatch at any pull request branched before a harness
+      # change died on the argument: run 33690589909 exited 2 on `unknown
+      # argument: --oauth-server` nine seconds into chat-visual-proof.yml,
+      # having proven nothing.
+      #
+      # github.sha is the head of the ref this run was dispatched at, which is
+      # the default branch unless the dispatch names another with --ref, and
+      # the pull request's own merge commit on a pull_request event. So a
+      # dispatch at a stale pull request runs current harness, and a pull
+      # request that deliberately edits a harness script is still proven
+      # against its own version of it. The --ref arm is also what let this
+      # change be proven before it merged, by dispatching its own branch's
+      # YAML at a deliberately stale pull request.
+      #
+      # Four of the seven entries below are in the paths: filter above.
+      # A pull request that edits only one of the other three, say
+      # scripts/post-pr-visual-proof.sh, gets no automatic run of this job, so
+      # its harness pinning stays untested until someone dispatches. Left that
+      # way deliberately: this job costs eleven minutes and a real provider
+      # turn, and widening the trigger to a script ci.yml also uses would
+      # spend both on changes this capture cannot go red on.
+      #
+      # Which side a new path lands on. A script this file calls by name is
+      # harness. So is a file a listed script reads and is coupled to, which
+      # is how the health probe and the systemd templates below got here: the
+      # installer renders them, so main's installer against the target's
+      # templates is this same defect one hop down. Data those scripts read
+      # and are not coupled to is not harness: they resolve it relative to
+      # their own location, which is the workspace, so supabase/migrations/
+      # and scripts/migration-baseline.conf stay the target's.
+      # tools/lint-visual-proof-harness-split.mjs enforces both halves and
+      # carries the reason for every path deliberately left on the target's
+      # side, scripts/apply-migrations.sh among them.
+      - name: Take the harness scripts from this workflow's own ref
+        env:
+          HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          harness=(
+            scripts/ci-supabase-stack.sh
+            scripts/ci-throwaway-db.sh
+            scripts/generate-enterprise-jwt-keys.py
+            scripts/register-owui-oauth-client.py
+            scripts/seed-owui-e2e-user.py
+            scripts/redact-log-credentials.py
+            scripts/post-pr-visual-proof.sh
+          )
+          git fetch --no-tags --depth=1 origin "$HARNESS_SHA"
+          # Loud on purpose. A path renamed on the harness ref fails here
+          # rather than leaving the target's stale copy quietly in place.
+          git checkout FETCH_HEAD -- "${harness[@]}"
+          echo "harness taken from $HARNESS_SHA. Replaced, against the target's own copies:"
+          git diff --cached --stat HEAD -- "${harness[@]}"
+          echo "(no file listed above means the target already carried this harness)"
+
       - name: Reclaim disk space
         # This job holds five container images including a Next.js production
         # build and a from-source Open WebUI frontend build, two node_modules
