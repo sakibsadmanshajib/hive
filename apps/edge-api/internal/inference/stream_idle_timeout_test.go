@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -143,6 +144,185 @@ func TestExecuteStreaming_StalledUpstream_EndsTheRelayAndSettles(t *testing.T) {
 		t.Fatalf("expected FinalizeReservation after the stall; calls seen: %+v", rec.calls)
 	}
 	assertPricedCapture(t, fbody, mockReservationHold)
+}
+
+// TestLiteLLMStreamingDispatchInstallsTheWatchdogOnTheBody pins WHERE the
+// byte-level bound lives. Installed at the relay instead, it left two earlier
+// readers of the same body unbounded: dispatchWithRetry's peekBody, which
+// classifies a 404 or an allowance wall, and the relay's own non-2xx
+// io.ReadAll. A 500 followed by silence hung in that gap forever (review
+// finding on PR #1762). Installing it on the response body at dispatch covers
+// every read from the moment the response exists.
+func TestLiteLLMStreamingDispatchInstallsTheWatchdogOnTheBody(t *testing.T) {
+	originalIdle := streamIdleTimeout
+	streamIdleTimeout = 200 * time.Millisecond
+	defer func() { streamIdleTimeout = originalIdle }()
+
+	// A 500 whose body then never arrives. This is the exact shape that hung:
+	// the status is not 2xx, so the relay reads the body with io.ReadAll to
+	// build the provider-blind error, and dispatchWithRetry's peekBody has
+	// already read it once to classify. Both happen before the relay loop.
+	stop := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.(http.Flusher).Flush()
+		select {
+		case <-stop:
+		case <-r.Context().Done():
+		}
+	}))
+	defer func() {
+		close(stop)
+		srv.Close()
+	}()
+
+	client := NewLiteLLMClient(srv.URL, "test-key")
+
+	resp, err := client.ChatCompletionStream(context.Background(), "route", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("streaming dispatch: %v", err)
+	}
+	defer resp.Body.Close()
+	if _, ok := resp.Body.(*idleTimeoutReader); !ok {
+		t.Errorf("streaming response body = %T, want the idle watchdog", resp.Body)
+	}
+
+	read := make(chan struct{})
+	go func() {
+		defer close(read)
+		_, _ = io.ReadAll(resp.Body)
+	}()
+	select {
+	case <-read:
+	case <-time.After(10 * time.Second):
+		t.Fatal("reading a non-2xx body from a silent upstream never returned: installed at the relay instead of at dispatch, the watchdog does not cover this read or peekBody's (#928 defect 3, PR #1762 review)")
+	}
+
+	// The buffered client keeps its own total timeout and needs no watchdog;
+	// two bounds on one read is one more than anything reads.
+	buffered := NewLiteLLMClient("http://127.0.0.1:1", "test-key")
+	if buffered.httpClient.Timeout <= 0 {
+		t.Error("buffered client has no total timeout: nothing else bounds a buffered dispatch")
+	}
+}
+
+// TestExecuteStreaming_KeepaliveOnlyUpstream_EndsTheRelayAndSettles is the
+// second stall bound, and the one a byte-level watchdog cannot provide.
+//
+// A provider that sends an SSE comment every so often and never sends data
+// resets any byte watchdog forever. Measured on the first version of this PR:
+// forty ": ping" reads over two seconds against a 200ms budget, and the
+// watchdog never fired (review finding). The consequence is not a slow request:
+// the hold stays open until the reservation reaper reclaims it an hour later,
+// and the reaper then releases a hold whose request is still live, leaving a
+// served turn with no reservation behind it.
+func TestExecuteStreaming_KeepaliveOnlyUpstream_EndsTheRelayAndSettles(t *testing.T) {
+	originalIdle := streamIdleTimeout
+	streamIdleTimeout = 200 * time.Millisecond
+	defer func() { streamIdleTimeout = originalIdle }()
+
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+
+	stop := make(chan struct{})
+	litellmSrv := keepaliveOnlySSEServer(stop, 50*time.Millisecond)
+	defer func() {
+		close(stop)
+		litellmSrv.Close()
+	}()
+
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = orch.executeStreaming(context.Background(), w, req, EndpointChatCompletions, []byte(`{}`), "gpt-4o", "gpt-4o",
+			NeedFlags{NeedChatCompletions: true, NeedStreaming: true}, mockReservationHold, false, nil,
+			orch.litellm.ChatCompletionStream)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the relay never ended: a provider that sends only keepalives holds the reservation until the reaper, which then releases a hold whose request is still live (#928 defect 3)")
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "partial answer") {
+		t.Errorf("the content delivered before the keepalives must still reach the client; body:\n%s", body)
+	}
+	if !strings.Contains(body, `"stream_interrupted"`) {
+		t.Errorf("expected the abort branch's provider-blind error frame once the data deadline passed; body:\n%s", body)
+	}
+
+	if rec.has("/internal/accounting/reservations/release") {
+		t.Error("content was delivered before the stall: releasing in full would serve it free (D-034)")
+	}
+	fbody, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("expected FinalizeReservation after the data deadline; calls seen: %+v", rec.calls)
+	}
+	assertPricedCapture(t, fbody, mockReservationHold)
+}
+
+// keepaliveOnlySSEServer streams one ordinary content chunk and then nothing but
+// SSE comments: bytes keep arriving, data never does.
+func keepaliveOnlySSEServer(stop <-chan struct{}, interval time.Duration) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		fmt.Fprintln(w, buildChunkLine("chunk-1", "route", "partial answer before the provider goes quiet", nil))
+		flusher.Flush()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-r.Context().Done():
+				return
+			case <-time.After(interval):
+			}
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
+		}
+	}))
+}
+
+// TestStreamDataDeadline_KeepalivesDoNotRenewTheBudget is the unit-level twin:
+// an SSE comment and a well-formed but empty chunk are both keepalives, and
+// neither renews the budget. The second half matters as much as the first,
+// because a provider whose keepalive is an empty chunk rather than a comment is
+// the same starvation.
+func TestStreamDataDeadline_KeepalivesDoNotRenewTheBudget(t *testing.T) {
+	empty := ChatCompletionChunk{Choices: []ChunkChoice{{Index: 0}}}
+	if chunkCarriesData(empty) {
+		t.Error("a chunk with an empty delta and no finish reason carries no data: counting it renews the budget on a keepalive")
+	}
+	blank := ""
+	if chunkCarriesData(ChatCompletionChunk{Choices: []ChunkChoice{{Delta: ChunkDelta{Content: &blank}}}}) {
+		t.Error("an empty content delta carries no data")
+	}
+
+	text := "hello"
+	for name, chunk := range map[string]ChatCompletionChunk{
+		"content":     {Choices: []ChunkChoice{{Delta: ChunkDelta{Content: &text}}}},
+		"refusal":     {Choices: []ChunkChoice{{Delta: ChunkDelta{Refusal: &text}}}},
+		"tool call":   {Choices: []ChunkChoice{{Delta: ChunkDelta{ToolCalls: json.RawMessage(`[{"index":0}]`)}}}},
+		"finish":      {Choices: []ChunkChoice{{FinishReason: &text}}},
+		"usage block": {Usage: &UsageResponse{PromptTokens: 1}},
+	} {
+		if !chunkCarriesData(chunk) {
+			t.Errorf("a %s frame carries data and must renew the budget", name)
+		}
+	}
 }
 
 // TestIdleTimeoutReader_ClosesAStalledBody is the watchdog on its own: a read

@@ -35,10 +35,14 @@ import (
 //  1. streamDialTimeout bounds reaching the proxy at all, and
 //     streamResponseHeaderTimeout bounds an upstream that accepts a connection
 //     and then never answers. Both are per-attempt, not per-request-lifetime.
-//  2. streamIdleTimeout (stream_idle.go) bounds SILENCE once the body is open:
-//     the relay reads through a watchdog that closes the body when no byte
-//     arrives for that long, which surfaces as a scanner error and runs the
-//     relay's existing abort path -- error frame, log line, settlement.
+//  2. streamIdleTimeout (stream_idle.go) bounds SILENCE once the body is open.
+//     The watchdog is installed HERE, on the response body, rather than at the
+//     relay, because the relay is not the first thing to read that body:
+//     dispatchWithRetry's peekBody and the relay's own non-2xx io.ReadAll both
+//     read it first, and a 500 followed by silence hung in that gap when the
+//     watchdog sat at the relay (review finding). A second, narrower bound in
+//     the relay covers a provider that sends keepalive comments and no data;
+//     see streamDataDeadlineExceeded.
 //  3. The caller's request context. A client disconnect cancels it and tears
 //     down the in-flight body read.
 //  4. Control-plane's reservation TTL reaper, the backstop for a hold whose
@@ -109,7 +113,7 @@ func (c *LiteLLMClient) ChatCompletion(ctx context.Context, litellmModel string,
 // relay must use this rather than ChatCompletion, or a long answer is cut at
 // bufferedRequestTimeout (issue #928 defect 3).
 func (c *LiteLLMClient) ChatCompletionStream(ctx context.Context, litellmModel string, body []byte) (*http.Response, error) {
-	return c.dispatchWith(ctx, c.streamClient, "/chat/completions", litellmModel, body)
+	return c.dispatchWith(ctx, c.streamClient, "/chat/completions", litellmModel, body, streamIdleTimeout)
 }
 
 // Completion dispatches a legacy completion request to LiteLLM.
@@ -119,7 +123,7 @@ func (c *LiteLLMClient) Completion(ctx context.Context, litellmModel string, bod
 
 // CompletionStream is Completion's streaming twin; see ChatCompletionStream.
 func (c *LiteLLMClient) CompletionStream(ctx context.Context, litellmModel string, body []byte) (*http.Response, error) {
-	return c.dispatchWith(ctx, c.streamClient, "/completions", litellmModel, body)
+	return c.dispatchWith(ctx, c.streamClient, "/completions", litellmModel, body, streamIdleTimeout)
 }
 
 // Embeddings dispatches an embeddings request to LiteLLM.
@@ -187,10 +191,15 @@ func (c *LiteLLMClient) TranslationRaw(ctx context.Context, body io.Reader, cont
 }
 
 func (c *LiteLLMClient) dispatch(ctx context.Context, path, litellmModel string, body []byte) (*http.Response, error) {
-	return c.dispatchWith(ctx, c.httpClient, path, litellmModel, body)
+	// Zero: the buffered client's own total timeout is the bound there.
+	return c.dispatchWith(ctx, c.httpClient, path, litellmModel, body, 0)
 }
 
-func (c *LiteLLMClient) dispatchWith(ctx context.Context, client *http.Client, path, litellmModel string, body []byte) (*http.Response, error) {
+// dispatchWith sends the request on the given client. A non-zero idleTimeout
+// wraps the response body in the byte-level watchdog, so every read of it --
+// dispatchWithRetry's classification peek, a non-2xx error read, and the relay
+// loop alike -- is bounded from the moment the response exists.
+func (c *LiteLLMClient) dispatchWith(ctx context.Context, client *http.Client, path, litellmModel string, body []byte, idleTimeout time.Duration) (*http.Response, error) {
 	rewritten := rewriteModel(body, litellmModel)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -204,6 +213,13 @@ func (c *LiteLLMClient) dispatchWith(ctx context.Context, client *http.Client, p
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("litellm: request failed: %w", err)
+	}
+	if idleTimeout > 0 && resp.Body != nil {
+		// The watchdog IS the body from here on, and closing it stops the
+		// watchdog, so every existing `defer resp.Body.Close()` and
+		// drainAndClose already disarms it. Nothing downstream has to know.
+		resp.Body = newIdleTimeoutReader(resp.Body, idleTimeout,
+			fmt.Sprintf("path=%s model=%s", path, litellmModel))
 	}
 
 	return resp, nil

@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -66,6 +67,48 @@ func unparseableFrameSSEServer() *httptest.Server {
 	}))
 }
 
+// toolCallOnlyFunctionName and toolCallOnlyArguments are the model-generated
+// text the tool-call fixtures below produce: the two things a tool call is made
+// of, and the only two the completion estimate reads.
+//
+// The argument payload is deliberately a realistic size rather than a dozen
+// bytes. At a dozen bytes the credit figure with the tool call counted and the
+// figure without it both round to the floor of one credit, so an assertion on
+// the exact figure passes either way and guards nothing -- which is what the
+// first version of this test did (review finding on PR #1762). Ordinary prose
+// shaped JSON with no repeated-character runs, so runCollapsible has nothing to
+// collapse and the estimate is the plain byte-length one.
+const toolCallOnlyFunctionName = "get_weather"
+
+var toolCallOnlyArguments = `{"city":"Dhaka","fields":[` +
+	strings.Repeat(`"temperature","humidity","wind speed","pressure","visibility",`, 40) +
+	`"uv index"]}`
+
+// toolCallOnlyChunkLine builds one tool-call delta frame carrying arguments,
+// json.Marshal rather than a hand-escaped literal so a fixture cannot drift from
+// the shape the relay actually decodes.
+func toolCallOnlyChunkLine(id, name, arguments string) string {
+	toolCalls, _ := json.Marshal([]map[string]any{{
+		"index": 0,
+		"id":    "call_1",
+		"type":  "function",
+		"function": map[string]string{
+			"name":      name,
+			"arguments": arguments,
+		},
+	}})
+	role := "assistant"
+	chunk := ChatCompletionChunk{
+		ID: id, Object: "chat.completion.chunk", Created: 1700000000, Model: "route",
+		Choices: []ChunkChoice{{
+			Index: 0,
+			Delta: ChunkDelta{Role: &role, ToolCalls: toolCalls},
+		}},
+	}
+	b, _ := json.Marshal(chunk)
+	return "data: " + string(b)
+}
+
 // toolCallOnlySSEServer streams a turn whose deltas carry only tool-call
 // payloads: parseable chunks that accumulate zero visible content, because
 // AccumulateContent ignores tool-call deltas. A real billable agent turn that
@@ -75,7 +118,7 @@ func toolCallOnlySSEServer() *httptest.Server {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher := w.(http.Flusher)
-		fmt.Fprintln(w, `data: {"id":"t1","object":"chat.completion.chunk","created":1700000000,"model":"route","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Dha"}]}}]}`)
+		fmt.Fprintln(w, toolCallOnlyChunkLine("t1", toolCallOnlyFunctionName, toolCallOnlyArguments))
 		fmt.Fprintln(w, `data: {"id":"t2","object":"chat.completion.chunk","created":1700000000,"model":"route","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`)
 		fmt.Fprintln(w, "data: [DONE]")
 		flusher.Flush()
@@ -236,16 +279,17 @@ func TestExecuteStreaming_ToolCallOnlyTurn_Billed_NotUpstreamError(t *testing.T)
 	// ignores tool-call deltas, because they are not text a customer can read,
 	// but the settlement estimate no longer inherits that blindness: it prices
 	// the tool call's own name and arguments as completion output (issue #928
-	// defect 1). On this fixture the two figures round to the same credit,
-	// because its tool call is a dozen bytes; the discriminating case, with an
-	// argument payload of realistic size, is
-	// TestExecuteStreaming_ToolCallOnlyTurn_ChargesForTheToolCallItProduced.
+	// defect 1).
 	actual := finalizeInt64(t, body, "actual_credits")
-	want := CreditsForTokens(routeMockPricing,
-		estimateCompletionTokens(promptText(EndpointChatCompletions, reqBody)), 0, 0,
-		estimateCompletionTokens(`get_weather{"city":"Dha`))
+	promptTokens := estimateCompletionTokens(promptText(EndpointChatCompletions, reqBody))
+	want := CreditsForTokens(routeMockPricing, promptTokens, 0, 0,
+		estimateCompletionTokens(toolCallOnlyFunctionName+toolCallOnlyArguments))
+	promptOnly := CreditsForTokens(routeMockPricing, promptTokens, 0, 0, 0)
+	if want == promptOnly {
+		t.Fatalf("fixture is too small to discriminate: prompt-only and prompt-plus-tool-call both price at %d credits, so the assertion below would pass with the tool call counted at nothing", want)
+	}
 	if actual != want {
-		t.Errorf("actual_credits = %d, want %d: a served tool-calling turn bills the prompt it consumed plus the tool call it produced, never the flat hold (#1198, #928)", actual, want)
+		t.Errorf("actual_credits = %d, want %d: a served tool-calling turn bills the prompt it consumed plus the tool call it produced, never the flat hold and never the prompt alone at %d (#1198, #928)", actual, want, promptOnly)
 	}
 	if actual < 1 {
 		t.Errorf("actual_credits = %d: a served tool-calling turn is never free (#1215, D-034)", actual)

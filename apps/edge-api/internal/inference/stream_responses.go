@@ -235,20 +235,35 @@ func (o *Orchestrator) executeResponsesStreaming(
 		flusher.Flush()
 	}
 
-	// 10. Scan and translate upstream SSE chunks.
-	//
-	// Through the idle watchdog rather than straight off resp.Body, same as the
-	// chat relay and for the same reason: the streaming dispatch above carries
-	// no total timeout, so this is what bounds a provider that opens a stream
-	// and then goes silent (issue #928 defect 3). A stall closes the body, which
-	// surfaces as a scanner error and runs the abort branch below.
-	idle := newIdleTimeoutReader(resp.Body, streamIdleTimeout,
-		fmt.Sprintf("request_id=%s alias=%s endpoint=%s", requestID, model, EndpointResponses))
-	defer idle.stop()
-	scanner := bufio.NewScanner(idle)
+	// 10. Scan and translate upstream SSE chunks. The byte-level stall bound is
+	// already on resp.Body, installed at dispatch (litellm_client.go, issue #928
+	// defect 3); what this loop adds is the data deadline below, for a provider
+	// that keeps the bytes flowing with keepalive comments and never sends
+	// anything. Same pair of rules as the chat relay.
+	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), sseScanLineMaxBytes)
 
+	stalled := false
+	lastData := time.Now()
+
+	// endOnUpstreamError is the one ending for an upstream error frame, called
+	// from the two places that reach it: a frame carrying only the error, and a
+	// frame that also carried content the customer is owed first.
+	endOnUpstreamError := func(upstream string) {
+		log.Printf("inference: responses API replaced an upstream error frame request_id=%s alias=%s upstream_error=%.512s",
+			requestID, model, upstream)
+		// emitFailed is this surface's spelling of the chat relay's error
+		// frame: the Responses lifecycle terminates on response.failed, and its
+		// message is a static gateway-owned string, so the sanitizer's
+		// replacement frame itself is not what gets written here.
+		translator.emitFailed(w, flusher)
+	}
+
 	for scanner.Scan() {
+		if streamDataDeadlineExceeded(lastData) {
+			stalled = true
+			break
+		}
 		line := scanner.Text()
 
 		if line == "data: [DONE]" {
@@ -272,24 +287,33 @@ func (o *Orchestrator) executeResponsesStreaming(
 		// typed path below used to translate it into nothing at all while still
 		// setting HasForwardedChunk -- which on this relay is worse than on the
 		// chat one: an error-only Responses stream was counted as delivered work
-		// and CHARGED. Ended honestly instead, with the same replacement helper
-		// the other relays use, so nothing upstream reaches the caller and the
-		// raw text stays in the operator log.
-		if _, upstream, isErrorFrame := sanitize.ReplaceErrorFrame(
-			[]byte(jsonData), apierrors.UpstreamUnavailableMessage(model)); isErrorFrame {
-			log.Printf("inference: responses API replaced an upstream error frame request_id=%s alias=%s upstream_error=%.512s",
-				requestID, model, upstream)
-			// emitFailed is this surface's spelling of the chat relay's error
-			// frame: the Responses lifecycle terminates on response.failed, and
-			// its message is a static gateway-owned string, so the replacement
-			// frame itself is not what gets written here.
-			translator.emitFailed(w, flusher)
-			return
-		}
+		// and CHARGED.
+		//
+		// Classified here and acted on at the END of this iteration, because a
+		// frame can carry a content delta AND a top-level error at once, and
+		// ending on the error first dropped that content -- delivered work the
+		// customer never saw and settlement never priced (review finding).
+		_, upstreamErrText, isErrorFrame := sanitize.ReplaceErrorFrame(
+			[]byte(jsonData), apierrors.UpstreamUnavailableMessage(model))
 
 		var chunk ChatCompletionChunk
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			continue
+		}
+
+		// Feeds the data deadline: a frame that carried nothing is a keepalive
+		// however well formed it is, and must not renew the budget.
+		if chunkCarriesData(chunk) {
+			lastData = time.Now()
+		}
+
+		// An error frame carrying nothing else has nothing to translate, and
+		// must not reach the HasForwardedChunk line below: that is the delivery
+		// signal settlement bills on, and setting it here charged the customer
+		// for an upstream failure (#928 defect 4).
+		if isErrorFrame && !chunkCarriesData(chunk) {
+			endOnUpstreamError(upstreamErrText)
+			return
 		}
 
 		// A parsed frame is about to be relayed (translated) to the caller, so
@@ -410,6 +434,11 @@ func (o *Orchestrator) executeResponsesStreaming(
 				})
 			}
 		}
+
+		if isErrorFrame {
+			endOnUpstreamError(upstreamErrText)
+			return
+		}
 	}
 
 	// A read/token error ended the relay before [DONE] arrived -- most
@@ -432,9 +461,9 @@ func (o *Orchestrator) executeResponsesStreaming(
 	// distinction settleStream already draws via reqCtx.Err() (client
 	// disconnect vs. upstream_error) -- settlement still logs and accounts
 	// for a disconnect on its own path regardless of this branch.
-	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		log.Printf("inference: responses API SSE relay aborted request_id=%s alias=%s err=%v",
-			requestID, model, err)
+	if err := scanner.Err(); (err != nil || stalled) && ctx.Err() == nil {
+		log.Printf("inference: responses API SSE relay aborted request_id=%s alias=%s data_stalled=%v err=%v",
+			requestID, model, stalled, err)
 		streamRelayAborted.WithLabelValues(model, EndpointResponses).Inc()
 		translator.emitFailed(w, flusher)
 		return
@@ -444,7 +473,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 	// (#1326), same rule as the chat relay: a clean end of body with a live
 	// request context is a completed stream even without a [DONE] sentinel, and
 	// a read that failed because the context was cancelled is a truncation.
-	if scanner.Err() == nil && ctx.Err() == nil {
+	if !stalled && scanner.Err() == nil && ctx.Err() == nil {
 		acc.StreamCompleted = true
 	}
 }

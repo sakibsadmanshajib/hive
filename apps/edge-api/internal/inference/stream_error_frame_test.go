@@ -195,3 +195,58 @@ func TestExecuteResponsesStreaming_UpstreamErrorFrame_FailsAndIsNotBilled(t *tes
 		t.Fatalf("expected ReleaseReservation for an error-only Responses stream; calls seen: %+v", rec.calls)
 	}
 }
+
+// TestExecuteStreaming_ErrorFrameCarryingContent_DeliversTheContentToo closes
+// the gap the first version of this fix opened. The error check ran BEFORE the
+// typed decode, so a frame carrying a content delta AND a top-level error had
+// its content dropped: work the customer never saw and settlement never priced
+// (review finding on PR #1762). The frame is now classified first and acted on
+// last, so the content is relayed and accumulated before the stream ends.
+func TestExecuteStreaming_ErrorFrameCarryingContent_DeliversTheContentToo(t *testing.T) {
+	const delivered = "the model had already written this much when the provider gave up"
+
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+
+	litellmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		fmt.Fprintf(w, "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"route\","+
+			"\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}],\"error\":{\"message\":%q,\"type\":\"insufficient_quota\"}}\n",
+			delivered, upstreamErrorText)
+		flusher.Flush()
+	}))
+	defer litellmSrv.Close()
+
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+
+	_ = orch.executeStreaming(context.Background(), w, req, EndpointChatCompletions, []byte(`{}`), "gpt-4o", "gpt-4o",
+		NeedFlags{NeedChatCompletions: true, NeedStreaming: true}, mockReservationHold, false, nil,
+		orch.litellm.ChatCompletionStream)
+
+	body := w.Body.String()
+	if !strings.Contains(body, delivered) {
+		t.Errorf("the content the error frame also carried never reached the client; body:\n%s", body)
+	}
+	if !strings.Contains(body, `"upstream_error"`) {
+		t.Errorf("expected the error frame after the content it carried; body:\n%s", body)
+	}
+	assertNoUpstreamLeak(t, body)
+
+	// Delivered, so it bills: the content is real output the customer received.
+	if rec.has("/internal/accounting/reservations/release") {
+		t.Error("content reached the customer: releasing the hold in full would serve it free (D-034)")
+	}
+	if !rec.has("/internal/accounting/reservations/finalize") {
+		t.Fatalf("expected FinalizeReservation for the delivered content; calls seen: %+v", rec.calls)
+	}
+}
