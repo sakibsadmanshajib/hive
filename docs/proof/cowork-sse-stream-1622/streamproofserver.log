@@ -1,0 +1,2 @@
+{"path":"/internal/agent-tasks/ea356c18-d852-4161-9a95-b62b15c16259/41761b64-6a5e-44b1-ab60-f5ab776d94d5/3cdade88-566c-465a-8805-8495759daf9f/events/stream","task_id":"3cdade88-566c-465a-8805-8495759daf9f","tenant_id":"ea356c18-d852-4161-9a95-b62b15c16259","user_id":"41761b64-6a5e-44b1-ab60-f5ab776d94d5"}
+2026/09/03 05:38:58 stream proof server on 0.0.0.0:8099, write timeout 15s, 80 steps every 2s

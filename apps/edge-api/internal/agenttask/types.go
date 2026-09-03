@@ -50,6 +50,16 @@ var (
 	// non-2xx response or transport failure — the real cause is logged
 	// server-side, never surfaced to the customer.
 	ErrRequestFailed = errors.New("agenttask: request failed")
+
+	// ErrTooManyStreams mirrors control-plane's 429 on the event
+	// subscription: the caller already holds as many open streams as it may.
+	//
+	// It has its own sentinel because the alternative is what it replaced: a
+	// deliberate refusal arriving at the customer as a 500, which tells them
+	// something is broken and tells an operator nothing about which of the two
+	// it was. Saturation and breakage want different responses and must not
+	// share a status code.
+	ErrTooManyStreams = errors.New("agenttask: too many open task streams")
 )
 
 // Event mirrors one control-plane agent_task_events row on the customer wire.

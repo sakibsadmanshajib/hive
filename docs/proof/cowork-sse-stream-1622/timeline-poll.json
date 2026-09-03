@@ -1,0 +1,419 @@
+{
+  "label": "poll",
+  "expected": [
+    {
+      "at": 3,
+      "match": "list the workspace"
+    },
+    {
+      "at": 4.2,
+      "match": "AGENTS.md"
+    },
+    {
+      "at": 5.4,
+      "match": "write sixcap.txt"
+    },
+    {
+      "at": 6.6,
+      "match": "wrote 14 bytes"
+    },
+    {
+      "at": 7.8,
+      "match": "Workspace file: sixcap.txt"
+    },
+    {
+      "at": 9,
+      "match": "cat sixcap.txt"
+    },
+    {
+      "at": 10.2,
+      "match": "HIVE-COWORK-OK"
+    }
+  ],
+  "first_seen": {
+    "list the workspace": 3.9,
+    "AGENTS.md": 10.6,
+    "wrote 14 bytes": 10.6,
+    "Workspace file: sixcap.txt": 14.1,
+    "HIVE-COWORK-OK": 14.1
+  },
+  "worst_lateness_s": 6.4,
+  "mean_lateness_s": 4.3,
+  "peak_lines": 5,
+  "samples": [
+    {
+      "since_submit": 0.7,
+      "line_count": 1,
+      "lines": [
+        "Hive ran this as a knowledge work task."
+      ]
+    },
+    {
+      "since_submit": 1.2,
+      "line_count": 1,
+      "lines": [
+        "Hive ran this as a knowledge work task."
+      ]
+    },
+    {
+      "since_submit": 1.7,
+      "line_count": 1,
+      "lines": [
+        "Hive ran this as a knowledge work task."
+      ]
+    },
+    {
+      "since_submit": 2.3,
+      "line_count": 1,
+      "lines": [
+        "Hive ran this as a knowledge work task."
+      ]
+    },
+    {
+      "since_submit": 2.8,
+      "line_count": 1,
+      "lines": [
+        "Hive ran this as a knowledge work task."
+      ]
+    },
+    {
+      "since_submit": 3.3,
+      "line_count": 1,
+      "lines": [
+        "Hive ran this as a knowledge work task."
+      ]
+    },
+    {
+      "since_submit": 3.9,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 4.7,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 5.3,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 6.1,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 6.6,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 7.3,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 7.9,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 8.4,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 9.1,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 9.7,
+      "line_count": 2,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Using bash: list the workspace"
+      ]
+    },
+    {
+      "since_submit": 10.6,
+      "line_count": 3,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes"
+      ]
+    },
+    {
+      "since_submit": 11.2,
+      "line_count": 3,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes"
+      ]
+    },
+    {
+      "since_submit": 11.9,
+      "line_count": 3,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes"
+      ]
+    },
+    {
+      "since_submit": 12.5,
+      "line_count": 3,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes"
+      ]
+    },
+    {
+      "since_submit": 13,
+      "line_count": 3,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes"
+      ]
+    },
+    {
+      "since_submit": 13.5,
+      "line_count": 3,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes"
+      ]
+    },
+    {
+      "since_submit": 14.1,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 15.1,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 15.6,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 16.2,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 16.7,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 17.2,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 17.7,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 18.2,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 18.7,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 19.3,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 19.8,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 20.3,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 20.8,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 21.3,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 21.8,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 22.4,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 22.9,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    },
+    {
+      "since_submit": 23.4,
+      "line_count": 5,
+      "lines": [
+        "Hive ran this as a knowledge work task.",
+        "Used bash: AGENTS.md",
+        "Used str_replace_editor: wrote 14 bytes",
+        "Workspace file: sixcap.txt",
+        "Used bash: HIVE-COWORK-OK"
+      ]
+    }
+  ]
+}

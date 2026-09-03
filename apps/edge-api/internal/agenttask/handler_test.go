@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -417,6 +418,14 @@ func TestExtractTaskPath_Invalid(t *testing.T) {
 func mustJSON(v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// StreamEvents is unreachable on this fake: every test that exercises the
+// subscription uses streamingClient in stream_test.go, which needs a reader
+// it can write into after the response has begun. Present so fakeClient still
+// satisfies TaskClient.
+func (f *fakeClient) StreamEvents(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int64) (io.ReadCloser, error) {
+	return nil, ErrNotFound
 }
 
 func (f *fakeClient) Events(_ context.Context, _, _ uuid.UUID, taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error) {

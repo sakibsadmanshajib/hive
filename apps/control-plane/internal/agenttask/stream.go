@@ -1,0 +1,464 @@
+package agenttask
+
+// The per-run event subscription (issue #1622).
+//
+// Everything else on this handler is a request and an answer. This one is a
+// connection the server writes to for as long as a run is going, and it is
+// here because the alternative is the shape PR #1709 shipped and said was not
+// enough: a cursor the browser re-asks every three seconds, which quantises
+// every step to that interval on top of the syncer's own. A step a person is
+// waiting to watch happen cannot arrive on a schedule the person's browser
+// picked.
+//
+// It is deliberately a tail of this process's own database rather than a
+// subscription to anything further in. The syncer already writes each step as
+// the sandbox produces it; the only thing missing between that row and a
+// reader was a channel that does not wait to be asked. Adding a push all the
+// way from the launcher would be a second delivery mechanism for the same
+// rows, and the rows are already the durable record a reconnect resumes from.
+//
+// What this cannot carry, and no faster read of this table ever could:
+// token-level model deltas. StreamingDeltaEvent is published to the agent
+// server's PubSub and never persisted to the conversation event log, so it
+// does not reach agent_task_events at all. That needs a relay out of the
+// launcher, which is separate work on a separate seam.
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+const (
+	// defaultStreamTick is how often an open stream re-reads its task. Both
+	// reads are indexed and scoped to one task, and they only happen while
+	// somebody is watching, so this is bounded by open connections rather
+	// than by rows.
+	//
+	// It is deliberately shorter than DefaultEventSyncInterval (2s): this
+	// loop's job is to add as little as possible to the delay the syncer
+	// already imposes, not to double it.
+	defaultStreamTick = 500 * time.Millisecond
+
+	// minStreamTick is a floor rather than a default. WithStreamTick is a
+	// test seam today, but a seam that accepts 0 or a microsecond is one
+	// spin loop away from being the reason this endpoint gets pulled.
+	minStreamTick = time.Millisecond
+
+	// streamCeiling bounds one connection. A task wedged in `running` would
+	// otherwise hold a connection for as long as the browser tab is open,
+	// which is the ceiling COWORK_FOLLOW_CEILING_MS already imposes on the
+	// client side; this is the same number enforced on the side that pays
+	// for it.
+	streamCeiling = 30 * time.Minute
+
+	// streamHeartbeat bounds how long a stream stays silent. Proxies and
+	// load balancers close an idle connection, and a run thinking for a
+	// minute is idle by their reckoning. A comment line is not an event, so
+	// no client has to know about it.
+	streamHeartbeat = 15 * time.Second
+
+	// streamWriteDeadline is the per-frame write deadline, reset before every
+	// write, and it is the reason this endpoint works at all.
+	//
+	// cmd/server sets WriteTimeout on the API server, and Go applies that as
+	// one absolute deadline for the whole response rather than per write. A
+	// streaming handler under it does not slow down, it dies: every stream was
+	// cut mid-frame at the WriteTimeout with "i/o timeout" on this side and an
+	// unexpected EOF on the client, and streamCeiling, streamHeartbeat and
+	// maxStreamReadFailures were all unreachable code behind it. edge-api
+	// already knows this and leaves its own timeouts at zero for exactly this
+	// reason (apps/edge-api/cmd/server/main.go); control-plane had never
+	// served a long-lived response before.
+	//
+	// Rolling rather than cleared. A zero deadline would also fix the cut and
+	// would hand a client that opens a stream and never reads one of this
+	// deployment's stream slots for as long as it likes, which is the ceiling
+	// above turned into a lifetime grant. Three heartbeats is the smallest
+	// value that cannot fire on a healthy stream: something is written at
+	// least every streamHeartbeat, so missing three in a row means the socket
+	// is not draining rather than that the run is quiet.
+	streamWriteDeadline = 3 * streamHeartbeat
+
+	// maxStreamPagesPerPass bounds one pass's catch-up. A conversation
+	// reopened onto a long run drains over several passes rather than
+	// holding the loop for an unbounded number of reads.
+	maxStreamPagesPerPass = 5
+
+	// maxStreamReadFailures ends a stream after this many consecutive failed
+	// passes.
+	//
+	// Without it a persistent read failure (a revoked grant, schema drift, a
+	// pool with nothing left) is invisible: the connection stays open and
+	// silent, and reads to a person as a slow run rather than a broken one,
+	// for the whole thirty minutes. Ending instead sends the client to its
+	// settle read, which fails loudly, and then to its fallback.
+	maxStreamReadFailures = 5
+
+	// maxStreamsPerUser and maxStreamsTotal bound how many of these
+	// connections exist at once.
+	//
+	// Every other read on this handler is one database round trip and then a
+	// released goroutine. This one holds a goroutine and issues two indexed
+	// reads every tick for as long as somebody watches, so it is the first
+	// thing here whose cost a caller controls by opening more of them. The
+	// launch quotas (HIVE_QUOTA_USER_CONCURRENCY and its tenant sibling) gate
+	// starting tasks, not reading them, so they do not cover this.
+	//
+	// Six per user is several tabs on several runs, which is the honest upper
+	// end of watching your own work; a seventh is a client that has stopped
+	// closing connections. Two hundred is a process-wide backstop on
+	// goroutines and connections, picked as a round number well above any
+	// plausible concurrent audience for this deployment and well below what
+	// the process would notice. Deliberately NOT derived from D-049, which is
+	// the orchestrator's own fleet dispatch limit and says nothing about how
+	// many customers may watch a run.
+	maxStreamsPerUser = 6
+	maxStreamsTotal   = 200
+)
+
+// MaxStreamsPerUserForTest exposes the per-user ceiling to the package's
+// external test, which asserts the refusal at exactly that boundary. Exported
+// rather than duplicated as a literal in the test: a copy would go on passing
+// against whatever number it remembered after the real one moved.
+const MaxStreamsPerUserForTest = maxStreamsPerUser
+
+// WithStreamTick sets how often an open event stream re-reads its task and
+// returns the handler for chaining, matching the WithBilling shape used on
+// the edge-api handlers. Values below minStreamTick are clamped.
+//
+// Construction time only, before the handler serves anything. The field it
+// writes is read without synchronisation by every in-flight stream, which is
+// safe only because nothing calls this once ServeHTTP has started; a
+// hot-reload caller would make it a real data race.
+func (h *Handler) WithStreamTick(d time.Duration) *Handler {
+	if d < minStreamTick {
+		d = minStreamTick
+	}
+	h.streamTick = d
+	return h
+}
+
+// acquireStream takes one of this user's stream slots and one global slot,
+// and returns the release function. The second return is false when either
+// ceiling is already reached, which the caller answers 429 rather than
+// opening a connection it has no budget for.
+func (h *Handler) acquireStream(userID uuid.UUID) (func(), bool) {
+	h.streamMu.Lock()
+	defer h.streamMu.Unlock()
+	if h.streamsTotal >= maxStreamsTotal {
+		return nil, false
+	}
+	if h.streams == nil {
+		h.streams = make(map[uuid.UUID]int)
+	}
+	if h.streams[userID] >= maxStreamsPerUser {
+		return nil, false
+	}
+	h.streams[userID]++
+	h.streamsTotal++
+	return func() {
+		h.streamMu.Lock()
+		defer h.streamMu.Unlock()
+		h.streamsTotal--
+		if h.streams[userID] <= 1 {
+			// Deleted rather than left at zero: the map is keyed by user and
+			// would otherwise grow for the life of the process, one entry per
+			// person who ever opened a stream.
+			delete(h.streams, userID)
+			return
+		}
+		h.streams[userID]--
+	}, true
+}
+
+func (h *Handler) tick() time.Duration {
+	if h.streamTick <= 0 {
+		return defaultStreamTick
+	}
+	return h.streamTick
+}
+
+// handleEventStream serves GET .../{task_id}/events/stream?after_seq=N as
+// server-sent events: one `status` frame per status change, one `step` frame
+// per event row, and one `end` frame when the run reaches a terminal status.
+//
+// The first read happens before any header is written, so a task that does
+// not exist or does not belong to this caller is refused with an HTTP status
+// like every other read here. Once the 200 and the event-stream content type
+// are out there is no status left to send, and a client would render a
+// refusal as a run that did nothing.
+func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, tenantID, userID, taskID uuid.UUID) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// Nothing here can work without a flush: every write would sit in a
+		// buffer until the run ended, which is the defect rather than a
+		// degraded version of the fix.
+		writeJSON(w, http.StatusInternalServerError, errBody("streaming unsupported"))
+		return
+	}
+
+	var cursor int64
+	if raw := r.URL.Query().Get("after_seq"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 0 {
+			writeJSON(w, http.StatusBadRequest, errBody(ErrCursor.Error()))
+			return
+		}
+		cursor = parsed
+	}
+
+	release, ok := h.acquireStream(userID)
+	if !ok {
+		// Refused before the first read, so it costs nothing, and refused with
+		// a status rather than a frame for the same reason every other refusal
+		// here is: after the 200 there is nothing left to say.
+		writeJSON(w, http.StatusTooManyRequests, errBody("too many open task streams"))
+		return
+	}
+	defer release()
+
+	ctx, cancel := context.WithTimeout(r.Context(), streamCeiling)
+	defer cancel()
+
+	task, err := h.svc.Get(ctx, tenantID, userID, taskID)
+	if err != nil {
+		writeTaskError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	// Named for the proxies between here and a browser: nginx and Caddy both
+	// read it, and a buffered event stream is a stream in name only.
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	s := &streamWriter{w: w, flusher: flusher, rc: http.NewResponseController(w), taskID: taskID}
+	status := task.Status
+	if !s.send("status", newTaskWire(task)) {
+		return
+	}
+
+	// Status first, events second, on this pass and on every later one. The
+	// flush writes a run's remaining steps immediately before its terminal
+	// transition (EventSyncer.FlushTask, called from the poller, from
+	// chargeFailureBudget and from Service.Cancel), so a reader that saw the
+	// terminal status has necessarily issued its event read afterwards, and
+	// so after that flush. Reading the two concurrently reopens issue #1504
+	// with every server-side test still green.
+	cursor, _ = h.drain(ctx, s, tenantID, userID, taskID, cursor)
+	if s.failed {
+		return
+	}
+	if status.Terminal() {
+		s.send("end", endWire{Status: string(status)})
+		return
+	}
+
+	ticker := time.NewTicker(h.tick())
+	defer ticker.Stop()
+	lastWrite := time.Now()
+	failures := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		task, err = h.svc.Get(ctx, tenantID, userID, taskID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				// The row is gone. End on the last status actually observed
+				// rather than holding a connection open on a question nothing
+				// can answer, and rather than inventing a status the run never
+				// reached. A non-terminal one tells the client to go and look
+				// for itself, which is exactly right here.
+				s.send("end", endWire{Status: string(status)})
+				return
+			}
+			// A blip is worth another pass. A run of them is not: see
+			// maxStreamReadFailures.
+			failures++
+			if failures < maxStreamReadFailures {
+				continue
+			}
+			slog.Default().Warn("agent task stream ending on repeated read failures",
+				"task_id", taskID, "failures", failures, "error", err)
+			s.send("end", endWire{Status: string(status)})
+			return
+		}
+		if task.Status != status {
+			status = task.Status
+			if !s.send("status", newTaskWire(task)) {
+				return
+			}
+			lastWrite = time.Now()
+		}
+
+		before := s.written
+		var drainErr error
+		cursor, drainErr = h.drain(ctx, s, tenantID, userID, taskID, cursor)
+		if s.failed {
+			return
+		}
+		if s.written != before {
+			lastWrite = time.Now()
+		}
+		if drainErr != nil {
+			failures++
+			if failures >= maxStreamReadFailures {
+				slog.Default().Warn("agent task stream ending on repeated event read failures",
+					"task_id", taskID, "failures", failures, "error", drainErr)
+				s.send("end", endWire{Status: string(status)})
+				return
+			}
+			continue
+		}
+
+		// Both reads in this pass worked, so whatever the last failure was, it
+		// was a blip. Reset AFTER the event read rather than after the status
+		// read: a pass where only one of the two works is a failing pass.
+		failures = 0
+
+		if status.Terminal() {
+			s.send("end", endWire{Status: string(status)})
+			return
+		}
+		if time.Since(lastWrite) >= streamHeartbeat {
+			if !s.comment("ping") {
+				return
+			}
+			lastWrite = time.Now()
+		}
+	}
+}
+
+// drain writes every event after cursor as its own frame and returns the new
+// cursor plus whatever read error stopped it. A read failure leaves the cursor
+// where it was and is retried on the next pass: progress lines that pause are
+// a worse-looking run, while a cursor advanced past rows nobody received is a
+// run missing its middle.
+//
+// The error is returned rather than swallowed because the caller counts
+// consecutive failures. A status read that works while the event read fails is
+// exactly the silent-but-broken stream maxStreamReadFailures exists to end,
+// and it was invisible while this function absorbed its own errors.
+func (h *Handler) drain(ctx context.Context, s *streamWriter, tenantID, userID, taskID uuid.UUID, cursor int64) (int64, error) {
+	for page := 0; page < maxStreamPagesPerPass; page++ {
+		events, err := h.svc.Events(ctx, tenantID, userID, taskID, cursor, defaultEventsLimit)
+		if err != nil {
+			return cursor, err
+		}
+		if len(events) == 0 {
+			return cursor, nil
+		}
+		for _, ev := range events {
+			if !s.send("step", ev) {
+				return cursor, nil
+			}
+			if ev.Seq > cursor {
+				cursor = ev.Seq
+			}
+		}
+		if len(events) < defaultEventsLimit {
+			return cursor, nil
+		}
+	}
+	return cursor, nil
+}
+
+// endWire is the last frame of a stream: the status the run settled in, so a
+// client that missed the status frame carrying it still knows how the run
+// ended rather than only that it stopped.
+type endWire struct {
+	Status string `json:"status"`
+}
+
+// streamWriter serialises one connection's frames and remembers whether a
+// write has already failed, so the loop above can stop rather than spin
+// writing into a closed socket.
+type streamWriter struct {
+	w       io.Writer
+	flusher http.Flusher
+	// rc extends the write deadline before every frame. See
+	// streamWriteDeadline: without it the server's WriteTimeout cuts every
+	// stream mid-response.
+	rc      *http.ResponseController
+	taskID  uuid.UUID
+	written int
+	failed  bool
+}
+
+// extend pushes the write deadline out ahead of the frame about to be
+// written. A deployment whose ResponseWriter cannot carry a deadline gets no
+// deadline at all, which is the behaviour it had before this endpoint existed,
+// so it is logged once and not treated as fatal.
+func (s *streamWriter) extend() {
+	if s.rc == nil {
+		return
+	}
+	if err := s.rc.SetWriteDeadline(time.Now().Add(streamWriteDeadline)); err != nil {
+		slog.Default().Warn("agent task stream cannot set a write deadline",
+			"task_id", s.taskID, "error", err)
+		s.rc = nil
+	}
+}
+
+// send writes one named frame carrying payload as JSON, and reports whether
+// the connection is still usable.
+//
+// json.Marshal never emits a raw newline inside a string, so one `data:` line
+// always holds the whole payload and no frame can be split by its own
+// content.
+func (s *streamWriter) send(event string, payload any) bool {
+	if s.failed {
+		return false
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		// Nothing honest to put on the wire for this one. Skipping it keeps
+		// the rest of the run streaming, which is better than closing the
+		// connection over one unencodable row, but it is logged: the cursor
+		// moves past this row either way, so without a line here the gap in
+		// the customer's transcript is invisible forever.
+		slog.Default().Warn("agent task stream dropped an unencodable frame",
+			"task_id", s.taskID, "event", event, "error", err)
+		return true
+	}
+	s.extend()
+	if _, err := fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, body); err != nil {
+		s.failed = true
+		return false
+	}
+	s.flusher.Flush()
+	s.written++
+	return true
+}
+
+// comment writes an SSE comment line: bytes on the wire that no client reads
+// as an event, which is what keeps an idle connection from being closed by
+// something in the middle.
+func (s *streamWriter) comment(text string) bool {
+	if s.failed {
+		return false
+	}
+	s.extend()
+	if _, err := fmt.Fprintf(s.w, ": %s\n\n", text); err != nil {
+		s.failed = true
+		return false
+	}
+	s.flusher.Flush()
+	return true
+}

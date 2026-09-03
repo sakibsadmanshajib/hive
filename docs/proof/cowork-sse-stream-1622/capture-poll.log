@@ -1,0 +1,33 @@
+[+  0.31s] capture start, label=poll, app=http://127.0.0.1:3423
+[+ 13.05s] signed in, url=http://127.0.0.1:3423/
+[+ 16.38s] shot 01-composer
+[+ 17.30s] composer switched to Work
+[+ 18.11s] shot 02-brief-typed
+[+ 19.38s] submitted
+[+ 23.06s] step "list the workspace" happened at +3.0s, first on screen at +3.9s
+[+ 23.42s] shot 03-run-t3p5s
+[+ 24.73s] shot 03-run-t5p0s
+[+ 25.93s] shot 03-run-t6p5s
+[+ 27.77s] shot 03-run-t8p0s
+[+ 29.30s] shot 03-run-t9p5s
+[+ 29.82s] step "AGENTS.md" happened at +4.2s, first on screen at +10.6s
+[+ 29.83s] step "wrote 14 bytes" happened at +6.6s, first on screen at +10.6s
+[+ 30.62s] shot 03-run-t11p0s
+[+ 33.29s] step "Workspace file: sixcap.txt" happened at +7.8s, first on screen at +14.1s
+[+ 33.29s] step "HIVE-COWORK-OK" happened at +10.2s, first on screen at +14.1s
+[+ 33.82s] shot 03-run-t13p5s
+[+ 43.11s] shot 04-finished
+[+ 43.11s] --- how late each step was ---
+[+ 43.11s]   "list the workspace": happened +3.0s, shown +3.9s, late by 0.9s
+[+ 43.11s]   "AGENTS.md": happened +4.2s, shown +10.6s, late by 6.4s
+[+ 43.11s]   "write sixcap.txt" never appeared
+[+ 43.11s]   "wrote 14 bytes": happened +6.6s, shown +10.6s, late by 4.0s
+[+ 43.11s]   "Workspace file: sixcap.txt": happened +7.8s, shown +14.1s, late by 6.3s
+[+ 43.11s]   "cat sixcap.txt" never appeared
+[+ 43.11s]   "HIVE-COWORK-OK": happened +10.2s, shown +14.1s, late by 3.9s
+[+ 43.11s] --- summary ---
+[+ 43.11s] steps that appeared: 5 of 7
+[+ 43.11s] worst lateness: 6.4s
+[+ 43.11s] mean lateness: 4.3s
+[+ 43.11s] most step lines on screen at once: 5
+[+ 43.11s] final step lines: ["Hive ran this as a knowledge work task.","Used bash: AGENTS.md","Used str_replace_editor: wrote 14 bytes","Workspace file: sixcap.txt","Used bash: HIVE-COWORK-OK"]

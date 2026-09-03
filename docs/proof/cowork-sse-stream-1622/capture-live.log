@@ -1,0 +1,45 @@
+[+  0.31s] capture start, label=live, app=http://127.0.0.1:3423
+[+  8.75s] signed in, url=http://127.0.0.1:3423/
+[+ 11.77s] shot 01-composer
+[+ 12.67s] composer switched to Work
+[+ 13.25s] shot 02-brief-typed
+[+ 13.73s] submitted
+[+ 14.25s] step "step 1 finished" happened at +4.0s, first on screen at +0.6s
+[+ 14.25s] step "step 2 finished" happened at +8.0s, first on screen at +0.6s
+[+ 14.25s] step "step 3 finished" happened at +12.0s, first on screen at +0.6s
+[+ 15.28s] step "step 4 finished" happened at +16.0s, first on screen at +1.6s
+[+ 19.06s] shot 03-run-t5p0s
+[+ 19.57s] step "step 5 finished" happened at +20.0s, first on screen at +5.9s
+[+ 23.69s] step "step 6 finished" happened at +24.0s, first on screen at +10.1s
+[+ 23.79s] shot 03-run-t10p0s
+[+ 27.46s] step "step 7 finished" happened at +28.0s, first on screen at +13.8s
+[+ 30.15s] shot 03-run-t16p0s
+[+ 31.69s] step "step 8 finished" happened at +32.0s, first on screen at +18.1s
+[+ 35.28s] step "step 9 finished" happened at +36.0s, first on screen at +21.6s
+[+ 35.90s] shot 03-run-t22p0s
+[+ 39.63s] step "step 10 finished" happened at +40.0s, first on screen at +26.0s
+[+ 43.23s] step "step 11 finished" happened at +44.0s, first on screen at +29.6s
+[+ 44.11s] shot 03-run-t30p0s
+[+ 47.25s] step "step 12 finished" happened at +48.0s, first on screen at +33.6s
+[+ 52.32s] shot 03-run-t38p0s
+[+ 59.88s] shot 03-run-t46p0s
+[+ 69.71s] shot 04-finished
+[+ 69.71s] --- how late each step was ---
+[+ 69.71s]   "step 1 finished": happened +4.0s, shown +0.6s, late by -3.4s
+[+ 69.71s]   "step 2 finished": happened +8.0s, shown +0.6s, late by -7.4s
+[+ 69.71s]   "step 3 finished": happened +12.0s, shown +0.6s, late by -11.4s
+[+ 69.71s]   "step 4 finished": happened +16.0s, shown +1.6s, late by -14.4s
+[+ 69.71s]   "step 5 finished": happened +20.0s, shown +5.9s, late by -14.1s
+[+ 69.71s]   "step 6 finished": happened +24.0s, shown +10.1s, late by -13.9s
+[+ 69.71s]   "step 7 finished": happened +28.0s, shown +13.8s, late by -14.2s
+[+ 69.71s]   "step 8 finished": happened +32.0s, shown +18.1s, late by -13.9s
+[+ 69.71s]   "step 9 finished": happened +36.0s, shown +21.6s, late by -14.4s
+[+ 69.71s]   "step 10 finished": happened +40.0s, shown +26.0s, late by -14.0s
+[+ 69.71s]   "step 11 finished": happened +44.0s, shown +29.6s, late by -14.4s
+[+ 69.71s]   "step 12 finished": happened +48.0s, shown +33.6s, late by -14.4s
+[+ 69.71s] --- summary ---
+[+ 69.71s] steps that appeared: 12 of 12
+[+ 69.71s] worst lateness: -3.4s
+[+ 69.71s] mean lateness: -12.5s
+[+ 69.71s] most step lines on screen at once: 19
+[+ 69.71s] final step lines: ["Hive ran this as a knowledge work task.","Used bash: step 1 finished","Used bash: step 2 finished","Used bash: step 3 finished","Used bash: step 4 finished","Used bash: step 5 finished","Used bash: step 6 finished","Used bash: step 7 finished","Used bash: step 8 finished","Used bash: step 9 finished","Used bash: step 10 finished","Used bash: step 11 finished","Used bash: step 12 finished","Used bash: step 13 finished","Used bash: step 14 finished","Used bash: step 15 finished","Used bash: step 16 finished","Used bash: step 17 finished","Using bash: step 18 running"]

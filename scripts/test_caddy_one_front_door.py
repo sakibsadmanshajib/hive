@@ -155,6 +155,14 @@ EXPECTED_AGENT_ROUTES = {
     "get_task",
     "cancel_task",
     "list_task_events",
+    # The per-run subscription (issue #1622). Same authentication decision as
+    # list_task_events beside it, which it replaces on the live path: the chat
+    # session is the principal, the route reads one task the caller already
+    # owns, and control-plane refuses a task belonging to anyone else with a
+    # 404 before a single frame is written. It holds a connection open where
+    # the others do not, which is a resource question rather than an
+    # authentication one, and it is bounded on all three hops.
+    "stream_task_events",
     "list_task_files",
 }
 

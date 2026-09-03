@@ -41,6 +41,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/httpserver"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/licensing"
@@ -1815,13 +1816,7 @@ func main() {
 	}()
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	srv := &http.Server{
-		Addr:         addr,
-		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	srv := httpserver.New(addr, router)
 
 	// Graceful shutdown.
 	quit := make(chan os.Signal, 1)
