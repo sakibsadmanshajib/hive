@@ -263,6 +263,64 @@ jobs:
         with:
           ref: ${{ steps.target.outputs.ref }}
 
+      # Two trees, deliberately: issue #1758.
+      #
+      # APPLICATION comes from the target pull request, which is what the
+      # checkout above put in the workspace. That is everything this capture
+      # exists to prove: the compose files and Dockerfiles under
+      # deploy/, the Go services, the agent-engine host launcher's own
+      # sources, apps/agent-console including the capture driver under
+      # proof/harness/, apps/web-console including
+      # tests/e2e/support/e2e-auth-fixtures.mjs, the schema under
+      # supabase/migrations/ with the scripts/migration-baseline.conf that
+      # indexes it, and tools/lint-no-token-in-proof-captures.mjs. The two
+      # capture drivers are what read like harness and are not: they select
+      # against the target's own DOM, so a pull request that changes a
+      # selector and its driver together has to be proven with its own
+      # driver, never main's.
+      #
+      # HARNESS is replaced below, from the same ref this workflow's YAML was
+      # itself read from. These are the scripts the steps invoke by name, so
+      # their command lines live in this file and move with it. Before this
+      # step existed they came from the target instead, and a dispatch at any
+      # pull request branched before a harness change died on the argument:
+      # run 33690589909 exited 2 on `unknown argument: --oauth-server` nine
+      # seconds into chat-visual-proof.yml, having proven nothing.
+      #
+      # github.sha is the default branch's head on a workflow_dispatch and the
+      # pull request's own merge commit on a pull_request event. So a dispatch
+      # at a stale pull request runs current harness, while a pull request
+      # that deliberately edits a harness script is still proven against its
+      # own version of that script, which is also why those scripts sit in the
+      # paths: filter above.
+      #
+      # Which side a new file lands on: a script this file calls by name is
+      # harness and belongs on the list below. Data those scripts read is not.
+      # They resolve it relative to their own location, which is the
+      # workspace, so supabase/migrations/ and scripts/migration-baseline.conf
+      # stay the target's. scripts/apply-migrations.sh stays the target's too:
+      # ci-throwaway-db.sh calls it with no arguments, so it has no interface
+      # with this file, and it has to agree with the baseline file it reads.
+      - name: Take the harness scripts from this workflow's own ref
+        env:
+          HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          harness=(
+            scripts/ci-supabase-stack.sh
+            scripts/ci-throwaway-db.sh
+            scripts/generate-enterprise-jwt-keys.py
+            scripts/install-agent-engine-host.sh
+            scripts/redact-log-credentials.py
+          )
+          git fetch --no-tags --depth=1 origin "$HARNESS_SHA"
+          # Loud on purpose. A path renamed on the harness ref fails here
+          # rather than leaving the target's stale copy quietly in place.
+          git checkout FETCH_HEAD -- "${harness[@]}"
+          echo "harness taken from $HARNESS_SHA. Replaced, against the target's own copies:"
+          git diff --cached --stat HEAD -- "${harness[@]}"
+          echo "(no file listed above means the target already carried this harness)"
+
       - name: Reclaim disk space
         # This job holds a one gigabyte SIF, five container images including
         # a Next.js production build, node_modules and a Chromium. Run

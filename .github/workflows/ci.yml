@@ -914,6 +914,18 @@ jobs:
       # the only place a workflow-only change cannot route around.
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:deploy-diagnosability
+      # Issue #1758. Both visual-proof workflows read their YAML from one ref
+      # and run it against another tree, the target pull request's, so the
+      # scripts their steps name are coupled to command lines that live in the
+      # YAML. Taking those scripts from the target meant a pull request
+      # branched before a harness change could not be proven at all: run
+      # 33690589909 exited 2 on `unknown argument: --oauth-server` nine seconds
+      # in. Each workflow now re-takes a named list of scripts from its own
+      # ref, and the way that list rots is someone adding a step that calls a
+      # new script and not adding it. Guarded here because the proof workflows
+      # do not run on most pull requests, so nothing else would notice.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:proof-harness-split
       # Issue #1610. docker-compose.enterprise.yml made WEBUI_SECRET_KEY a
       # required variable, correctly (issue #1602), and compose interpolates
       # the merged config before it runs any subcommand. post-deploy-verify.yml

@@ -21,6 +21,7 @@
     "lint:no-currency-surfaces": "node tools/lint-no-currency-on-credit-surfaces.mjs",
     "lint:sync-child-process": "node tools/lint-no-sync-child-process-in-tests.mjs",
     "lint:deploy-diagnosability": "node tools/lint-deploy-diagnosability.mjs",
+    "lint:proof-harness-split": "node tools/lint-visual-proof-harness-split.mjs",
     "lint:compose-required-vars": "node tools/lint-compose-required-vars.mjs",
     "lint:compose-required-vars:test": "node tools/lint-compose-required-vars.test.mjs",
     "lint:spec-wiring": "node tools/verify-spec-wiring.mjs",
