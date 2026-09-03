@@ -144,6 +144,50 @@ def main() -> None:
             patched.count("_hive_filter_group_grants(") == sites + 1,
         )
 
+    # EVERY NAME THE INSERTED CALL USES MUST EXIST WHERE IT IS INSERTED.
+    #
+    # This is not a hypothetical. The first version of the knowledge half
+    # passed `db` to the helper, copied from the skills call sites where the
+    # route declares that dependency. knowledge.py's create deliberately does
+    # not (it says so in a comment: it must not hold a connection across an
+    # embedding call), so the inserted line raised NameError and answered 500
+    # to the very request this whole change exists to make work. Nothing
+    # caught it: the patch applied cleanly, the module parsed, the marker
+    # counts matched and every assertion here passed. Only a live capture did.
+    #
+    # An anchor-based patch cannot know which locals a route has, so the check
+    # is structural: for every function containing an inserted call, every bare
+    # name that call passes has to be a parameter of that function or something
+    # assigned in it before the call.
+    for name, source in patched_by_router.items():
+        for fn in ast.walk(ast.parse(source)):
+            if not isinstance(fn, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                continue
+            calls = [
+                node
+                for node in ast.walk(fn)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "_hive_filter_group_grants"
+            ]
+            if not calls:
+                continue
+            bound = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    bound.add(node.id)
+            for call in calls:
+                passed = [a.id for a in call.args if isinstance(a, ast.Name)]
+                passed += [
+                    kw.value.id for kw in call.keywords if isinstance(kw.value, ast.Name)
+                ]
+                unbound = [n for n in passed if n not in bound]
+                check(
+                    f"{name}: the call in {fn.name} passes only names that exist there "
+                    f"(unbound: {unbound})",
+                    not unbound,
+                )
+
     # The helper is byte-identical in every target, so its behaviour is
     # exercised once, from the router that has the most call sites.
     helper = load_helper(patched_by_router["knowledge.py"])

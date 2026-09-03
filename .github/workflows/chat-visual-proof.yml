@@ -699,7 +699,9 @@ jobs:
             echo "PROOF_SCENARIO=projects"
             echo "PROOF_CAPTURE_PROJECT=1"
             echo "PROOF_PROMPT=According to the document in this project, how many milligrams per litre of dissolved silica did borehole KB-1505 measure? Answer with the number only."
-            echo "PROOF_REPLY_PATTERN=47"
+            # Word bounded, not a bare substring: a bare 47 would also match a
+            # turn that answered 147 or 470, and publish that as proof.
+            echo "PROOF_REPLY_PATTERN=\\b47\\b"
             echo "PROOF_REQUIRE_SOURCES=1"
           } >> "$GITHUB_ENV"
 

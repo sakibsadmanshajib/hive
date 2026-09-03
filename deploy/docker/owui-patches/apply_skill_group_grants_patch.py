@@ -79,7 +79,7 @@ MARKER = "# hive (#1396)"
 HELPER_ANCHOR = "router = APIRouter()\n"
 HELPER = '''
 
-async def _hive_filter_group_grants(user, access_grants, db):
+async def _hive_filter_group_grants(user, access_grants, db=None):
     """Drop group grants naming a group the caller is not a member of.
 
     {MARKER}. Upstream's filter_allowed_access_grants never inspects group
@@ -91,6 +91,14 @@ async def _hive_filter_group_grants(user, access_grants, db):
 
     An admin is untouched: on this deployment only a platform admin holds that
     role, and a platform-wide skill is a legitimate thing for one to publish.
+
+    No session is taken from the caller. Routes differ on whether they hold
+    one: knowledge.py's create deliberately declares no `db` dependency, so
+    that it does not hold a connection across an embedding call, and an
+    inserted call naming `db` there raised NameError and answered 500 on the
+    first real capture. `Groups.get_groups_by_member_id` opens its own context
+    when given None, which is exactly what `has_permission` and
+    `filter_allowed_access_grants` do beside it in that same route.
     """
     if user.role == 'admin' or not access_grants:
         return access_grants
@@ -125,7 +133,7 @@ def call_replacement(public_key):
     return call_anchor(public_key) + f"""    {MARKER}: and drop group grants for groups the caller is not in, which
     # filter_allowed_access_grants does not look at.
     form_data.access_grants = await _hive_filter_group_grants(
-        user, form_data.access_grants, db
+        user, form_data.access_grants
     )
 """
 
