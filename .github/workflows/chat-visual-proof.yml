@@ -698,6 +698,14 @@ jobs:
           {
             echo "PROOF_SCENARIO=projects"
             echo "PROOF_CAPTURE_PROJECT=1"
+            # Hand the fixture's Open WebUI role back before the capture. The
+            # setup promotes it to instance admin so it can install the
+            # JWT-forward Function, and the capture reuses that same session, so
+            # without this the images show an ADMIN creating a knowledge base.
+            # An admin passes the permission gate this whole issue is about, so
+            # that capture would prove nothing. The capture asserts the role and
+            # goes red rather than publishing the wrong claim.
+            echo "PROOF_ORDINARY_ACCOUNT=1"
             echo "PROOF_PROMPT=According to the document in this project, how many milligrams per litre of dissolved silica did borehole KB-1505 measure? Answer with the number only."
             # Word bounded, not a bare substring: a bare 47 would also match a
             # turn that answered 147 or 470, and publish that as proof.
