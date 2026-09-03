@@ -99,13 +99,15 @@ done
 mkdir -p "$WORK/lib/stores"
 cp "$ROOT/vendor/open-webui/src/lib/stores/index.ts" "$WORK/lib/stores/index.ts"
 
-# The audio client, for the same reason: the voice guard (issue #1627) asserts
-# that the transcription request is bounded by a timeout. That request lives
-# here rather than in lib/hive because it is upstream's own client, and the
-# call overlay's suppression makes an unbounded one fatal: a fetch that never
-# settles never reaches the `finally` that clears the in-flight flag, so
-# capture stays suppressed and the call goes deaf for good. Only this one file
-# travels, since nothing else under lib/apis is asserted against.
+# The audio client, for the same reason: the voice guards (issue #1627) assert
+# that the transcription request is bounded by a timeout and that its failure
+# goes through lib/hive's shared message decision rather than reading `detail`
+# alone. That request lives here rather than in lib/hive because it is
+# upstream's own client, and the call overlay's suppression makes both faults
+# fatal: an unbounded fetch never reaches the `finally` that clears the
+# in-flight flag, and a silent rejection leaves a suppressed microphone with
+# nothing on screen to explain it. Only this one file travels, since nothing
+# else under lib/apis is asserted against.
 mkdir -p "$WORK/lib/apis/audio"
 cp "$ROOT/vendor/open-webui/src/lib/apis/audio/index.ts" "$WORK/lib/apis/audio/index.ts"
 

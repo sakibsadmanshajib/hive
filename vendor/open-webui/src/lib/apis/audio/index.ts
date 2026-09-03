@@ -1,4 +1,5 @@
 import { AUDIO_API_BASE_URL } from '$lib/constants';
+import { transcriptionErrorMessage } from '$lib/hive/transcriptionError';
 
 export const getAudioConfig = async (token: string) => {
 	let error = null;
@@ -93,7 +94,14 @@ export const transcribeAudio = async (token: string, file: File, language?: stri
 			return res.json();
 		})
 		.catch((err) => {
-			error = err.detail;
+			// Not `err.detail` alone. That is Open WebUI's own error shape, so
+			// a rejection from the API surfaced and every other failure went
+			// silent: `error` stayed undefined, the throw below never fired,
+			// and the caller read a failure as "nothing was said". The two that
+			// reach here without a detail are a transport error and the timeout
+			// above, and the timeout is the one that matters, since the
+			// microphone has been suppressed for the whole wait (issue #1627).
+			error = transcriptionErrorMessage(err);
 			console.error(err);
 			return null;
 		});

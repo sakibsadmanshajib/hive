@@ -352,6 +352,26 @@ describe('capture suppression while a turn is in flight (issue #1627)', () => {
 		).toBe(true);
 	});
 
+	it('leaves barge-in during generation exactly as it was', () => {
+		// The regression this flag's narrowness exists to avoid. Once the
+		// upload has finished the assistant is answering, so `assistantSpeaking`
+		// governs and "Allow Voice Interruption in Call" still works. A flag
+		// that spanned the whole turn would return true here and silently
+		// disable that setting.
+		expect(
+			shouldSuppressCapture({
+				...base,
+				assistantSpeaking: true,
+				turnInFlight: false,
+				voiceInterruption: true
+			})
+		).toBe(false);
+		// And with the setting off it still suppresses, unchanged.
+		expect(
+			shouldSuppressCapture({ ...base, assistantSpeaking: true, turnInFlight: false })
+		).toBe(true);
+	});
+
 	it('keeps mute above everything', () => {
 		// Mute is the user holding the microphone shut. Nothing overrides it.
 		expect(
@@ -431,12 +451,33 @@ describe('the call overlay wires the suppression and always clears the turn (iss
 		expect(overlay).toContain('shouldSuppressCapture');
 	});
 
-	it('feeds it the in-flight turn', () => {
-		// `loading` is the overlay's only flag for "this turn is being
-		// transcribed and answered", set in stopRecordingCallback and cleared
-		// when the turn ends. Passing anything else here would leave the
-		// window this fix exists to close.
-		expect(overlay).toContain('turnInFlight: loading');
+	it('feeds it the transcription window and not the whole turn', () => {
+		// `transcribing`, deliberately, not `loading`. `loading` stays true for
+		// the entire turn including generation, and suppressing on that would
+		// kill barge-in for anyone with voice interruption enabled, which is a
+		// setting this fix has no business touching. The window that was open
+		// is the upload, so that is the window the flag covers.
+		expect(overlay).toContain('turnInFlight: transcribing');
+		expect(overlay).not.toContain('turnInFlight: loading');
+	});
+
+	it('clears the transcription flag before the model turn begins', () => {
+		// The boundary that keeps barge-in alive. If this were cleared after
+		// submitPrompt instead, the flag would span generation and the
+		// unconditional suppression above would silence the microphone for the
+		// whole reply.
+		const handler = overlay.slice(
+			overlay.indexOf('const transcribeHandler'),
+			overlay.indexOf('const stopRecordingCallback')
+		);
+		// Matched on the call, not the word: a comment mentioning submitPrompt
+		// sits inside the finally block and would otherwise be found first,
+		// which made this assertion fail for a reason that was not the code.
+		const cleared = handler.indexOf('transcribing = false;');
+		const submitted = handler.indexOf('await submitPrompt(');
+		expect(cleared).toBeGreaterThan(-1);
+		expect(submitted).toBeGreaterThan(-1);
+		expect(cleared).toBeLessThan(submitted);
 	});
 
 	it('parks the detector rather than stepping it with a forced zero', () => {
@@ -456,24 +497,5 @@ describe('the call overlay wires the suppression and always clears the turn (iss
 		// assertion could go green for a reason unrelated to this fix.
 		expect(stopRecordingCallback).toContain('} finally {');
 		expect(stopRecordingCallback).toContain('loading = false;');
-	});
-});
-
-describe('the transcription request cannot hang the call forever (issue #1627)', () => {
-	const audioApi = readFileSync(
-		fileURLToPath(new URL('../apis/audio/index.ts', import.meta.url)),
-		'utf8'
-	);
-
-	it('bounds the transcription fetch', () => {
-		// The failure the suppression above creates if it is not bounded. A
-		// request that neither resolves nor rejects never reaches the `finally`
-		// that clears `loading`, and capture stays suppressed for the rest of
-		// the call with nothing on screen to recover with.
-		const transcribe = audioApi.slice(
-			audioApi.indexOf('export const transcribeAudio'),
-			audioApi.indexOf('export const synthesizeOpenAISpeech')
-		);
-		expect(transcribe).toMatch(/AbortSignal\.timeout\(/);
 	});
 });

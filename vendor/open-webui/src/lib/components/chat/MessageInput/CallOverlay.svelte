@@ -35,6 +35,13 @@
 	let model = null;
 
 	let loading = false;
+	// The transcription round trip, and nothing wider (issue #1627). Capture is
+	// suppressed while this holds, so it must cover exactly the window that was
+	// open and no more: from the utterance closing to the provider answering.
+	// `loading` spans the whole turn including generation, and suppressing on
+	// that would kill barge-in for anyone with voice interruption enabled,
+	// which is a setting this fix has no business touching.
+	let transcribing = false;
 	let confirmed = false;
 	let interrupted = false;
 	let assistantSpeaking = false;
@@ -166,17 +173,35 @@
 			return;
 		}
 
-		await tick();
-		const file = blobToFile(audioBlob, 'recording.wav');
+		// Set before the first await and cleared the moment the provider
+		// answers, so the suppression covers the upload and not the model turn
+		// that follows it. The analyser loop restarted by stopRecordingCallback
+		// does not run until the next animation frame, and everything from that
+		// restart to here is synchronous, so there is no unsuppressed gap at
+		// the front of this window.
+		let res = null;
+		try {
+			transcribing = true;
+			await tick();
+			const file = blobToFile(audioBlob, 'recording.wav');
 
-		const res = await transcribeAudio(
-			localStorage.token,
-			file,
-			$settings?.audio?.stt?.language
-		).catch((error) => {
-			toast.error(`${error}`);
-			return null;
-		});
+			res = await transcribeAudio(
+				localStorage.token,
+				file,
+				$settings?.audio?.stt?.language
+			).catch((error) => {
+				toast.error(`${error}`);
+				return null;
+			});
+		} finally {
+			// Cleared before submitPrompt, deliberately. From here the assistant
+			// is answering, `assistantSpeaking` governs, and interruption works
+			// exactly as it did before this change. Parking means calibration
+			// restarts when this clears, so the few hundred milliseconds before
+			// chat:start fires are spent measuring the room rather than being
+			// mistaken for speech.
+			transcribing = false;
+		}
 
 		if (res) {
 			console.log(res.text);
@@ -227,14 +252,17 @@
 					await transcribeHandler(audioBlob);
 				} finally {
 					// `submitPrompt` inside transcribeHandler is awaited with no
-					// catch of its own, so an exception from the model turn used
-					// to escape here as an unhandled rejection with `loading`
-					// still true, leaving the overlay in its loading state
-					// forever. That was merely ugly before. It is fatal now:
-					// capture is suppressed while `loading` holds, so a stuck
-					// flag would mean a call that never hears anything again.
+					// catch of its own, so an exception from the model turn
+					// escapes here as an unhandled rejection. Without this the
+					// overlay kept its loading state forever.
+					//
+					// `transcribing` has its own finally around the narrow window
+					// it guards; clearing it again here is the backstop for the
+					// paths that never reach that block at all, such as an audio
+					// blob too small to send.
 					confirmed = false;
 					loading = false;
+					transcribing = false;
 				}
 			}
 		} else {
@@ -373,7 +401,7 @@
 					shouldSuppressCapture({
 						muted,
 						assistantSpeaking,
-						turnInFlight: loading,
+						turnInFlight: transcribing,
 						voiceInterruption: $settings?.voiceInterruption ?? false
 					})
 				) {
