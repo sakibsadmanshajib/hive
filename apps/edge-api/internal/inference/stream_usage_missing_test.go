@@ -232,14 +232,20 @@ func TestExecuteStreaming_ToolCallOnlyTurn_Billed_NotUpstreamError(t *testing.T)
 	if !ok {
 		t.Fatalf("a served tool-calling turn is billable work; expected FinalizeReservation, got calls: %+v", rec.calls)
 	}
-	// Same deliberate undercharge as the unparseable-frame case above:
-	// AccumulateContent ignores tool-call deltas, so the prompt is the only
-	// quantity available to price, and it is charged rather than the flat hold.
+	// The prompt AND the tool call the turn produced. AccumulateContent still
+	// ignores tool-call deltas, because they are not text a customer can read,
+	// but the settlement estimate no longer inherits that blindness: it prices
+	// the tool call's own name and arguments as completion output (issue #928
+	// defect 1). On this fixture the two figures round to the same credit,
+	// because its tool call is a dozen bytes; the discriminating case, with an
+	// argument payload of realistic size, is
+	// TestExecuteStreaming_ToolCallOnlyTurn_ChargesForTheToolCallItProduced.
 	actual := finalizeInt64(t, body, "actual_credits")
-	promptOnly := CreditsForTokens(routeMockPricing,
-		estimateCompletionTokens(promptText(EndpointChatCompletions, reqBody)), 0, 0, 0)
-	if actual != promptOnly {
-		t.Errorf("actual_credits = %d, want %d: a served tool-calling turn bills the prompt it consumed, never the flat hold (#1198)", actual, promptOnly)
+	want := CreditsForTokens(routeMockPricing,
+		estimateCompletionTokens(promptText(EndpointChatCompletions, reqBody)), 0, 0,
+		estimateCompletionTokens(`get_weather{"city":"Dha`))
+	if actual != want {
+		t.Errorf("actual_credits = %d, want %d: a served tool-calling turn bills the prompt it consumed plus the tool call it produced, never the flat hold (#1198, #928)", actual, want)
 	}
 	if actual < 1 {
 		t.Errorf("actual_credits = %d: a served tool-calling turn is never free (#1215, D-034)", actual)

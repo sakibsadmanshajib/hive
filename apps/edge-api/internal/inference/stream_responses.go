@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
 // responsesEventTranslator tracks state for translating chat-completions SSE chunks
@@ -177,7 +178,10 @@ func (o *Orchestrator) executeResponsesStreaming(
 	// 6. Dispatch to LiteLLM (always with stream_options for usage) with
 	// bounded retry on 429/5xx; safe because no bytes have been written
 	// to the client yet at this point.
-	resp, err := dispatchWithRetry(ctx, route.LiteLLMModelName, body, o.litellm.ChatCompletion)
+	// ChatCompletionStream, not ChatCompletion: this response is an SSE stream,
+	// and the buffered client's total timeout would cut any turn still running
+	// two minutes after dispatch (issue #928 defect 3).
+	resp, err := dispatchWithRetry(ctx, route.LiteLLMModelName, body, o.litellm.ChatCompletionStream)
 	if err != nil {
 		if reservation.ID != "" {
 			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, "upstream_error")
@@ -231,8 +235,17 @@ func (o *Orchestrator) executeResponsesStreaming(
 		flusher.Flush()
 	}
 
-	// 10. Scan and translate upstream SSE chunks
-	scanner := bufio.NewScanner(resp.Body)
+	// 10. Scan and translate upstream SSE chunks.
+	//
+	// Through the idle watchdog rather than straight off resp.Body, same as the
+	// chat relay and for the same reason: the streaming dispatch above carries
+	// no total timeout, so this is what bounds a provider that opens a stream
+	// and then goes silent (issue #928 defect 3). A stall closes the body, which
+	// surfaces as a scanner error and runs the abort branch below.
+	idle := newIdleTimeoutReader(resp.Body, streamIdleTimeout,
+		fmt.Sprintf("request_id=%s alias=%s endpoint=%s", requestID, model, EndpointResponses))
+	defer idle.stop()
+	scanner := bufio.NewScanner(idle)
 	scanner.Buffer(make([]byte, 64*1024), sseScanLineMaxBytes)
 
 	for scanner.Scan() {
@@ -253,6 +266,27 @@ func (o *Orchestrator) executeResponsesStreaming(
 		}
 
 		jsonData := line[6:]
+
+		// An upstream ERROR frame, not a completion chunk (issue #928 defect 4).
+		// It parses into ChatCompletionChunk with every field absent, so the
+		// typed path below used to translate it into nothing at all while still
+		// setting HasForwardedChunk -- which on this relay is worse than on the
+		// chat one: an error-only Responses stream was counted as delivered work
+		// and CHARGED. Ended honestly instead, with the same replacement helper
+		// the other relays use, so nothing upstream reaches the caller and the
+		// raw text stays in the operator log.
+		if _, upstream, isErrorFrame := sanitize.ReplaceErrorFrame(
+			[]byte(jsonData), apierrors.UpstreamUnavailableMessage(model)); isErrorFrame {
+			log.Printf("inference: responses API replaced an upstream error frame request_id=%s alias=%s upstream_error=%.512s",
+				requestID, model, upstream)
+			// emitFailed is this surface's spelling of the chat relay's error
+			// frame: the Responses lifecycle terminates on response.failed, and
+			// its message is a static gateway-owned string, so the replacement
+			// frame itself is not what gets written here.
+			translator.emitFailed(w, flusher)
+			return
+		}
+
 		var chunk ChatCompletionChunk
 		if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 			continue

@@ -63,7 +63,7 @@ func handleChatCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Reque
 
 	if req.Stream {
 		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		o.executeStreaming(r.Context(), w, r, EndpointChatCompletions, body, req.Model, req.Model, needFlags, DefaultHoldText, includeUsage, req.ReasoningEffort, o.litellm.ChatCompletion)
+		o.executeStreaming(r.Context(), w, r, EndpointChatCompletions, body, req.Model, req.Model, needFlags, DefaultHoldText, includeUsage, req.ReasoningEffort, o.litellm.ChatCompletionStream)
 		return
 	}
 

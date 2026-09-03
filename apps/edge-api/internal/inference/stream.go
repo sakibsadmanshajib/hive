@@ -16,6 +16,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
+	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
 // sseScanLineMaxBytes is the maximum single SSE line either relay loop in
@@ -66,6 +67,31 @@ type UsageAccumulator struct {
 	// zero-content guard needs this to tell it apart from a stream that
 	// delivered nothing (issue #1326).
 	HasToolCall bool
+	// ToolCallText is the model-generated text carried by those tool-call
+	// deltas: the function name and the argument fragments, and nothing else.
+	// It is the OUTPUT of a tool-call-only turn, and it is kept apart from
+	// Content because the two answer different questions. Content is what the
+	// customer could read, which is what the zero-content guard judges
+	// emptiness by (isZeroContentStream) and what the usage clamp recomputes
+	// completion_tokens from. This is what the model produced, which is what
+	// settlement estimates a completion count from when the upstream sent no
+	// usable usage block at all.
+	//
+	// Without it that estimate was zero on the modal agent turn, so the whole
+	// output half of a tool-call-only turn was priced at nothing and only the
+	// prompt was charged (issue #928 defect 1). D-055 names this exact shape in
+	// its fail-closed clause. Nothing here widens which token classes are
+	// billed: completion tokens were always billed, and this only stops the
+	// estimate of them being blind to the one output shape that carries no
+	// text.
+	//
+	// Deliberately NOT fed into the usage clamp. That path is reached when an
+	// upstream DID send a usage block reporting completion_tokens=0, where the
+	// recorded reading (usage_clamp.go, TestUsageIdentity_ToolCallOnlyTurn...)
+	// is that the unattributed quantity is carried operator-side rather than
+	// written into the customer-facing payload. This field changes what an
+	// ABSENT usage block is worth, and touches no reported number.
+	ToolCallText strings.Builder
 	// SawFinish records that at least one relayed chunk carried a non-empty
 	// finish_reason, and SawNonLengthFinish that at least one of those said
 	// anything other than "length". Together they are the streaming spelling of
@@ -150,6 +176,7 @@ func (a *UsageAccumulator) ObserveShape(chunk ChatCompletionChunk) {
 	for _, choice := range chunk.Choices {
 		if rawFieldPresent(choice.Delta.ToolCalls) || rawFieldPresent(choice.Delta.FunctionCall) {
 			a.HasToolCall = true
+			appendToolCallText(&a.ToolCallText, choice.Delta.ToolCalls, choice.Delta.FunctionCall)
 		}
 		if choice.Delta.Refusal != nil && *choice.Delta.Refusal != "" {
 			a.HasVisibleRefusal = true
@@ -163,6 +190,51 @@ func (a *UsageAccumulator) ObserveShape(chunk ChatCompletionChunk) {
 		// shared with DeliveryShape.ObserveFinishReason (issue #1526).
 		if !isLengthFinish(*choice.FinishReason) {
 			a.SawNonLengthFinish = true
+		}
+	}
+}
+
+// appendToolCallText appends the model-generated text of one chunk's tool-call
+// deltas to b: each call's function name and its argument fragment, in arrival
+// order, and nothing else.
+//
+// The framing is skipped on purpose. A streamed tool call sends its id, type and
+// index on every fragment, so estimating from the raw delta JSON would count
+// roughly forty bytes of envelope for every two bytes the model actually
+// produced -- an over-count on a figure that gets billed, which is the one
+// direction every estimate on this path refuses to err in (see bytesPerToken).
+// Name plus arguments is what the model emitted, and estimateCompletionTokens
+// under-counts it like any other text.
+//
+// A fragment this gateway cannot decode contributes nothing rather than its raw
+// bytes, for the same reason: an unparseable shape is not a shape whose token
+// count is known.
+func appendToolCallText(b *strings.Builder, toolCalls, functionCall json.RawMessage) {
+	if len(toolCalls) > 0 {
+		var calls []struct {
+			Function *struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+		}
+		if err := json.Unmarshal(toolCalls, &calls); err == nil {
+			for _, call := range calls {
+				if call.Function == nil {
+					continue
+				}
+				b.WriteString(call.Function.Name)
+				b.WriteString(call.Function.Arguments)
+			}
+		}
+	}
+	if len(functionCall) > 0 {
+		var legacy struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		}
+		if err := json.Unmarshal(functionCall, &legacy); err == nil {
+			b.WriteString(legacy.Name)
+			b.WriteString(legacy.Arguments)
 		}
 	}
 }
@@ -409,8 +481,17 @@ func (o *Orchestrator) executeStreaming(
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	// 9. Relay SSE chunks
-	scanner := bufio.NewScanner(resp.Body)
+	// 9. Relay SSE chunks.
+	//
+	// Read through the idle watchdog, never straight off resp.Body: the
+	// streaming dispatch carries no total timeout any more (issue #928 defect
+	// 3, litellm_client.go), so this is what bounds a provider that opens a
+	// stream and then goes silent. It closes the body on a stall, which surfaces
+	// as a scanner error and runs the abort branch at 9b below.
+	idle := newIdleTimeoutReader(resp.Body, streamIdleTimeout,
+		fmt.Sprintf("request_id=%s alias=%s endpoint=%s", requestID, aliasID, endpoint))
+	defer idle.stop()
+	scanner := bufio.NewScanner(idle)
 	// Increase buffer for large chunks
 	scanner.Buffer(make([]byte, 64*1024), sseScanLineMaxBytes)
 
@@ -443,6 +524,40 @@ func (o *Orchestrator) executeStreaming(
 
 		if strings.HasPrefix(line, "data: ") {
 			jsonData := line[6:]
+
+			// An upstream ERROR frame, not a completion chunk (issue #928
+			// defect 4). {"error": {...}} unmarshals cleanly into
+			// ChatCompletionChunk with every field absent, so the typed branch
+			// below used to rewrite its model, mint it an id and re-marshal it:
+			// the error payload was replaced by an empty chunk, and dropped
+			// outright when the caller had not asked for usage. Either way the
+			// customer's stream simply stopped mid-answer, behind a 200 that was
+			// committed before the failure existed, with nothing to render and
+			// nothing to retry on. Only an UNPARSEABLE frame ever reached the
+			// sanitizing fallback below, and an error frame parses fine.
+			//
+			// sanitize.ReplaceErrorFrame is the same helper the session-chat and
+			// RAG relays already use for this, with the same contract: the frame
+			// is REPLACED rather than scrubbed, so nothing upstream survives into
+			// what the customer receives, and the raw upstream text lives only in
+			// the operator log line below (%.512s truncates on a rune boundary).
+			// Two implementations of one sanitizer is how they drift.
+			if replacement, upstream, isErrorFrame := sanitize.ReplaceErrorFrame(
+				[]byte(jsonData), apierrors.UpstreamUnavailableMessage(aliasID)); isErrorFrame {
+				log.Printf("inference: replaced an upstream error frame request_id=%s alias=%s endpoint=%s upstream_error=%.512s",
+					requestID, aliasID, endpoint, upstream)
+				fmt.Fprintf(w, "data: %s\n\n", replacement)
+				flusher.Flush()
+				// HasForwardedChunk is deliberately NOT set. It is the delivery
+				// signal the #1215 fallback bills on, and a gateway-owned error
+				// frame is not delivered work: marking it so would charge the
+				// customer for an upstream failure. Whatever really was delivered
+				// before this frame still bills, from the accumulator state this
+				// branch leaves untouched, and StreamCompleted stays false so the
+				// zero-content guard cannot mistake a fault for a burn.
+				return nil
+			}
+
 			var chunk ChatCompletionChunk
 			if err := json.Unmarshal([]byte(jsonData), &chunk); err == nil {
 				// Rewrite model to alias ID, mint a gateway-owned id and drop
@@ -807,6 +922,15 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	// raw bytes themselves must never be counted directly (issue #602).
 	var credits int64
 	var confirmed, delivered bool
+	// The text settlement estimates a completion count from when the upstream
+	// sent no usable usage block: what the customer could read, PLUS the
+	// tool-call arguments the turn produced (issue #928 defect 1). The two are
+	// separate everywhere else in this function on purpose -- content alone is
+	// what the zero-content guard judges emptiness by, and what
+	// UpstreamActualSettlement reads -- because "the customer saw nothing" and
+	// "the model produced nothing" are different facts and a tool-call-only turn
+	// is exactly where they diverge.
+	completionText := content + acc.ToolCallText.String()
 	// generationID is the upstream's audit handle for this request, and on a
 	// variable-price alias it is the only thing that recovers WHICH pool member
 	// served it. It is hoisted out of the branch below so an absorbed burn can
@@ -833,7 +957,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 				settled.Credits, settled.Confirmed, settled.GenerationID, reservation.Held())
 		}
 	} else {
-		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content, ceiling)
+		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), completionText, ceiling)
 	}
 
 	// A frame reached the caller even though nothing accumulated: an
@@ -968,7 +1092,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 			credits = capCaptureAtCeiling(route, ceiling,
 				captureInputTokens(acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, endpoint, []byte(promptBody)),
 				acc.CachedTokens, acc.CacheWriteTokens,
-				captureCompletionTokens(acc.HasUsage, acc.OutputTokens, content),
+				captureCompletionTokens(acc.HasUsage, acc.OutputTokens, completionText),
 				reservation.Held())
 		}
 		streamUsageBlockMissing.WithLabelValues(model, endpoint).Inc()
