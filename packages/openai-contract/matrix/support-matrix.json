@@ -1250,6 +1250,20 @@
     },
     {
       "method": "GET",
+      "path": "/v1/user/instructions",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1363): read the signed-in person's standing custom instructions, the text chat dispatch prepends to the system messages of every one of their turns. Returns an empty string when they have written none. Session principal only: an API-key caller resolves a tenant but no person, and is refused rather than answered with a shared row."
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/user/instructions",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1363): replace the signed-in person's custom instructions. Empty content deletes the row, so a cleared box and a box never filled in are one state. There is deliberately no DELETE verb. Capped at 4000 characters at this boundary and by a CHECK on public.user_instructions."
+    },
+    {
+      "method": "GET",
       "path": "/v1/tools",
       "status": "supported_now",
       "phase": null,
