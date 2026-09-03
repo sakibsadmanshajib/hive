@@ -756,6 +756,18 @@ func TestIsZeroContentStream(t *testing.T) {
 		acc.StreamCompleted = true
 		return acc
 	}
+	// An EMPTY tool-call array is not a tool call. Reading it as one set
+	// HasToolCall and disarmed this guard for a stream that delivered nothing
+	// (second review on PR #1762).
+	withEmptyToolCallArray := func(reason *string) *UsageAccumulator {
+		acc := &UsageAccumulator{}
+		acc.ObserveShape(ChatCompletionChunk{Choices: []ChunkChoice{{
+			Delta:        ChunkDelta{ToolCalls: json.RawMessage(`[]`)},
+			FinishReason: reason,
+		}}})
+		acc.StreamCompleted = true
+		return acc
+	}
 	withRefusal := func(reason *string) *UsageAccumulator {
 		acc := &UsageAccumulator{}
 		acc.ObserveShape(ChatCompletionChunk{Choices: []ChunkChoice{{
@@ -786,6 +798,7 @@ func TestIsZeroContentStream(t *testing.T) {
 		{"same burn shape, but the stream never completed", truncated(&length), "", false},
 		{"tool call finished on length is real work", withToolCall(&length), "", false},
 		{"tool call finished on tool_calls is real work", withToolCall(&toolCalls), "", false},
+		{"an empty tool_calls array is not a tool call", withEmptyToolCallArray(&length), "", true},
 		{"a refusal is visible output the caller can act on", withRefusal(&length), "", false},
 		{"finished on stop, upstream called it complete", completed(&stop), "", false},
 		{"relay cut off before any finish_reason", &UsageAccumulator{StreamCompleted: true}, "", false},

@@ -47,7 +47,7 @@ func handleCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Request) 
 
 	if req.Stream {
 		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
-		o.executeStreaming(r.Context(), w, r, EndpointCompletions, body, req.Model, req.Model, needFlags, DefaultHoldText, includeUsage, nil, o.litellm.Completion)
+		o.executeStreaming(r.Context(), w, r, EndpointCompletions, body, req.Model, req.Model, needFlags, DefaultHoldText, includeUsage, nil, o.litellm.CompletionStream)
 		return
 	}
 

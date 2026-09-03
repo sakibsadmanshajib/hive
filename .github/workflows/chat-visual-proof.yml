@@ -79,9 +79,12 @@ on:
           untouched, answered with the model's own web_search or web_fetch call
           and a rendered source list, plus a control turn on an alias the
           catalog reports as not tool capable. projects photographs the claim
-          in issue #1505 instead: an ordinary signed-in user creates a
-          knowledge base, adds a document to it, and asks a question only that
-          document can answer, with the source shown on the turn.
+          in issue #1505: an ordinary signed-in user creates a knowledge base,
+          adds a document to it, and asks a question only that document can
+          answer, with the source shown on the turn. instructions photographs
+          the claim in issue #1363: a standing instruction written in Settings,
+          read back from the backend after a full page reload, and an answer to
+          an unrelated question that obeys it.
         required: false
         default: chat
         type: choice
@@ -89,6 +92,7 @@ on:
           - chat
           - webtools
           - projects
+          - instructions
   pull_request:
     branches: [main]
     # Deliberately the Hive-owned chat paths and not vendor/open-webui as a
@@ -713,6 +717,26 @@ jobs:
             echo "PROOF_REQUIRE_SOURCES=1"
           } >> "$GITHUB_ENV"
 
+      - name: Aim the capture at the custom instructions claim
+        # Only for the `instructions` scenario. Everything here is environment
+        # for the capture script, which defaults it off, so a `chat` run reaches
+        # the capture with exactly the values it had before this step existed.
+        #
+        # The instruction and the question are deliberately unrelated. Asking
+        # "reply in one word" and then checking for one word would be satisfied
+        # by a model that never saw the instruction at all, because that is what
+        # a model does with that question anyway. A nonsense terminator cannot
+        # be produced by accident from "what colour is a banana", so a reply
+        # carrying it is a reply the stored text reached.
+        if: github.event.inputs.scenario == 'instructions'
+        run: |
+          set -euo pipefail
+          {
+            echo "PROOF_SET_INSTRUCTIONS=Finish every reply with the single word BANANAPHONE on its own line."
+            echo "PROOF_PROMPT=What colour is a banana? Reply with only the single colour word."
+            echo "PROOF_REPLY_PATTERN=bananaphone"
+          } >> "$GITHUB_ENV"
+
       - name: Aim the capture at the web tools claim
         # Only for the `webtools` scenario. Everything here is environment for
         # the capture script, which defaults every one of these off, so a `chat`
@@ -903,27 +927,48 @@ jobs:
 
           # Two waves, and caddy-owui is deliberately not in the first.
           #
-          # It declares `depends_on: open-webui: service_healthy`, and Open WebUI
-          # cold boots slowly: measured on a fresh database, 112 seconds from
-          # container start to its first passing health check, most of it its own
-          # alembic chain. Nothing in this repository defines that healthcheck,
-          # so it is inherited whole from the upstream base image with a test and
-          # nothing else, and Docker's defaults apply: start period 0s, interval
-          # 30s, three retries. The container is therefore declared unhealthy at
-          # about 90 seconds, roughly 22 seconds before it is actually up,
-          # compose treats that as a hard dependency failure, and the whole `up`
-          # aborts with "dependency failed to start" naming no cause. Docker
-          # itself recovers, flipping the container back to healthy on the first
-          # successful check, so the only thing that actually needed to happen
-          # was waiting. Filed as issue #1757: it is every fresh install, not
-          # only this job.
+          # It declares `depends_on: open-webui: service_healthy`, and Open
+          # WebUI's first boot is slow and variable: it runs its own alembic
+          # chain in full against a database that has never been migrated. On
+          # this runner, with owui-data freshly created, it answered /health
+          # 31 seconds after container start and compose saw it healthy at 70.
+          # Issue #1757 reports 112 seconds from a slower machine.
           #
-          # This job waits with a deadline it chooses and an error message that
-          # says what did not happen, instead of inheriting a compose file's
-          # judgement about how long a warm deployment should take. The
-          # healthcheck itself is left alone on purpose: widening it would change
-          # how every deployment detects a genuinely dead chat container, which
-          # is a product decision and not this job's to make.
+          # This staging was written when that raced the healthcheck. The
+          # healthcheck is defined in deploy/docker/docker-compose.yml, and at
+          # the time it gave a 30s start period, which put the unhealthy
+          # verdict at a measured 70 seconds. That is the same 70 seconds this
+          # runner needs to finish booting, which is why the defect was
+          # intermittent rather than universal: the verdict and the boot were
+          # racing. When the verdict won, compose aborted the whole `up` with
+          # "dependency failed to start", naming no cause. Issue #1757 widened
+          # the start period to 240s, roughly 3.5x the slowest boot observed,
+          # so the race is gone and a plain `up --profile chat` completes cold.
+          #
+          # An earlier revision of this comment said the healthcheck was
+          # inherited from the upstream base image with Docker's defaults of a
+          # 0s start period, a 30s interval and three retries, putting the
+          # verdict at 90 seconds. That was wrong in every number: a
+          # compose-level healthcheck overrides the image's, and this repository
+          # has defined one since PR #960.
+          #
+          # The staging is kept anyway, and is not redundant. Because
+          # caddy-owui is held out of the wave below, a slow Open WebUI boot
+          # cannot produce the caddy-owui to open-webui dependency failure
+          # here; the wait after this step polls Open WebUI's own /health from
+          # inside the container against the 420s deadline, and says what did
+          # not happen. Fold caddy-owui back into the wave and that stops being
+          # true: a boot that hangs would then surface as "dependency failed to
+          # start", naming no cause, only once the healthcheck reaches its
+          # verdict at about 290 seconds.
+          #
+          # Narrow claim, deliberately. This step can still fail with a
+          # dependency error from open-webui's OWN depends_on, which requires
+          # edge-api and control-plane to be service_healthy. Holding caddy-owui
+          # back removes one edge of the graph, not the whole class.
+          #
+          # Removing the staging is a separate decision, not a side effect of
+          # the healthcheck change.
           if ! docker compose --env-file ../../.env.ci up -d --build \
                  redis litellm markitdown searxng control-plane edge-api open-webui; then
             echo "::error::the chat stack did not come up"
@@ -1287,6 +1332,9 @@ jobs:
               exit 1
             fi
             caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. An ordinary account, with no admin role and no hand-granted permission, creates a knowledge base on the Projects page, adds a document to it, and asks a question whose answer appears only in that document; the turn answers it and renders the document as its source. Run ${GITHUB_RUN_ID}."
+          fi
+          if [ "${SCENARIO:-chat}" = "instructions" ]; then
+            caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. A standing custom instruction is written in Settings and saved, the page is fully reloaded and the text is read back from the Hive backend rather than from the browser, and an unrelated question is then answered in a way that obeys it. Run ${GITHUB_RUN_ID}."
           fi
           if [ "${SCENARIO:-chat}" = "webtools" ]; then
             caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. A question needing live data, sent with the web search toggle off and features.web_search absent from the outgoing request, answered with the model's own tool call and a rendered source list; then the same question on ${PROOF_CONTROL_MODEL:-a non tool capable alias}, whose every enabled route reports tools_supported = false, settling with no source list. Run ${GITHUB_RUN_ID}."

@@ -3028,10 +3028,16 @@
 			true;
 		// Always include system prompt — backend extracts it and prepends to DB messages.
 		// Only temp chats need conversation messages (persisted chats load from DB).
+		// The per-user system prompt Open WebUI stored in its own database used to
+		// be the second half of this expression. Hive replaced that field with
+		// custom instructions, which are Hive state and are injected by edge-api
+		// on every turn (issue #1363), so reading the old store here would be a
+		// second, browser-attached copy of the same concept: undefined in
+		// practice today, and a silent doubling the moment anything wrote to it.
+		// `params?.system` stays: that is the per-chat system prompt from Chat
+		// Controls, a different control with a different lifetime.
 		let messages: any[] = [
-			params?.system || $settings.system
-				? { role: 'system', content: `${params?.system ?? $settings?.system ?? ''}` }
-				: undefined
+			params?.system ? { role: 'system', content: `${params.system}` } : undefined
 		].filter(Boolean);
 
 		if ($temporaryChatEnabled) {
@@ -3497,7 +3503,7 @@
 					id: _chatId,
 					title: $i18n.t('New Chat'),
 					models: selectedModels,
-					system: $settings.system ?? undefined,
+					system: params?.system ?? undefined,
 					params: params,
 					history: history,
 					messages: createMessagesList(history, history.currentId),
@@ -3762,7 +3768,7 @@
 							chat: {
 								title: $chatTitle,
 								models: selectedModels,
-								system: $settings.system ?? undefined,
+								system: params?.system ?? undefined,
 								params: params,
 								history: history,
 								timestamp: Date.now()

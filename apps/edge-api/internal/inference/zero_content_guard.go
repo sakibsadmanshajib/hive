@@ -87,7 +87,7 @@ func isEmptyLengthCompletion(normalized []byte) bool {
 		if choice.Message.Content != nil && *choice.Message.Content != "" {
 			return false
 		}
-		if rawFieldPresent(choice.Message.ToolCalls) || rawFieldPresent(choice.Message.FunctionCall) {
+		if toolCallPresent(choice.Message.ToolCalls) || toolCallPresent(choice.Message.FunctionCall) {
 			return false
 		}
 		if choice.Message.Refusal != nil && *choice.Message.Refusal != "" {
