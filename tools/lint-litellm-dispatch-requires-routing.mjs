@@ -51,7 +51,10 @@ const LITELLM_TARGET = /litellm/i;
 // (including a fresh http.Client rather than an injected one), the convenience
 // helpers, and dispatch through the shared LiteLLM client's methods, which is
 // how a new handler would most plausibly reach the proxy without writing any
-// HTTP itself.
+// HTTP itself. The optional Stream suffix covers the streaming twins added for
+// issue #928: the buffered and streaming dispatchers differ only in which HTTP
+// client they use, so a guard that knew one name and not the other would let the
+// same unrouted dispatch through under the other spelling.
 const DISPATCH = new RegExp([
   "http\\.NewRequest",
   "http\\.Post",
@@ -59,8 +62,8 @@ const DISPATCH = new RegExp([
   "http\\.Client\\{",
   "\\.Do\\(",
   "dispatchWithRetry",
-  "\\.ChatCompletion\\(",
-  "\\.Completion\\(",
+  "\\.ChatCompletion(Stream)?\\(",
+  "\\.Completion(Stream)?\\(",
   "\\.Embeddings\\(",
   "\\.Speech\\(",
   "\\.ImageGeneration\\(",

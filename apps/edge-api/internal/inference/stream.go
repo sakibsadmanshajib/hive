@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
+	"github.com/sakibsadmanshajib/hive/packages/sanitize"
 )
 
 // sseScanLineMaxBytes is the maximum single SSE line either relay loop in
@@ -66,6 +68,35 @@ type UsageAccumulator struct {
 	// zero-content guard needs this to tell it apart from a stream that
 	// delivered nothing (issue #1326).
 	HasToolCall bool
+	// toolCalls holds the model-generated text of those deltas, per tool-call
+	// index: the function name and the arguments, and nothing else. It is the
+	// OUTPUT of a tool-call-only turn, and it is kept apart from Content because
+	// the two answer different questions. Content is what the customer could
+	// read, which is what the zero-content guard judges emptiness by
+	// (isZeroContentStream) and what the usage clamp recomputes
+	// completion_tokens from. This is what the model produced, which is what
+	// settlement estimates a completion count from when the upstream sent no
+	// usable usage block at all.
+	//
+	// Without it that estimate was zero on the modal agent turn, so the whole
+	// output half of a tool-call-only turn was priced at nothing and only the
+	// prompt was charged (issue #928 defect 1). D-055 names this exact shape in
+	// its fail-closed clause. Nothing here widens which token classes are
+	// billed: completion tokens were always billed, and this only stops the
+	// estimate of them being blind to the one output shape that carries no text.
+	//
+	// Deliberately NOT fed into the usage clamp. That path is reached when an
+	// upstream DID send a usage block reporting completion_tokens=0, where the
+	// recorded reading (usage_clamp.go, TestUsageIdentity_ToolCallOnlyTurn...)
+	// is that the unattributed quantity is carried operator-side rather than
+	// written into the customer-facing payload. This field changes what an
+	// ABSENT usage block is worth, and touches no reported number.
+	//
+	// Keyed by the delta's own tool-call index, with legacyFunctionCallIndex for
+	// the index-less legacy function_call shape. Per index, not one flat buffer,
+	// because reconciling fragments is only possible against the value they are
+	// fragments OF; see foldToolCallFragment.
+	toolCalls map[int]*toolCallOutput
 	// SawFinish records that at least one relayed chunk carried a non-empty
 	// finish_reason, and SawNonLengthFinish that at least one of those said
 	// anything other than "length". Together they are the streaming spelling of
@@ -148,8 +179,9 @@ func (a *UsageAccumulator) AccumulateContent(chunk ChatCompletionChunk) {
 // shape signals for settlement. See isZeroContentStream.
 func (a *UsageAccumulator) ObserveShape(chunk ChatCompletionChunk) {
 	for _, choice := range chunk.Choices {
-		if rawFieldPresent(choice.Delta.ToolCalls) || rawFieldPresent(choice.Delta.FunctionCall) {
+		if toolCallPresent(choice.Delta.ToolCalls) || toolCallPresent(choice.Delta.FunctionCall) {
 			a.HasToolCall = true
+			a.accumulateToolCalls(choice.Delta.ToolCalls, choice.Delta.FunctionCall)
 		}
 		if choice.Delta.Refusal != nil && *choice.Delta.Refusal != "" {
 			a.HasVisibleRefusal = true
@@ -165,6 +197,243 @@ func (a *UsageAccumulator) ObserveShape(chunk ChatCompletionChunk) {
 			a.SawNonLengthFinish = true
 		}
 	}
+}
+
+// legacyFunctionCallIndex is the map key for the pre-tool_calls function_call
+// delta, which carries no index of its own. Negative so it can never collide
+// with a real one.
+const legacyFunctionCallIndex = -1
+
+// toolCallOutput is one tool call's model-generated text as it has been
+// observed so far: its name and its arguments, each collected as the fragments
+// that arrived rather than as a running reconciliation of them.
+type toolCallOutput struct {
+	name      fragmentStream
+	arguments fragmentStream
+}
+
+// fragmentStream collects every fragment of ONE field of ONE tool call and
+// decides, from the fragments themselves, which of the two wire shapes the
+// provider used. The decision is per stream, not per fragment, because that is
+// the only level at which the question has an answer.
+//
+// TWO WIRE SHAPES, ONE OF THEM RUINOUS IF ASSUMED AWAY. OpenAI's contract is
+// INCREMENTAL: every fragment is the next piece, and the value is their
+// concatenation. Nothing enforces that contract on the wire, and providers are
+// DB-managed and admin-addable here, so a CUMULATIVE provider -- one whose
+// every fragment repeats the whole argument string built so far -- is a shape
+// this gateway will meet and does not control. Concatenating a cumulative
+// stream is quadratic: two hundred fragments of a short call settled 87.25x the
+// truthful figure, bounded only by the reservation hold, because ordinary SDK
+// traffic sets no max_tokens for the ceiling bound to catch (second review on
+// PR #1762).
+//
+// The invariant this type exists to hold: A TURN SETTLES FOR THE FINAL
+// ARGUMENTS THE MODEL PRODUCED, ONCE, WHATEVER FRAMING THE PROVIDER USED.
+//
+// The two shapes are separable only by CONTENT, never by length. Incremental
+// fragments of one JSON argument object are partial and do not parse on their
+// own; cumulative fragments each parse, or each repeat the previous one. So a
+// fragment latches cumulative when any of these hold against its predecessor:
+//
+//   - it repeats the whole previous fragment and extends it (raw growing
+//     prefixes, the shape a provider produces by resending its buffer);
+//   - it is byte-identical to it (a plain repeat, which is also how nearly every
+//     provider streams the function NAME across an argument stream);
+//   - both it and its predecessor parse as standalone JSON objects (the shape a
+//     provider produces by repairing each prefix into valid JSON, and equally
+//     the one that re-marshals the same keys in map order -- the two fixtures
+//     the byte-prefix rule this replaces missed entirely, at 87.25x and 3.00x).
+//
+// The latch is sticky and needs two or more fragments, per the rule above. Its
+// error directions are asymmetric and that is deliberate: a false cumulative
+// verdict UNDER-counts, which is the direction this whole estimate already errs
+// in (see bytesPerToken), while a false incremental verdict is the overcharge.
+//
+// ponytail: content classification, not a per-provider wire-shape column. A
+// column would need a value for every admin-added provider before its first
+// request, and would be wrong exactly when someone forgot.
+type fragmentStream struct {
+	// joined is the incremental reading: every fragment concatenated. It stops
+	// growing once the cumulative latch trips, since nothing reads it after
+	// that and a cumulative stream's concatenation is quadratic in memory as
+	// well as in credits. joinedLen keeps counting regardless, because it is
+	// the ceiling below and has to stay true after the builder stops.
+	joined    strings.Builder
+	joinedLen int
+	// last is the cumulative reading: the final fragment, which under that
+	// contract IS the whole value.
+	last string
+	// prevParsed records whether last parsed as a standalone JSON object, so
+	// the "both parse" test costs one json.Valid per fragment and not two.
+	prevParsed bool
+	// repeatIsCumulative enables the byte-identical arm, and ONLY the NAME
+	// stream sets it. See the arm itself in add for why arguments must not.
+	repeatIsCumulative bool
+	cumulative         bool
+	count              int
+}
+
+// add folds one fragment in. An empty fragment is not a fragment: providers
+// send the function name on the first delta only and the arguments on the rest,
+// so the empty halves are framing, and counting them as observations would let
+// a stream of empties latch the cumulative rule on nothing.
+func (f *fragmentStream) add(fragment string) {
+	if fragment == "" {
+		return
+	}
+	parsed := isJSONObject(fragment)
+	if f.count > 0 && !f.cumulative {
+		switch {
+		// BYTE-IDENTICAL, NAME STREAM ONLY. On the name stream it is
+		// load-bearing: nearly every provider repeats the function name on
+		// every argument fragment, and without this the name is counted once
+		// per fragment. On the ARGUMENTS stream it is both wrong and
+		// redundant. Wrong because the trigger is the MODEL'S OWN TOKEN
+		// STREAM rather than provider framing, so an ordinary incremental
+		// call whose arguments repeat a token, `{"path":"` `a/` `b/` `b/` `c`
+		// `"}`, latches on the duplicated `b/`, and the latch being sticky
+		// then discards everything before it and settles the whole call at
+		// `"}`. That is issue #928's original defect, a tool call priced at
+		// nearly nothing, reintroduced through the fix for it (third review on
+		// PR #1762). Redundant because every cumulative framing already
+		// reaches one of the two arms below: a repeated raw prefix latches on
+		// the next fragment that extends it, and a repeated complete object
+		// latches on both parsing.
+		case f.repeatIsCumulative && fragment == f.last:
+			f.cumulative = true
+		case len(fragment) > len(f.last) && strings.HasPrefix(fragment, f.last):
+			f.cumulative = true
+		case parsed && f.prevParsed:
+			f.cumulative = true
+		}
+	}
+	f.count++
+	f.prevParsed = parsed
+	f.last = fragment
+	f.joinedLen += len(fragment)
+	if !f.cumulative {
+		f.joined.WriteString(fragment)
+	}
+}
+
+// settle returns the value this field settles at, and it is where the hard
+// ceiling lives.
+//
+// The fragments witness exactly two readings and never a third: the
+// concatenation (incremental) and the final fragment (cumulative). Once
+// anything has latched cumulative, the settled value is the SHORTER of the two,
+// written as an explicit min rather than left implied by the branch, so that a
+// later change to the classification above cannot raise the figure past it. For
+// a two-hundred-fragment cumulative stream that min is the difference between
+// the final arguments and 87 times them.
+//
+// The ceiling is deliberately not a numeric one. No length-only bound can hold
+// both shapes: an incremental stream of many small pieces and a cumulative
+// stream of slowly growing ones are numerically identical and differ only in
+// their bytes, so a bound like min(longest fragment, concatenation) would pin
+// every cumulative stream at 1.0x and simultaneously crush every incremental
+// one to the size of its largest piece. What is classifier-independent here is
+// narrower and true: the settled value is always one of the two readings the
+// fragments actually witnessed, and never longer than their concatenation.
+func (f *fragmentStream) settle() string {
+	if !f.cumulative {
+		return f.joined.String()
+	}
+	return f.last[:min(len(f.last), f.joinedLen)]
+}
+
+// accumulateToolCalls folds one chunk's tool-call deltas into the per-index
+// state. Only the function name and the arguments are read.
+//
+// The SSE framing is skipped on purpose. A streamed tool call repeats its id,
+// type and index on every fragment, so estimating from the raw delta JSON would
+// count roughly forty bytes of envelope for every two bytes the model actually
+// produced -- an over-count on a figure that gets billed, which is the one
+// direction every estimate on this path refuses to err in (see bytesPerToken).
+//
+// A fragment this gateway cannot decode contributes nothing rather than its raw
+// bytes, for the same reason: an unparseable shape is not a shape whose token
+// count is known.
+func (a *UsageAccumulator) accumulateToolCalls(toolCalls, functionCall json.RawMessage) {
+	if len(toolCalls) > 0 {
+		var calls []struct {
+			Index    *int `json:"index"`
+			Function *struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+		}
+		if err := json.Unmarshal(toolCalls, &calls); err == nil {
+			for _, call := range calls {
+				if call.Function == nil {
+					continue
+				}
+				index := 0
+				if call.Index != nil {
+					index = *call.Index
+				}
+				a.foldToolCall(index, call.Function.Name, call.Function.Arguments)
+			}
+		}
+	}
+	if len(functionCall) > 0 {
+		var legacy struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		}
+		if err := json.Unmarshal(functionCall, &legacy); err == nil {
+			a.foldToolCall(legacyFunctionCallIndex, legacy.Name, legacy.Arguments)
+		}
+	}
+}
+
+func (a *UsageAccumulator) foldToolCall(index int, name, arguments string) {
+	if a.toolCalls == nil {
+		a.toolCalls = make(map[int]*toolCallOutput, 1)
+	}
+	call, ok := a.toolCalls[index]
+	if !ok {
+		call = &toolCallOutput{name: fragmentStream{repeatIsCumulative: true}}
+		a.toolCalls[index] = call
+	}
+	call.name.add(name)
+	call.arguments.add(arguments)
+}
+
+// isJSONObject reports whether s is, on its own, a complete JSON object. It is
+// the one test that separates a repaired or re-marshalled cumulative fragment
+// from an incremental one, because a partial fragment of a JSON object does not
+// parse and a complete one does.
+//
+// An object specifically, not any valid JSON: tool-call arguments are a JSON
+// object by contract, while an incremental fragment can easily be a bare token
+// that happens to be valid JSON on its own (a bare number, true, a quoted
+// string), and accepting those would latch cumulative on an ordinary
+// incremental stream.
+func isJSONObject(s string) bool {
+	t := strings.TrimSpace(s)
+	return len(t) > 1 && t[0] == '{' && json.Valid([]byte(t))
+}
+
+// ToolCallOutput is the model-generated text of every tool call this stream
+// carried, concatenated in index order so the figure it feeds is deterministic.
+func (a *UsageAccumulator) ToolCallOutput() string {
+	if len(a.toolCalls) == 0 {
+		return ""
+	}
+	indexes := make([]int, 0, len(a.toolCalls))
+	for index := range a.toolCalls {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	var out strings.Builder
+	for _, index := range indexes {
+		call := a.toolCalls[index]
+		out.WriteString(call.name.settle())
+		out.WriteString(call.arguments.settle())
+	}
+	return out.String()
 }
 
 // ClampUsage applies the zero-completion-tokens clamp against the accumulated
@@ -409,7 +678,10 @@ func (o *Orchestrator) executeStreaming(
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	// 9. Relay SSE chunks
+	// 9. Relay SSE chunks. The byte-level stall bound is already on resp.Body,
+	// installed at dispatch (litellm_client.go, issue #928 defect 3); what this
+	// loop adds is the data deadline below, for a provider that keeps the bytes
+	// flowing with keepalive comments and never sends anything.
 	scanner := bufio.NewScanner(resp.Body)
 	// Increase buffer for large chunks
 	scanner.Buffer(make([]byte, 64*1024), sseScanLineMaxBytes)
@@ -428,8 +700,25 @@ func (o *Orchestrator) executeStreaming(
 	// nobody receives, and the previous code wrote a second [DONE] behind that
 	// one as well (issue #1329).
 	sawDone := false
+	// stalled records that the relay gave up on a stream that was still sending
+	// bytes but had stopped sending anything IN them; see the check at the top
+	// of the loop and streamDataDeadlineExceeded.
+	stalled := false
+	lastData := time.Now()
 
 	for scanner.Scan() {
+		// Bound 2 of the stall rules (issue #928 defect 3, review finding). The
+		// byte watchdog on resp.Body cannot fire while keepalive comments keep
+		// arriving, so a provider pinging every thirty seconds and sending no
+		// data would hold the customer's credits until the reservation reaper
+		// reclaimed them an hour later -- and the reaper would then release a
+		// hold whose request is still live. Checked here rather than on a timer
+		// because the only way that starvation happens is by sending something,
+		// and everything it sends wakes this loop.
+		if streamDataDeadlineExceeded(lastData) {
+			stalled = true
+			break
+		}
 		line := scanner.Text()
 
 		if line == "data: [DONE]" {
@@ -443,138 +732,205 @@ func (o *Orchestrator) executeStreaming(
 
 		if strings.HasPrefix(line, "data: ") {
 			jsonData := line[6:]
-			var chunk ChatCompletionChunk
-			if err := json.Unmarshal([]byte(jsonData), &chunk); err == nil {
-				// Rewrite model to alias ID, mint a gateway-owned id and drop
-				// system_fingerprint -- upstream identity leaks exactly like
-				// normalizeChatCompletion's non-streaming case; see
-				// mintCompletionID. upstreamChunkID is kept only for the
-				// usage-clamp log line below.
-				upstreamChunkID := chunk.ID
-				chunk.Model = aliasID
-				chunk.ID = mintedID
-				chunk.SystemFingerprint = nil
 
-				// Suppress any chunk that arrives after a terminal
-				// finish_reason has already been relayed, UNLESS it is a
-				// genuine usage-only terminal frame (stream_options.
-				// include_usage legitimately delivers cost data in its own
-				// frame after finish_reason). Observed live on DeepSeek-family
-				// streams via OpenRouter: one extra empty role/content chunk
-				// arrives after finish_reason=stop, before [DONE], and a
-				// strict SSE client that already closed the message on the
-				// real finish frame chokes on anything more (parity finding,
-				// 2026-08-26). Still folded into the accumulator below so
-				// billing never silently drops content -- only the write to
-				// the client is skipped.
-				suppressPostFinish := ShouldSuppressPostFinishChunk(finishSeen, chunk)
-				// Read before the finishSeen update below, so a frame that
-				// carries finish_reason AND usage together (the shape a direct
-				// OpenRouter stream sends) is not mistaken for one arriving
-				// after the finish. A frame that carries a finish_reason of
-				// its own is excluded outright: emptying its choices would
-				// strip that finish_reason on the way out, and a terminal
-				// usage frame never carries one.
-				postFinishUsageFrame := finishSeen && chunk.Usage != nil && !ChunkFinished(chunk)
-				if ChunkFinished(chunk) {
-					finishSeen = true
-				}
+			// An upstream ERROR frame, not a completion chunk (issue #928
+			// defect 4). {"error": {...}} unmarshals cleanly into
+			// ChatCompletionChunk with every field absent, so the typed branch
+			// below used to rewrite its model, mint it an id and re-marshal it:
+			// the error payload was replaced by an empty chunk, and dropped
+			// outright when the caller had not asked for usage. Either way the
+			// customer's stream simply stopped mid-answer, behind a 200 that was
+			// committed before the failure existed, with nothing to render and
+			// nothing to retry on. Only an UNPARSEABLE frame ever reached the
+			// sanitizing fallback below, and an error frame parses fine.
+			//
+			// sanitize.ReplaceErrorFrame is the same helper the session-chat and
+			// RAG relays already use for this, with the same contract: the frame
+			// is REPLACED rather than scrubbed, so nothing upstream survives into
+			// what the customer receives, and the raw upstream text lives only in
+			// the operator log line below (%.512s truncates on a rune boundary).
+			// Two implementations of one sanitizer is how they drift.
+			//
+			// CLASSIFIED, BUT ACTED ON LAST. A frame may carry a content delta
+			// AND a top-level error at once, and an early return dropped that
+			// content -- delivered work the customer never saw and settlement
+			// never priced (review finding). So the ordinary relay body runs
+			// first, in the closure below, and the error ends the stream after
+			// whatever the frame also carried has been forwarded and
+			// accumulated. The closure exists only so the body's several
+			// `continue`s become `return` and every one of them still reaches
+			// this tail.
+			replacement, upstreamErrText, isErrorFrame := sanitize.ReplaceErrorFrame(
+				[]byte(jsonData), apierrors.UpstreamUnavailableMessage(aliasID))
 
-				// Track output content so the usage clamp has ground truth.
-				accumulator.AccumulateContent(chunk)
-				// And the shape settlement judges emptiness by (#1326).
-				accumulator.ObserveShape(chunk)
-				// Clamp upstream-zero completion_tokens against the
-				// content streamed so far. Usage typically arrives in
-				// the terminal chunk once all deltas are flushed.
-				if chunk.Usage != nil {
-					accumulator.ClampUsage(chunk.Usage, upstreamChunkID, aliasID, endpoint)
-					// Cap the metered completion count at the caller's own
-					// ceiling (#1283). Applied to the chunk BEFORE Accumulate
-					// copies it and before the frame is re-marshalled, so the
-					// ledger charge and the usage frame the caller receives are
-					// the same number by construction rather than by two
-					// clamps agreeing.
-					clampUsageToCeiling(chunk.Usage, route, ceiling, endpoint, aliasID)
-					// Keep the untyped bytes only for a route that settles
-					// against the upstream's reported cost; see RawUsageChunk.
-					if route.Pricing.IsUpstreamActual() {
-						accumulator.RawUsageChunk = append(accumulator.RawUsageChunk[:0], jsonData...)
+			func() {
+				var chunk ChatCompletionChunk
+				if err := json.Unmarshal([]byte(jsonData), &chunk); err == nil {
+					// Rewrite model to alias ID, mint a gateway-owned id and drop
+					// system_fingerprint -- upstream identity leaks exactly like
+					// normalizeChatCompletion's non-streaming case; see
+					// mintCompletionID. upstreamChunkID is kept only for the
+					// usage-clamp log line below.
+					// An error frame carrying nothing else has nothing to relay:
+					// the replacement written after this closure is what the
+					// customer gets, and forwarding the empty chunk this decodes
+					// to would set HasForwardedChunk and bill an upstream failure
+					// through the #1215 delivery fallback. A frame that carries a
+					// content delta AND an error falls through and is relayed
+					// normally, which is the whole reason the error is acted on at
+					// the tail rather than here.
+					if isErrorFrame && !chunkCarriesData(chunk) {
+						return
+					}
+
+					upstreamChunkID := chunk.ID
+					chunk.Model = aliasID
+					chunk.ID = mintedID
+					chunk.SystemFingerprint = nil
+
+					// Suppress any chunk that arrives after a terminal
+					// finish_reason has already been relayed, UNLESS it is a
+					// genuine usage-only terminal frame (stream_options.
+					// include_usage legitimately delivers cost data in its own
+					// frame after finish_reason). Observed live on DeepSeek-family
+					// streams via OpenRouter: one extra empty role/content chunk
+					// arrives after finish_reason=stop, before [DONE], and a
+					// strict SSE client that already closed the message on the
+					// real finish frame chokes on anything more (parity finding,
+					// 2026-08-26). Still folded into the accumulator below so
+					// billing never silently drops content -- only the write to
+					// the client is skipped.
+					suppressPostFinish := ShouldSuppressPostFinishChunk(finishSeen, chunk)
+					// Read before the finishSeen update below, so a frame that
+					// carries finish_reason AND usage together (the shape a direct
+					// OpenRouter stream sends) is not mistaken for one arriving
+					// after the finish. A frame that carries a finish_reason of
+					// its own is excluded outright: emptying its choices would
+					// strip that finish_reason on the way out, and a terminal
+					// usage frame never carries one.
+					postFinishUsageFrame := finishSeen && chunk.Usage != nil && !ChunkFinished(chunk)
+					if ChunkFinished(chunk) {
+						finishSeen = true
+					}
+
+					// Feeds the data deadline: a frame that carried nothing is a
+					// keepalive however well formed it is, and must not renew the
+					// budget (issue #928 defect 3, review finding).
+					if chunkCarriesData(chunk) {
+						lastData = time.Now()
+					}
+					// Track output content so the usage clamp has ground truth.
+					accumulator.AccumulateContent(chunk)
+					// And the shape settlement judges emptiness by (#1326).
+					accumulator.ObserveShape(chunk)
+					// Clamp upstream-zero completion_tokens against the
+					// content streamed so far. Usage typically arrives in
+					// the terminal chunk once all deltas are flushed.
+					if chunk.Usage != nil {
+						accumulator.ClampUsage(chunk.Usage, upstreamChunkID, aliasID, endpoint)
+						// Cap the metered completion count at the caller's own
+						// ceiling (#1283). Applied to the chunk BEFORE Accumulate
+						// copies it and before the frame is re-marshalled, so the
+						// ledger charge and the usage frame the caller receives are
+						// the same number by construction rather than by two
+						// clamps agreeing.
+						clampUsageToCeiling(chunk.Usage, route, ceiling, endpoint, aliasID)
+						// Keep the untyped bytes only for a route that settles
+						// against the upstream's reported cost; see RawUsageChunk.
+						if route.Pricing.IsUpstreamActual() {
+							accumulator.RawUsageChunk = append(accumulator.RawUsageChunk[:0], jsonData...)
+						}
+					}
+					// Accumulate usage if present
+					accumulator.Accumulate(chunk, aliasID)
+
+					// LiteLLM delivers its terminal usage frame with one
+					// empty-delta choice rather than the empty choices array
+					// OpenAI itself uses (measured on the pinned v1.98.0 image,
+					// 2026-08-28). Now that such a frame is forwarded rather than
+					// dropped, emit it in the canonical usage-only shape: the
+					// 2026-08-26 parity fix exists because a strict SSE client
+					// chokes on any post-finish choice, and an empty choices array
+					// is what every OpenAI-compatible client already expects on a
+					// terminal usage frame. Nothing is lost by it -- content and
+					// finish_reason both arrived on their own earlier frames, and
+					// the accumulator has already read this one in full for
+					// settlement.
+					if postFinishUsageFrame {
+						chunk.Choices = []ChunkChoice{}
+					}
+
+					// The caller's OWN request decides whether a usage-bearing
+					// frame is contract-visible (#1226), never the include_usage
+					// this gateway may have just forced upstream for billing
+					// alone: accumulation above already ran unconditionally, so
+					// billing sees every frame regardless. A caller who never
+					// set stream_options.include_usage itself must see the same
+					// stream shape it always has. A usage-only frame (no delta,
+					// no finish_reason -- the dedicated terminal chunk an
+					// OpenAI-compatible upstream emits for this flag) is dropped
+					// outright rather than forwarded empty; a frame that also
+					// carries real content is forwarded with usage stripped.
+					if !includeUsage {
+						chunk.Usage = nil
+						if len(chunk.Choices) == 0 {
+							return
+						}
+					}
+
+					if suppressPostFinish {
+						return
+					}
+
+					// Re-marshal sanitized chunk
+					sanitized, marshalErr := json.Marshal(chunk)
+					if marshalErr == nil {
+						accumulator.HasForwardedChunk = true
+						fmt.Fprintf(w, "data: %s\n\n", sanitized)
+						flusher.Flush()
+						return
 					}
 				}
-				// Accumulate usage if present
-				accumulator.Accumulate(chunk, aliasID)
-
-				// LiteLLM delivers its terminal usage frame with one
-				// empty-delta choice rather than the empty choices array
-				// OpenAI itself uses (measured on the pinned v1.98.0 image,
-				// 2026-08-28). Now that such a frame is forwarded rather than
-				// dropped, emit it in the canonical usage-only shape: the
-				// 2026-08-26 parity fix exists because a strict SSE client
-				// chokes on any post-finish choice, and an empty choices array
-				// is what every OpenAI-compatible client already expects on a
-				// terminal usage frame. Nothing is lost by it -- content and
-				// finish_reason both arrived on their own earlier frames, and
-				// the accumulator has already read this one in full for
-				// settlement.
-				if postFinishUsageFrame {
-					chunk.Choices = []ChunkChoice{}
-				}
-
-				// The caller's OWN request decides whether a usage-bearing
-				// frame is contract-visible (#1226), never the include_usage
-				// this gateway may have just forced upstream for billing
-				// alone: accumulation above already ran unconditionally, so
-				// billing sees every frame regardless. A caller who never
-				// set stream_options.include_usage itself must see the same
-				// stream shape it always has. A usage-only frame (no delta,
-				// no finish_reason -- the dedicated terminal chunk an
-				// OpenAI-compatible upstream emits for this flag) is dropped
-				// outright rather than forwarded empty; a frame that also
-				// carries real content is forwarded with usage stripped.
-				if !includeUsage {
-					chunk.Usage = nil
-					if len(chunk.Choices) == 0 {
-						continue
-					}
-				}
-
-				if suppressPostFinish {
-					continue
-				}
-
-				// Re-marshal sanitized chunk
-				sanitized, marshalErr := json.Marshal(chunk)
-				if marshalErr == nil {
+				// Fallback: the typed decode above failed (an upstream frame our
+				// struct can't parse -- the DeepSeek surprise-frame class of
+				// input is exactly what drives a chunk here for real, not a
+				// theoretical case). A fallback that cannot parse a chunk must
+				// not become a fallback that leaks it: every route, fixed-price
+				// included, sanitizes through the SAME map-based path the
+				// variable-price case always used, id-minted and
+				// system_fingerprint-stripped like every other chunk of this
+				// stream. Cost-field stripping is a no-op on a frame that has
+				// none, so one path serves both pricing models rather than
+				// carrying a second, unsanitized one. An unparseable frame is
+				// dropped rather than forwarded, because an unparseable frame is
+				// exactly the one whose contents are unknown -- and unlike the
+				// silent version this replaces, every drop is logged, so an
+				// unsanitized-fallback regression is visible in production
+				// rather than invisible.
+				if sanitized, sanOK := SanitizeVariablePriceFrame([]byte(jsonData), aliasID, mintedID); sanOK {
 					accumulator.HasForwardedChunk = true
+					lastData = time.Now()
 					fmt.Fprintf(w, "data: %s\n\n", sanitized)
 					flusher.Flush()
-					continue
+				} else {
+					log.Printf("inference: dropping an unparseable upstream frame endpoint=%s alias=%s: forwarding it verbatim would leak upstream identity and, on a variable-price alias, our cost",
+						endpoint, aliasID)
 				}
-			}
-			// Fallback: the typed decode above failed (an upstream frame our
-			// struct can't parse -- the DeepSeek surprise-frame class of
-			// input is exactly what drives a chunk here for real, not a
-			// theoretical case). A fallback that cannot parse a chunk must
-			// not become a fallback that leaks it: every route, fixed-price
-			// included, sanitizes through the SAME map-based path the
-			// variable-price case always used, id-minted and
-			// system_fingerprint-stripped like every other chunk of this
-			// stream. Cost-field stripping is a no-op on a frame that has
-			// none, so one path serves both pricing models rather than
-			// carrying a second, unsanitized one. An unparseable frame is
-			// dropped rather than forwarded, because an unparseable frame is
-			// exactly the one whose contents are unknown -- and unlike the
-			// silent version this replaces, every drop is logged, so an
-			// unsanitized-fallback regression is visible in production
-			// rather than invisible.
-			if sanitized, sanOK := SanitizeVariablePriceFrame([]byte(jsonData), aliasID, mintedID); sanOK {
-				accumulator.HasForwardedChunk = true
-				fmt.Fprintf(w, "data: %s\n\n", sanitized)
+			}()
+
+			if isErrorFrame {
+				log.Printf("inference: replaced an upstream error frame request_id=%s alias=%s endpoint=%s upstream_error=%.512s",
+					requestID, aliasID, endpoint, upstreamErrText)
+				fmt.Fprintf(w, "data: %s\n\n", replacement)
 				flusher.Flush()
-			} else {
-				log.Printf("inference: dropping an unparseable upstream frame endpoint=%s alias=%s: forwarding it verbatim would leak upstream identity and, on a variable-price alias, our cost",
-					endpoint, aliasID)
+				// HasForwardedChunk is deliberately NOT set BY THIS BRANCH. It
+				// is the delivery signal the #1215 fallback bills on, and a
+				// gateway-owned error frame is not delivered work: marking it so
+				// would charge the customer for an upstream failure. Whatever the
+				// same frame also carried has already set it, above, and still
+				// bills. StreamCompleted stays false either way, so the
+				// zero-content guard cannot mistake a fault for a burn.
+				return nil
 			}
 			continue
 		}
@@ -615,9 +971,9 @@ func (o *Orchestrator) executeStreaming(
 	// disconnect vs. upstream_error) -- settlement still logs and accounts
 	// for a disconnect on its own path regardless of this branch, so nothing
 	// goes unrecorded by skipping it here.
-	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		log.Printf("inference: chat completions SSE relay aborted request_id=%s alias=%s endpoint=%s err=%v",
-			requestID, aliasID, endpoint, err)
+	if err := scanner.Err(); (err != nil || stalled) && ctx.Err() == nil {
+		log.Printf("inference: chat completions SSE relay aborted request_id=%s alias=%s endpoint=%s data_stalled=%v err=%v",
+			requestID, aliasID, endpoint, stalled, err)
 		streamRelayAborted.WithLabelValues(aliasID, endpoint).Inc()
 		code := "stream_interrupted"
 		if errPayload, marshalErr := json.Marshal(apierrors.NewError("api_error",
@@ -636,7 +992,7 @@ func (o *Orchestrator) executeStreaming(
 	// truncation and not a completion. Only the first is a completed stream.
 	// A [DONE] already seen stands regardless, since the frames after it are
 	// nobody's response.
-	if scanner.Err() == nil && ctx.Err() == nil {
+	if !stalled && scanner.Err() == nil && ctx.Err() == nil {
 		accumulator.StreamCompleted = true
 	}
 
@@ -807,6 +1163,15 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	// raw bytes themselves must never be counted directly (issue #602).
 	var credits int64
 	var confirmed, delivered bool
+	// The text settlement estimates a completion count from when the upstream
+	// sent no usable usage block: what the customer could read, PLUS the
+	// tool-call arguments the turn produced (issue #928 defect 1). The two are
+	// separate everywhere else in this function on purpose -- content alone is
+	// what the zero-content guard judges emptiness by, and what
+	// UpstreamActualSettlement reads -- because "the customer saw nothing" and
+	// "the model produced nothing" are different facts and a tool-call-only turn
+	// is exactly where they diverge.
+	completionText := content + acc.ToolCallOutput()
 	// generationID is the upstream's audit handle for this request, and on a
 	// variable-price alias it is the only thing that recovers WHICH pool member
 	// served it. It is hoisted out of the branch below so an absorbed burn can
@@ -833,7 +1198,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 				settled.Credits, settled.Confirmed, settled.GenerationID, reservation.Held())
 		}
 	} else {
-		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content, ceiling)
+		credits, confirmed, delivered = settlementCredits(route, acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), completionText, ceiling)
 	}
 
 	// A frame reached the caller even though nothing accumulated: an
@@ -968,7 +1333,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 			credits = capCaptureAtCeiling(route, ceiling,
 				captureInputTokens(acc.HasUsage, acc.FreshInputTokens, acc.CachedTokens, acc.CacheWriteTokens, endpoint, []byte(promptBody)),
 				acc.CachedTokens, acc.CacheWriteTokens,
-				captureCompletionTokens(acc.HasUsage, acc.OutputTokens, content),
+				captureCompletionTokens(acc.HasUsage, acc.OutputTokens, completionText),
 				reservation.Held())
 		}
 		streamUsageBlockMissing.WithLabelValues(model, endpoint).Inc()
