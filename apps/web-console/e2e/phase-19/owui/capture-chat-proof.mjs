@@ -218,11 +218,17 @@ function watchTranscriptions(page, startedAt) {
  *
  * The track the fake device plays is one opening utterance and then three
  * short interruptions, each separated by more than the two second silence
- * threshold that ends an utterance. Before this fix each interruption landed on
- * a microphone that had already been restarted while the opening turn was
- * still being transcribed and answered, so each opened its own concurrent
- * transcription and its own model turn. After it they are suppressed, and the
- * whole track produces exactly one transcription.
+ * threshold that ends an utterance. Before this fix the first of them landed
+ * on a microphone that had already been restarted while the utterance before
+ * it was still being uploaded for transcription, and opened a second
+ * concurrent upload against the same provider account. After it the whole
+ * track produces exactly one transcription.
+ *
+ * The window this turns on is the transcription round trip, not the model
+ * turn: `assistantSpeaking` rises at `chat:start`, so the reply was already
+ * suppressed before this fix. That makes the timing of the first interruption
+ * load bearing. It is placed just after the opening utterance closes, which is
+ * where the unsuppressed window was.
  *
  * That count is the assertion. The screenshots are what a person reads: the
  * overlay listening, the overlay busy with the turn it captured, and the chat

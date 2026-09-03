@@ -78,7 +78,15 @@ export const transcribeAudio = async (token: string, file: File, language?: stri
 			Accept: 'application/json',
 			authorization: `Bearer ${token}`
 		},
-		body: data
+		body: data,
+		// A transcription that never settles used to be merely slow. In voice
+		// mode it is fatal: the call overlay suppresses capture while a turn is
+		// in flight (issue #1627), so a request that neither resolves nor
+		// rejects leaves the microphone deaf for the rest of the call, with
+		// nothing on screen a person can use to recover. A speech to text round
+		// trip that has taken two minutes is not going to arrive, so it is
+		// turned into an error the caller can report and move on from.
+		signal: AbortSignal.timeout(120_000)
 	})
 		.then(async (res) => {
 			if (!res.ok) throw await res.json();

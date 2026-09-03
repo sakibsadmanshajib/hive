@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
 	DEFAULT_VOICE_ACTIVITY_CONFIG,
 	createVoiceActivityState,
+	parkVoiceActivity,
 	shouldSuppressCapture,
 	speechThreshold,
 	stepVoiceActivity,
@@ -305,13 +306,12 @@ describe('the call overlay uses it (issue #1627)', () => {
 // PR #1662 gave the overlay a real speech threshold, so room noise no longer
 // opens the microphone. What it left in place is the amplifier that turns
 // ordinary speech into stacked requests. `stopRecordingCallback` restarts
-// capture BEFORE the utterance it just captured has been transcribed and
-// answered, and nothing suppressed capture while that turn was in flight. So
-// every sentence spoken over a slow turn opened another concurrent
-// transcription and another `submitPrompt`, with no bound but how fast a
-// person can talk. That is what makes a provider rate limit reachable from a
-// single user, and it is what the issue's "continuous capture floods the
-// transcription endpoint" line describes.
+// capture BEFORE the utterance it just captured has been transcribed, and the
+// only suppressions were mute and a playing voice. `assistantSpeaking` rises
+// at `chat:start`, so the model turn was already covered; the transcription
+// round trip before it was not. That is a network call to a speech to text
+// provider, and anything said during it opened a second upload against the
+// same account, then a third, until the provider answered 429.
 describe('capture suppression while a turn is in flight (issue #1627)', () => {
 	const base = {
 		muted: false,
@@ -324,9 +324,9 @@ describe('capture suppression while a turn is in flight (issue #1627)', () => {
 		expect(shouldSuppressCapture(base)).toBe(false);
 	});
 
-	it('suppresses while the turn just captured is still being answered', () => {
-		// The fix. Without it a second utterance opens a second transcription
-		// and a second model turn while the first is still running.
+	it('suppresses while the utterance just captured is still being transcribed', () => {
+		// The fix. Without it a second utterance opens a second concurrent
+		// upload to the same provider account while the first is still going.
 		expect(shouldSuppressCapture({ ...base, turnInFlight: true })).toBe(true);
 	});
 
@@ -336,24 +336,76 @@ describe('capture suppression while a turn is in flight (issue #1627)', () => {
 		expect(shouldSuppressCapture({ ...base, assistantSpeaking: true })).toBe(true);
 	});
 
-	it('lets voice interruption through both suppressions', () => {
-		// `voiceInterruption` is the existing setting for talking over the
-		// assistant. A turn in flight is the same situation one step earlier,
-		// so it answers to the same setting rather than to a second one.
+	it('lets voice interruption talk over the assistant', () => {
 		expect(
 			shouldSuppressCapture({ ...base, assistantSpeaking: true, voiceInterruption: true })
 		).toBe(false);
-		expect(
-			shouldSuppressCapture({ ...base, turnInFlight: true, voiceInterruption: true })
-		).toBe(false);
 	});
 
-	it('keeps mute above voice interruption', () => {
-		// Mute is the user holding the microphone shut. Nothing overrides it,
-		// least of all a setting about interrupting the assistant.
+	it('does not let voice interruption reopen the transcription window', () => {
+		// The setting exists so a person can talk over the assistant. During
+		// the transcription round trip no reply has begun, so there is nothing
+		// to talk over: honouring the setting there would buy no interruption
+		// and would cost exactly the concurrent upload this fix prevents.
+		expect(
+			shouldSuppressCapture({ ...base, turnInFlight: true, voiceInterruption: true })
+		).toBe(true);
+	});
+
+	it('keeps mute above everything', () => {
+		// Mute is the user holding the microphone shut. Nothing overrides it.
 		expect(
 			shouldSuppressCapture({ ...base, muted: true, voiceInterruption: true })
 		).toBe(true);
+		expect(shouldSuppressCapture({ ...base, muted: true, assistantSpeaking: true })).toBe(true);
+	});
+});
+
+describe('parking the detector while suppressed (issue #1627)', () => {
+	it('keeps the learned noise floor, because the room has not changed', () => {
+		const parked = parkVoiceActivity({
+			noiseFloor: 0.02,
+			listeningSince: 1000,
+			speechStartedAt: 1200,
+			lastSoundAt: 1400
+		});
+		expect(parked.noiseFloor).toBe(0.02);
+	});
+
+	it('drops the utterance and re-arms calibration', () => {
+		const parked = parkVoiceActivity({
+			noiseFloor: 0.02,
+			listeningSince: 1000,
+			speechStartedAt: 1200,
+			lastSoundAt: 1400
+		});
+		expect(parked.speechStartedAt).toBeNull();
+		expect(parked.lastSoundAt).toBeNull();
+		// The one that matters. Leaving `listeningSince` set means the
+		// calibration window has long expired when capture resumes, so the very
+		// first frame after a reply can open an utterance without the room ever
+		// having been measured.
+		expect(parked.listeningSince).toBeNull();
+	});
+
+	it('is what a suppressed frame must do instead of stepping with a zero', () => {
+		// The concrete reason parking exists, measured rather than asserted in
+		// prose: stepping a suppressed frame as silence smooths the tracked
+		// floor towards zero, and a reply lasts hundreds of frames.
+		let stepped = { noiseFloor: 0.02, listeningSince: 0, speechStartedAt: null, lastSoundAt: null };
+		for (let frame = 1; frame <= 300; frame += 1) {
+			stepped = stepVoiceActivity(stepped, 0, frame * 16).state;
+		}
+		expect(stepped.noiseFloor).toBeLessThan(0.002);
+		expect(speechThreshold(stepped)).toBe(DEFAULT_VOICE_ACTIVITY_CONFIG.minRms);
+
+		const parked = parkVoiceActivity({
+			noiseFloor: 0.02,
+			listeningSince: 0,
+			speechStartedAt: null,
+			lastSoundAt: null
+		});
+		expect(speechThreshold(parked)).toBeGreaterThan(DEFAULT_VOICE_ACTIVITY_CONFIG.minRms);
 	});
 });
 
@@ -362,6 +414,18 @@ describe('the call overlay wires the suppression and always clears the turn (iss
 		fileURLToPath(new URL('../components/chat/MessageInput/CallOverlay.svelte', import.meta.url)),
 		'utf8'
 	);
+
+	/**
+	 * The body of `stopRecordingCallback`, so an assertion about it cannot be
+	 * satisfied by an unrelated construct elsewhere in a 1100 line component.
+	 */
+	const stopRecordingCallback = (() => {
+		const start = overlay.indexOf('const stopRecordingCallback');
+		const end = overlay.indexOf('const startRecording');
+		expect(start).toBeGreaterThan(-1);
+		expect(end).toBeGreaterThan(start);
+		return overlay.slice(start, end);
+	})();
 
 	it('asks the shared decision rather than inlining the condition', () => {
 		expect(overlay).toContain('shouldSuppressCapture');
@@ -375,6 +439,10 @@ describe('the call overlay wires the suppression and always clears the turn (iss
 		expect(overlay).toContain('turnInFlight: loading');
 	});
 
+	it('parks the detector rather than stepping it with a forced zero', () => {
+		expect(overlay).toContain('parkVoiceActivity(voiceActivity)');
+	});
+
 	it('clears the in-flight turn even when the turn throws', () => {
 		// `submitPrompt` is awaited with no catch of its own. Before this, an
 		// exception from it escaped stopRecordingCallback as an unhandled
@@ -382,6 +450,30 @@ describe('the call overlay wires the suppression and always clears the turn (iss
 		// loading state forever. That is fatal now rather than merely ugly:
 		// capture is suppressed while `loading` holds, so a stuck flag would
 		// mean a call that never hears anything again.
-		expect(overlay).toContain('} finally {');
+		//
+		// Scoped to the function, not the file: `} finally {` anywhere in a
+		// component this size would satisfy a whole-file search, so that
+		// assertion could go green for a reason unrelated to this fix.
+		expect(stopRecordingCallback).toContain('} finally {');
+		expect(stopRecordingCallback).toContain('loading = false;');
+	});
+});
+
+describe('the transcription request cannot hang the call forever (issue #1627)', () => {
+	const audioApi = readFileSync(
+		fileURLToPath(new URL('../apis/audio/index.ts', import.meta.url)),
+		'utf8'
+	);
+
+	it('bounds the transcription fetch', () => {
+		// The failure the suppression above creates if it is not bounded. A
+		// request that neither resolves nor rejects never reaches the `finally`
+		// that clears `loading`, and capture stays suppressed for the rest of
+		// the call with nothing on screen to recover with.
+		const transcribe = audioApi.slice(
+			audioApi.indexOf('export const transcribeAudio'),
+			audioApi.indexOf('export const synthesizeOpenAISpeech')
+		);
+		expect(transcribe).toMatch(/AbortSignal\.timeout\(/);
 	});
 });

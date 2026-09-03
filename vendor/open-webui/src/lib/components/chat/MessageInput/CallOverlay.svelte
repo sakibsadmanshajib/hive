@@ -15,6 +15,7 @@
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import {
 		createVoiceActivityState,
+		parkVoiceActivity,
 		shouldSuppressCapture,
 		stepVoiceActivity
 	} from '$lib/hive/voiceActivity';
@@ -202,21 +203,26 @@
 			}
 
 			if (confirmed) {
-				loading = true;
-				emoji = null;
-
-				if (cameraStream) {
-					const imageUrl = takeScreenshot();
-
-					files = [
-						{
-							type: 'image',
-							url: imageUrl
-						}
-					];
-				}
-
+				// The flag is raised inside the try, not before it. Everything
+				// below can throw, takeScreenshot included, and a throw between
+				// raising it and entering the block would leave it raised with
+				// no finally to lower it. Capture is suppressed while it holds,
+				// so that is a call that never hears anything again.
 				try {
+					loading = true;
+					emoji = null;
+
+					if (cameraStream) {
+						const imageUrl = takeScreenshot();
+
+						files = [
+							{
+								type: 'image',
+								url: imageUrl
+							}
+						];
+					}
+
 					const audioBlob = new Blob(_audioChunks, { type: 'audio/wav' });
 					await transcribeHandler(audioBlob);
 				} finally {
@@ -371,18 +377,18 @@
 						voiceInterruption: $settings?.voiceInterruption ?? false
 					})
 				) {
-					// The microphone is still live, but nothing it hears counts:
-					// muted, the assistant is talking, or the utterance already
-					// captured is still being transcribed and answered. That last
-					// one is the other half of issue #1627: stopRecordingCallback
-					// restarts capture before the turn it just captured has
-					// finished, and text-to-speech does not begin until the model
-					// has, so the seconds in between used to be fully live. Every
-					// sentence spoken across one slow turn opened another
-					// concurrent transcription, which is how one person reaches a
-					// provider's rate limit.
+					// Parked, not stepped with a zero. Feeding a suppressed frame
+					// through the detector as silence drags the tracked noise floor
+					// down to nearly nothing over the length of a spoken reply and
+					// lets the calibration window expire, so capture resumes on the
+					// bare minimum threshold with no lift from the room, once per
+					// turn. That is the state PR #1662 exists to prevent.
 					rmsLevel = 0;
+					voiceActivity = parkVoiceActivity(voiceActivity);
+					window.requestAnimationFrame(processFrame);
+					return;
 				}
+
 
 				// performance.now(), not Date.now(): the wall clock can move backwards
 				// on an NTP correction or a resume from sleep, and both the silence

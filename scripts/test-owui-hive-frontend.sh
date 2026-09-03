@@ -99,6 +99,16 @@ done
 mkdir -p "$WORK/lib/stores"
 cp "$ROOT/vendor/open-webui/src/lib/stores/index.ts" "$WORK/lib/stores/index.ts"
 
+# The audio client, for the same reason: the voice guard (issue #1627) asserts
+# that the transcription request is bounded by a timeout. That request lives
+# here rather than in lib/hive because it is upstream's own client, and the
+# call overlay's suppression makes an unbounded one fatal: a fetch that never
+# settles never reaches the `finally` that clears the in-flight flag, so
+# capture stays suppressed and the call goes deaf for good. Only this one file
+# travels, since nothing else under lib/apis is asserted against.
+mkdir -p "$WORK/lib/apis/audio"
+cp "$ROOT/vendor/open-webui/src/lib/apis/audio/index.ts" "$WORK/lib/apis/audio/index.ts"
+
 # The two locale catalogues the settings guard reads. en-US is the key
 # catalogue every other locale is generated from, and bn-BD is the first
 # market, so a rename that silently drops a translated string fails here
