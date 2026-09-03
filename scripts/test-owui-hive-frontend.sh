@@ -120,7 +120,9 @@ for rel in \
 	"(app)/skills/+layout.svelte" \
 	"(app)/skills/+page.svelte" \
 	"(app)/skills/create/+page.svelte" \
-	"(app)/skills/edit/+page.svelte"
+	"(app)/skills/edit/+page.svelte" \
+	"(app)/knowledge/+page.svelte" \
+	"(app)/workspace/+page.svelte"
 do
 	mkdir -p "$WORK/routes/$(dirname -- "$rel")"
 	cp "$ROUTES_SRC/$rel" "$WORK/routes/$rel"
