@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -56,8 +57,8 @@ func handleChatCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Reque
 
 	needFlags := NeedFlags{
 		NeedChatCompletions: true,
-		NeedStreaming:        req.Stream,
-		NeedReasoning:        req.ReasoningEffort != nil,
+		NeedStreaming:       req.Stream,
+		NeedReasoning:       req.ReasoningEffort != nil,
 		RequireToolCapable:  toolParam != "",
 	}
 
@@ -134,7 +135,7 @@ func coerceNullContent(msg *ChatCompletionMessage) {
 	if msg.Content != nil {
 		return
 	}
-	if rawFieldPresent(msg.ToolCalls) || rawFieldPresent(msg.FunctionCall) {
+	if toolCallPresent(msg.ToolCalls) || toolCallPresent(msg.FunctionCall) {
 		return
 	}
 	empty := ""
@@ -145,6 +146,37 @@ func coerceNullContent(msg *ChatCompletionMessage) {
 // the JSON literal "null".
 func rawFieldPresent(f json.RawMessage) bool {
 	return len(f) > 0 && string(f) != "null"
+}
+
+// toolCallPresent reports whether a json.RawMessage field carries an ACTUAL
+// tool call, as opposed to merely being present. `"tool_calls": []` and
+// `"function_call": {}` are present-but-empty: the model produced no tool call,
+// and every response-side reader of these fields is asking the second question,
+// not the first.
+//
+// Reading them as a tool call is not cosmetic. On the streaming path an empty
+// array renewed the data deadline on every frame, so a provider emitting them
+// as its keepalive starved the idle timeout forever (chunkCarriesData), and it
+// set HasToolCall, which disarms the zero-content guard for a stream that
+// delivered nothing (second review on PR #1762).
+//
+// Deliberately NOT a change to rawFieldPresent itself. The request-gating path
+// (firstToolParam, ToolParamInBody) has the opposite requirement and states it:
+// a caller who sent `"tools": []` still asked for a tool-capable route, and
+// must be routed to one rather than silently ignored.
+func toolCallPresent(f json.RawMessage) bool {
+	t := bytes.TrimSpace(f)
+	if len(t) == 0 || string(t) == "null" {
+		return false
+	}
+	// An empty array or object is the shape at issue; anything else that
+	// arrived non-null is content. The length guard keeps a truncated `[` or
+	// `{` (which no successful unmarshal produces, but which costs nothing to
+	// survive) out of the slice below.
+	if t[0] == '[' || t[0] == '{' {
+		return len(t) > 1 && len(bytes.TrimSpace(t[1:len(t)-1])) > 0
+	}
+	return true
 }
 
 // toolParamNames is the ordered list of request fields that make a request

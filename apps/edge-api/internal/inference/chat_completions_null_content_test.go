@@ -77,7 +77,6 @@ func TestNormalizeChatCompletion_NullContentPreservedWithToolCalls(t *testing.T)
 	}
 }
 
-
 // TestNormalizeChatCompletion_UsageDetailsAlwaysPresent guards a field that
 // used to come and go. prompt_tokens_details and completion_tokens_details
 // are part of the shape an OpenAI SDK caller is entitled to, and an upstream
@@ -116,5 +115,38 @@ func TestNormalizeChatCompletion_UsageDetailsAlwaysPresent(t *testing.T) {
 	}
 	if out.Usage.CompletionTokensDetails == nil {
 		t.Error("completion_tokens_details missing from the serialized response")
+	}
+}
+
+// TestToolCallPresent_EmptyIsNotAToolCall pins the asymmetry between the two
+// questions this package asks about the same field name.
+//
+// Response side: `"tool_calls": []` means the model produced no tool call. It
+// renewed the streaming data deadline on every frame and set HasToolCall, which
+// disarms the zero-content guard (second review on PR #1762).
+//
+// Request side: `"tools": []` still means the caller asked for a tool-capable
+// route and must be routed to one. rawFieldPresent keeps answering that
+// question, which is why this is a second helper and not an edit to that one.
+func TestToolCallPresent_EmptyIsNotAToolCall(t *testing.T) {
+	for raw, want := range map[string]bool{
+		`[]`:              false,
+		`[ ]`:             false,
+		"[\n\t]":          false,
+		`{}`:              false,
+		`{ }`:             false,
+		`null`:            false,
+		``:                false,
+		`[{"index":0}]`:   true,
+		`{"name":"get"}`:  true,
+		` [{"index":0}] `: true,
+	} {
+		if got := toolCallPresent(json.RawMessage(raw)); got != want {
+			t.Errorf("toolCallPresent(%q) = %v, want %v", raw, got, want)
+		}
+		// The request-gating helper deliberately answers the other question.
+		if wantRaw := raw != "" && raw != "null"; rawFieldPresent(json.RawMessage(raw)) != wantRaw {
+			t.Errorf("rawFieldPresent(%q) changed: the request-gating path needs an empty tools array to read as present", raw)
+		}
 	}
 }

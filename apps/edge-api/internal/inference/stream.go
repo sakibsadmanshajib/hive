@@ -179,7 +179,7 @@ func (a *UsageAccumulator) AccumulateContent(chunk ChatCompletionChunk) {
 // shape signals for settlement. See isZeroContentStream.
 func (a *UsageAccumulator) ObserveShape(chunk ChatCompletionChunk) {
 	for _, choice := range chunk.Choices {
-		if rawFieldPresent(choice.Delta.ToolCalls) || rawFieldPresent(choice.Delta.FunctionCall) {
+		if toolCallPresent(choice.Delta.ToolCalls) || toolCallPresent(choice.Delta.FunctionCall) {
 			a.HasToolCall = true
 			a.accumulateToolCalls(choice.Delta.ToolCalls, choice.Delta.FunctionCall)
 		}
@@ -205,10 +205,124 @@ func (a *UsageAccumulator) ObserveShape(chunk ChatCompletionChunk) {
 const legacyFunctionCallIndex = -1
 
 // toolCallOutput is one tool call's model-generated text as it has been
-// reconciled so far.
+// observed so far: its name and its arguments, each collected as the fragments
+// that arrived rather than as a running reconciliation of them.
 type toolCallOutput struct {
-	name      string
-	arguments string
+	name      fragmentStream
+	arguments fragmentStream
+}
+
+// fragmentStream collects every fragment of ONE field of ONE tool call and
+// decides, from the fragments themselves, which of the two wire shapes the
+// provider used. The decision is per stream, not per fragment, because that is
+// the only level at which the question has an answer.
+//
+// TWO WIRE SHAPES, ONE OF THEM RUINOUS IF ASSUMED AWAY. OpenAI's contract is
+// INCREMENTAL: every fragment is the next piece, and the value is their
+// concatenation. Nothing enforces that contract on the wire, and providers are
+// DB-managed and admin-addable here, so a CUMULATIVE provider -- one whose
+// every fragment repeats the whole argument string built so far -- is a shape
+// this gateway will meet and does not control. Concatenating a cumulative
+// stream is quadratic: two hundred fragments of a short call settled 87.25x the
+// truthful figure, bounded only by the reservation hold, because ordinary SDK
+// traffic sets no max_tokens for the ceiling bound to catch (second review on
+// PR #1762).
+//
+// The invariant this type exists to hold: A TURN SETTLES FOR THE FINAL
+// ARGUMENTS THE MODEL PRODUCED, ONCE, WHATEVER FRAMING THE PROVIDER USED.
+//
+// The two shapes are separable only by CONTENT, never by length. Incremental
+// fragments of one JSON argument object are partial and do not parse on their
+// own; cumulative fragments each parse, or each repeat the previous one. So a
+// fragment latches cumulative when any of these hold against its predecessor:
+//
+//   - it repeats the whole previous fragment and extends it (raw growing
+//     prefixes, the shape a provider produces by resending its buffer);
+//   - it is byte-identical to it (a plain repeat, which is also how nearly every
+//     provider streams the function NAME across an argument stream);
+//   - both it and its predecessor parse as standalone JSON objects (the shape a
+//     provider produces by repairing each prefix into valid JSON, and equally
+//     the one that re-marshals the same keys in map order -- the two fixtures
+//     the byte-prefix rule this replaces missed entirely, at 87.25x and 3.00x).
+//
+// The latch is sticky and needs two or more fragments, per the rule above. Its
+// error directions are asymmetric and that is deliberate: a false cumulative
+// verdict UNDER-counts, which is the direction this whole estimate already errs
+// in (see bytesPerToken), while a false incremental verdict is the overcharge.
+//
+// ponytail: content classification, not a per-provider wire-shape column. A
+// column would need a value for every admin-added provider before its first
+// request, and would be wrong exactly when someone forgot.
+type fragmentStream struct {
+	// joined is the incremental reading: every fragment concatenated. It stops
+	// growing once the cumulative latch trips, since nothing reads it after
+	// that and a cumulative stream's concatenation is quadratic in memory as
+	// well as in credits. joinedLen keeps counting regardless, because it is
+	// the ceiling below and has to stay true after the builder stops.
+	joined    strings.Builder
+	joinedLen int
+	// last is the cumulative reading: the final fragment, which under that
+	// contract IS the whole value.
+	last string
+	// prevParsed records whether last parsed as a standalone JSON object, so
+	// the "both parse" test costs one json.Valid per fragment and not two.
+	prevParsed bool
+	cumulative bool
+	count      int
+}
+
+// add folds one fragment in. An empty fragment is not a fragment: providers
+// send the function name on the first delta only and the arguments on the rest,
+// so the empty halves are framing, and counting them as observations would let
+// a stream of empties latch the cumulative rule on nothing.
+func (f *fragmentStream) add(fragment string) {
+	if fragment == "" {
+		return
+	}
+	parsed := isJSONObject(fragment)
+	if f.count > 0 && !f.cumulative {
+		switch {
+		case fragment == f.last:
+			f.cumulative = true
+		case len(fragment) > len(f.last) && strings.HasPrefix(fragment, f.last):
+			f.cumulative = true
+		case parsed && f.prevParsed:
+			f.cumulative = true
+		}
+	}
+	f.count++
+	f.prevParsed = parsed
+	f.last = fragment
+	f.joinedLen += len(fragment)
+	if !f.cumulative {
+		f.joined.WriteString(fragment)
+	}
+}
+
+// settle returns the value this field settles at, and it is where the hard
+// ceiling lives.
+//
+// The fragments witness exactly two readings and never a third: the
+// concatenation (incremental) and the final fragment (cumulative). Once
+// anything has latched cumulative, the settled value is the SHORTER of the two,
+// written as an explicit min rather than left implied by the branch, so that a
+// later change to the classification above cannot raise the figure past it. For
+// a two-hundred-fragment cumulative stream that min is the difference between
+// the final arguments and 87 times them.
+//
+// The ceiling is deliberately not a numeric one. No length-only bound can hold
+// both shapes: an incremental stream of many small pieces and a cumulative
+// stream of slowly growing ones are numerically identical and differ only in
+// their bytes, so a bound like min(longest fragment, concatenation) would pin
+// every cumulative stream at 1.0x and simultaneously crush every incremental
+// one to the size of its largest piece. What is classifier-independent here is
+// narrower and true: the settled value is always one of the two readings the
+// fragments actually witnessed, and never longer than their concatenation.
+func (f *fragmentStream) settle() string {
+	if !f.cumulative {
+		return f.joined.String()
+	}
+	return f.last[:min(len(f.last), f.joinedLen)]
 }
 
 // accumulateToolCalls folds one chunk's tool-call deltas into the per-index
@@ -265,54 +379,23 @@ func (a *UsageAccumulator) foldToolCall(index int, name, arguments string) {
 		call = &toolCallOutput{}
 		a.toolCalls[index] = call
 	}
-	call.name = foldToolCallFragment(call.name, name)
-	call.arguments = foldToolCallFragment(call.arguments, arguments)
+	call.name.add(name)
+	call.arguments.add(arguments)
 }
 
-// foldToolCallFragment reconciles one fragment against what has accumulated for
-// the same tool call, and it is the whole reason this is per-index state rather
-// than one appended buffer.
+// isJSONObject reports whether s is, on its own, a complete JSON object. It is
+// the one test that separates a repaired or re-marshalled cumulative fragment
+// from an incremental one, because a partial fragment of a JSON object does not
+// parse and a complete one does.
 //
-// TWO WIRE SHAPES, ONE OF THEM RUINOUS IF ASSUMED AWAY. OpenAI's contract is
-// INCREMENTAL: every fragment is the next piece, and the value is their
-// concatenation. Nothing enforces that contract on the wire, and providers are
-// DB-managed and admin-addable here, so a CUMULATIVE provider -- one whose every
-// fragment repeats the whole argument string built so far -- is a shape this
-// gateway will meet and does not control. Concatenating a cumulative stream is
-// quadratic: sixty fragments of a short call settled 218 credits against 7
-// truthful, 31.1x, bounded only by the hold, and ordinary SDK traffic sets no
-// max_tokens for the ceiling bound to catch it (review finding on this PR).
-//
-// The rule handles both without being told which is which, because the two
-// shapes are distinguishable from the fragments themselves: under the cumulative
-// contract each fragment CONTAINS the accumulated value as a prefix, and under
-// the incremental one it does not. So:
-//
-//   - the fragment starts with what we have: cumulative, keep the fragment;
-//   - what we have starts with the fragment: a repeat or a short re-send, keep
-//     what we have;
-//   - neither: incremental, append.
-//
-// Both prefix arms are also the safe direction if the guess is ever wrong. An
-// incremental stream whose next piece happens to begin with everything before it
-// is not JSON any model emits, and mistaking it for cumulative UNDER-counts,
-// which is the direction this whole estimate already errs in. Mistaking a
-// cumulative stream for an incremental one is the 31x overcharge.
-//
-// ponytail: prefix reconciliation, not a per-provider wire-shape column. A
-// column would need a value for every admin-added provider before its first
-// request, and would be wrong exactly when someone forgot.
-func foldToolCallFragment(accumulated, fragment string) string {
-	switch {
-	case fragment == "":
-		return accumulated
-	case strings.HasPrefix(fragment, accumulated):
-		return fragment
-	case strings.HasPrefix(accumulated, fragment):
-		return accumulated
-	default:
-		return accumulated + fragment
-	}
+// An object specifically, not any valid JSON: tool-call arguments are a JSON
+// object by contract, while an incremental fragment can easily be a bare token
+// that happens to be valid JSON on its own (a bare number, true, a quoted
+// string), and accepting those would latch cumulative on an ordinary
+// incremental stream.
+func isJSONObject(s string) bool {
+	t := strings.TrimSpace(s)
+	return len(t) > 1 && t[0] == '{' && json.Valid([]byte(t))
 }
 
 // ToolCallOutput is the model-generated text of every tool call this stream
@@ -329,8 +412,8 @@ func (a *UsageAccumulator) ToolCallOutput() string {
 	var out strings.Builder
 	for _, index := range indexes {
 		call := a.toolCalls[index]
-		out.WriteString(call.name)
-		out.WriteString(call.arguments)
+		out.WriteString(call.name.settle())
+		out.WriteString(call.arguments.settle())
 	}
 	return out.String()
 }

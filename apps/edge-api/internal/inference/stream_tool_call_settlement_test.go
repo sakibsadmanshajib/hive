@@ -114,34 +114,269 @@ func TestExecuteStreaming_CumulativeToolCallFragments_BillTheToolCallOnce(t *tes
 	}
 }
 
-// TestFoldToolCallFragment covers the reconciliation rule directly, including
-// the shapes a relay test cannot conveniently produce.
+// --- PR #1762 second review: the byte-prefix rule missed two cumulative shapes ---
 //
-// The two prefix arms are also the safe direction whenever the guess is wrong:
-// treating an incremental stream as cumulative UNDER-counts, which is the
-// direction this whole estimate already errs in, while the reverse is the
-// overcharge.
-func TestFoldToolCallFragment(t *testing.T) {
+// The rule this replaces treated "cumulative" as "byte-prefix-extending", so a
+// cumulative provider whose fragments are not byte prefixes of one another
+// missed both prefix arms, hit the append arm, and reproduced the full
+// quadratic: 87.25x truth at two hundred fragments. The fixtures below are the
+// three wire shapes, all carrying the IDENTICAL final arguments, because a
+// customer must not be charged differently for the same work because their
+// provider chose a different framing.
+
+// toolCallArgumentsObject builds the final arguments object for a call with n
+// fields, in forward key order. Ordinary prose-shaped JSON with no
+// repeated-character runs, so runCollapsible has nothing to collapse and the
+// estimate is the plain byte-length one.
+func toolCallArgumentsObject(n int, reversed bool) string {
+	var b strings.Builder
+	b.WriteByte('{')
+	for i := 0; i < n; i++ {
+		field := i
+		if reversed {
+			field = n - 1 - i
+		}
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `%q:%q`, fmt.Sprintf("field%d", field), fmt.Sprintf("reading %d", field))
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
+// incrementalFragments is OpenAI's own contract: every fragment is the next
+// piece of one partial JSON object, and none of them parses on its own.
+func incrementalFragments(n int) []string {
+	final := []rune(toolCallArgumentsObject(n, false))
+	frags := make([]string, 0, n)
+	for i := 1; i <= n; i++ {
+		frags = append(frags, string(final[len(final)*(i-1)/n:len(final)*i/n]))
+	}
+	return frags
+}
+
+// cumulativePrefixFragments is the raw cumulative shape: a provider resending
+// its whole buffer, so every fragment is a byte prefix of the next. This is the
+// only cumulative shape the rule under review caught.
+func cumulativePrefixFragments(n int) []string {
+	final := []rune(toolCallArgumentsObject(n, false))
+	frags := make([]string, 0, n)
+	for i := 1; i <= n; i++ {
+		frags = append(frags, string(final[:len(final)*i/n]))
+	}
+	return frags
+}
+
+// cumulativeRepairedFragments is a provider that closes each prefix into valid
+// JSON before sending it, so no fragment is a byte prefix of the next. 87.25x
+// at two hundred fragments under the rule this replaces.
+func cumulativeRepairedFragments(n int) []string {
+	frags := make([]string, 0, n)
+	for k := 1; k <= n; k++ {
+		frags = append(frags, toolCallArgumentsObject(k, false))
+	}
+	return frags
+}
+
+// cumulativeMapOrderFragments is the same, re-marshalled in map order, so
+// consecutive fragments do not even share a first key. It settles at the same
+// byte count as the forward-order object, which is what the assertions compare.
+func cumulativeMapOrderFragments(n int) []string {
+	frags := make([]string, 0, n)
+	for k := 1; k <= n; k++ {
+		frags = append(frags, toolCallArgumentsObject(k, true))
+	}
+	return frags
+}
+
+// TestFragmentStream_SettlesAtTheFinalArgumentsWhateverTheFraming is the
+// classifier's own guard: every shape, at every fragment count, settles for the
+// final arguments the model produced, once.
+//
+// The ratio is asserted in TOKENS rather than bytes because tokens are what
+// gets billed, and 1.0 exactly rather than "close to 1.0" because anything
+// above it is an overcharge and the fixtures carry a known final value.
+func TestFragmentStream_SettlesAtTheFinalArgumentsWhateverTheFraming(t *testing.T) {
+	shapes := map[string]func(int) []string{
+		"incremental partial JSON": incrementalFragments,
+		"cumulative byte prefixes": cumulativePrefixFragments,
+		"cumulative repaired JSON": cumulativeRepairedFragments,
+		"cumulative map order":     cumulativeMapOrderFragments,
+	}
+	for _, n := range []int{10, 60, 200} {
+		for name, shape := range shapes {
+			t.Run(fmt.Sprintf("%s/%d fragments", name, n), func(t *testing.T) {
+				frags := shape(n)
+				var f fragmentStream
+				var concatenated strings.Builder
+				for _, frag := range frags {
+					f.add(frag)
+					concatenated.WriteString(frag)
+				}
+
+				want := estimateCompletionTokens(toolCallArgumentsObject(n, false))
+				got := estimateCompletionTokens(f.settle())
+				if got != want {
+					t.Errorf("settled at %d completion tokens, want %d (%.2fx): a turn settles for the final arguments the model produced, once, whatever framing the provider used",
+						got, want, float64(got)/float64(want))
+				}
+
+				// The fixture has to be able to fail. A shape whose plain
+				// concatenation already equals the truth discriminates nothing,
+				// which is exactly how the rule under review passed its own
+				// cumulative test while charging 87.25x on the shape next to it.
+				if quadratic := estimateCompletionTokens(concatenated.String()); n > 1 && strings.HasPrefix(name, "cumulative") && quadratic <= want {
+					t.Fatalf("fixture cannot discriminate: concatenating %d fragments estimates %d against a truthful %d", n, quadratic, want)
+				}
+			})
+		}
+	}
+}
+
+// TestFragmentStream_TwoHundredCumulativeFragmentsNeverExceedTheCeiling states
+// the ceiling as a number rather than as a property.
+//
+// Whatever the classification decided, the settled value is one of the two
+// readings the fragments witness and never longer than their concatenation. For
+// the shapes below that puts the worst case at 1.00x, against the 87.25x the
+// byte-prefix rule charged on the middle one.
+func TestFragmentStream_TwoHundredCumulativeFragmentsNeverExceedTheCeiling(t *testing.T) {
+	const n = 200
+	for name, shape := range map[string]func(int) []string{
+		"cumulative byte prefixes": cumulativePrefixFragments,
+		"cumulative repaired JSON": cumulativeRepairedFragments,
+		"cumulative map order":     cumulativeMapOrderFragments,
+	} {
+		var f fragmentStream
+		for _, frag := range shape(n) {
+			f.add(frag)
+		}
+		if !f.cumulative {
+			t.Errorf("%s: never latched cumulative, so the settled value is the quadratic concatenation", name)
+		}
+		if got, ceiling := len(f.settle()), f.joinedLen; got > ceiling {
+			t.Errorf("%s: settled %d bytes against a ceiling of %d", name, got, ceiling)
+		}
+		if got, want := len(f.settle()), len(toolCallArgumentsObject(n, false)); got != want {
+			t.Errorf("%s: settled %d bytes, want %d (%.2fx)", name, got, want, float64(got)/float64(want))
+		}
+	}
+}
+
+// TestFragmentStream_ClassifiesTheStreamNotTheFragment covers the decision
+// itself, including the shapes a relay fixture cannot conveniently produce.
+//
+// The error directions are asymmetric on purpose: a false cumulative verdict
+// UNDER-counts, which is the direction this whole estimate already errs in,
+// while a false incremental verdict is the overcharge.
+func TestFragmentStream_ClassifiesTheStreamNotTheFragment(t *testing.T) {
 	cases := []struct {
-		name        string
-		accumulated string
-		fragment    string
-		want        string
+		name      string
+		fragments []string
+		want      string
 	}{
-		{"first fragment", "", `{"a"`, `{"a"`},
-		{"incremental next piece", `{"a"`, `:1}`, `{"a":1}`},
-		{"cumulative repeat of everything so far", `{"a"`, `{"a":1}`, `{"a":1}`},
-		{"identical resend", `{"a":1}`, `{"a":1}`, `{"a":1}`},
-		{"shorter resend of a prefix", `{"a":1}`, `{"a"`, `{"a":1}`},
-		{"empty fragment contributes nothing", `{"a":1}`, "", `{"a":1}`},
-		{"empty on empty", "", "", ""},
+		{"single fragment is its own value", []string{`{"a":1}`}, `{"a":1}`},
+		{"no fragments at all", nil, ""},
+		{"empty fragments contribute nothing", []string{`{"a"`, "", `:1}`, ""}, `{"a":1}`},
+		{"incremental partial pieces concatenate", []string{`{"a"`, `:1,"b"`, `:2}`}, `{"a":1,"b":2}`},
+		{"cumulative byte prefixes keep the last", []string{`{"a"`, `{"a":1`, `{"a":1}`}, `{"a":1}`},
+		{"cumulative repaired JSON keeps the last", []string{`{"a":1}`, `{"a":1,"b":2}`}, `{"a":1,"b":2}`},
+		{"cumulative map order keeps the last", []string{`{"a":1}`, `{"b":2,"a":1}`}, `{"b":2,"a":1}`},
+		{"an identical repeat is one value, not two", []string{"get_weather", "get_weather", "get_weather"}, "get_weather"},
+		{"a name streamed in pieces still concatenates", []string{"get_", "weather"}, "get_weather"},
+		{"the latch is sticky once anything shows the shape", []string{`{"a":1}`, `{"a":1,"b":2}`, `{"c"`}, `{"c"`},
+		{"a bare valid-JSON token is not a complete object", []string{`1`, `2`}, `12`},
+		{"a quoted string fragment is not a complete object", []string{`"a`, `"b`}, `"a"b`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := foldToolCallFragment(tc.accumulated, tc.fragment); got != tc.want {
-				t.Errorf("foldToolCallFragment(%q, %q) = %q, want %q", tc.accumulated, tc.fragment, got, tc.want)
+			var f fragmentStream
+			for _, frag := range tc.fragments {
+				f.add(frag)
+			}
+			if got := f.settle(); got != tc.want {
+				t.Errorf("settled %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// toolCallFragmentSSEServer streams one tool call as the given fragments, with
+// the function name repeated on every frame the way providers actually send it.
+func toolCallFragmentSSEServer(fragments []string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		for i, fragment := range fragments {
+			fmt.Fprintln(w, toolCallOnlyChunkLine(fmt.Sprintf("t%d", i+1), toolCallOnlyFunctionName, fragment))
+		}
+		fmt.Fprintln(w, `data: {"id":"tf","object":"chat.completion.chunk","created":1700000000,"model":"route","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`)
+		fmt.Fprintln(w, "data: [DONE]")
+		flusher.Flush()
+	}))
+}
+
+// TestExecuteStreaming_RepairedCumulativeFragments_BillTheToolCallOnce is the
+// money guard for the shape the byte-prefix rule missed, end to end through the
+// relay and the accounting mock rather than against the classifier alone.
+//
+// Two hundred fragments, each a COMPLETE valid JSON object rather than a byte
+// prefix of the next, is the fixture that charged 87.25x truth (second review on
+// PR #1762). Nothing downstream bounds it: clampUsageToCeiling returns early on
+// ceiling <= 0 and ordinary SDK traffic sends no max_tokens, so only the
+// reservation hold stood in the way.
+func TestExecuteStreaming_RepairedCumulativeFragments_BillTheToolCallOnce(t *testing.T) {
+	const fragments = 200
+	frags := cumulativeRepairedFragments(fragments)
+
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMockWithHold(rec, DefaultHoldText)
+	defer acctSrv.Close()
+
+	litellmSrv := toolCallFragmentSSEServer(frags)
+	defer litellmSrv.Close()
+
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+
+	reqBody := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"What is the weather in Dhaka right now?"}],"stream":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(string(reqBody)))
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+
+	_ = orch.executeStreaming(context.Background(), w, req, EndpointChatCompletions, reqBody,
+		"gpt-4o", "gpt-4o", NeedFlags{NeedChatCompletions: true, NeedStreaming: true},
+		DefaultHoldText, false, nil, orch.litellm.ChatCompletionStream)
+
+	promptTokens := estimateCompletionTokens(promptText(EndpointChatCompletions, reqBody))
+	truthful := CreditsForTokens(routeMockPricing, promptTokens, 0, 0,
+		estimateCompletionTokens(toolCallOnlyFunctionName+frags[fragments-1]))
+
+	var concatenated strings.Builder
+	for _, fragment := range frags {
+		concatenated.WriteString(toolCallOnlyFunctionName)
+		concatenated.WriteString(fragment)
+	}
+	quadratic := CreditsForTokens(routeMockPricing, promptTokens, 0, 0,
+		estimateCompletionTokens(concatenated.String()))
+	if quadratic <= truthful {
+		t.Fatalf("fixture cannot discriminate: concatenating %d fragments prices at %d against a truthful %d", fragments, quadratic, truthful)
+	}
+
+	fbody, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("a served tool-calling turn is billable work; calls seen: %+v", rec.calls)
+	}
+	if actual := finalizeInt64(t, fbody, "actual_credits"); actual != truthful {
+		t.Errorf("actual_credits = %d, want %d. Concatenating the %d repaired-JSON fragments charges %d, which is %.1fx the truthful figure (#928, second review on PR #1762)",
+			actual, truthful, fragments, quadratic, float64(quadratic)/float64(truthful))
+	}
+	if rec.has("/internal/accounting/reservations/release") {
+		t.Error("a tool-call-only turn is delivered work: it must never release the hold in full (D-034)")
 	}
 }
 

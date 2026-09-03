@@ -311,6 +311,21 @@ func TestStreamDataDeadline_KeepalivesDoNotRenewTheBudget(t *testing.T) {
 		t.Error("an empty content delta carries no data")
 	}
 
+	// An EMPTY tool-call array is present-but-empty: the model produced no tool
+	// call, and reading it as one renewed the deadline on every frame, so a
+	// provider emitting them as its keepalive starved the timeout forever
+	// (second review on PR #1762).
+	for name, empty := range map[string]ChunkDelta{
+		"empty tool_calls array": {ToolCalls: json.RawMessage(`[]`)},
+		"empty function_call":    {FunctionCall: json.RawMessage(`{}`)},
+		"null tool_calls":        {ToolCalls: json.RawMessage(`null`)},
+		"whitespace-only array":  {ToolCalls: json.RawMessage("[ \n ]")},
+	} {
+		if chunkCarriesData(ChatCompletionChunk{Choices: []ChunkChoice{{Delta: empty}}}) {
+			t.Errorf("a %s carries no tool call and no data: counting it renews the budget on a keepalive", name)
+		}
+	}
+
 	text := "hello"
 	for name, chunk := range map[string]ChatCompletionChunk{
 		"content":     {Choices: []ChunkChoice{{Delta: ChunkDelta{Content: &text}}}},

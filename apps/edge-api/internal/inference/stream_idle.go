@@ -74,7 +74,7 @@ func chunkCarriesData(chunk ChatCompletionChunk) bool {
 		if choice.Delta.Refusal != nil && *choice.Delta.Refusal != "" {
 			return true
 		}
-		if rawFieldPresent(choice.Delta.ToolCalls) || rawFieldPresent(choice.Delta.FunctionCall) {
+		if toolCallPresent(choice.Delta.ToolCalls) || toolCallPresent(choice.Delta.FunctionCall) {
 			return true
 		}
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
