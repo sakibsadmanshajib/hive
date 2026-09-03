@@ -8,35 +8,42 @@ or answers it 404, which is what a deployment without this change does.
 ## What the two runs measured
 
 Every step is timed twice: when the run took it, and when it first appeared in
-the transcript. Both runs put every step on screen eventually. "Eventually" is
-the defect.
+the transcript. The clock is the wire's own, read from it after the submission
+landed rather than taken from the keypress, because the composer creates the
+chat through the front end's backend first and on a cold container that gap is
+six seconds, which would be added to every step in both runs equally.
 
-| | Worst a step was late | Mean | Steps sharing an arrival with another step |
-| --- | --- | --- | --- |
-| Subscription (`MODE=stream`) | 1.3s | 1.0s | none |
-| Cursor read, the fallback (`MODE=poll`) | 3.2s | 2.1s | three, all at +9.8s |
+| | Worst a step was late | Mean | Steps that never appeared as their own line | Steps sharing an arrival |
+| --- | --- | --- | --- | --- |
+| Subscription (`MODE=stream`) | 3.0s | 0.8s | none | none |
+| Cursor read, the fallback (`MODE=poll`) | 6.4s | 4.3s | two of seven | two pairs |
 
-Roughly half a second of each figure is the harness rather than the product:
-the wire writes on a 500ms tick and the capture samples the DOM on a 500ms
-tick, so a step cannot be observed sooner than that even if it were painted
-instantly. The gap between the columns is the part that is the product.
+Six of the subscription's seven steps were under 0.7s late, which is about the
+floor this harness can measure: the wire writes on a 500ms tick and the capture
+samples the DOM on a 500ms tick. The single 3.0s outlier is the run's last step,
+which lands next to the terminal transition and a screenshot pause.
 
-The last column is the visible half. Under the cursor read the transcript
-moves in lumps at the poll boundary: three steps the agent took over three and
-a half seconds all appear in the same frame, so a person watching sees a
-still box and then a jump. Under the subscription each step appears on its own.
+The last two columns are the part that is visible rather than merely faster.
+Under the cursor read the transcript moves in lumps at the poll boundary: one
+read returned three steps at once, and they appeared in the same frame. Worse,
+two of the seven steps never appeared at all. A tool call and its result that
+arrive in the same read fold into one line before anything renders, because
+`foldRunSteps` closes an open call in place rather than adding a second line for
+it, so the call itself is never seen. Under the subscription each step arrives
+on its own and each one is shown.
 
-`wire-poll.log` is that lump as data, one cursor read every 3.1 seconds and one
-of them returning three steps at once. `wire-stream.log` is the same run as a
-single connection opened at `after_seq=0` and written frame by frame, with one
-cursor read at the very end: the follower's settle read after the stream closed.
+`wire-poll.log` is that as data, one cursor read every three and a half seconds
+with two of them returning three steps each. `wire-stream.log` is the same run
+as a single connection opened at `after_seq=0` and written frame by frame, with
+one cursor read at the very end: the follower's settle read after the stream
+closed.
 
 ## The screenshots
 
 The pair to compare is `stream-03-run-t6p5s.png` against
 `poll-03-run-t6p5s.png`, both taken 6.5 seconds into the same run. The
-subscription shows three completed steps. The cursor read shows one, still
-open, with two more already taken and not yet on screen.
+subscription shows the steps the run had taken by then. The cursor read shows
+one, still open, with more already taken and not yet on screen.
 
 `03-run-t*.png` is a sequence of stills at increasing run times for each mode,
 which is what makes incremental appearance visible in stills rather than only

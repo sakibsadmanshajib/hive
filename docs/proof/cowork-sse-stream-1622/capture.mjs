@@ -88,7 +88,14 @@ await page.waitForTimeout(2500);
 await page.locator('input[type="email"], input[autocomplete="email"]').first().fill(EMAIL);
 await page.locator('input[type="password"]').first().fill(PASSWORD);
 await page.getByRole('button', { name: /sign in/i }).first().click();
-await page.waitForTimeout(6000);
+// Waited for rather than slept through. On a cold container the sign-in takes
+// longer than any fixed pause worth writing, and proceeding early is how the
+// first run of this capture ended up pressing Enter into a page that was still
+// settling.
+await page
+	.waitForFunction(() => !window.location.pathname.startsWith('/auth'), null, { timeout: 60000 })
+	.catch(() => {});
+await page.waitForTimeout(3000);
 say(`signed in, url=${page.url()}`);
 
 for (const name of [/okay.*let.*s go/i, /get started/i, /dismiss/i, /close/i]) {
@@ -116,8 +123,31 @@ await composer.fill?.(INSTRUCTIONS).catch(async () => {
 await page.waitForTimeout(400);
 await shoot('02-brief-typed');
 
-const submittedAt = performance.now();
 await page.keyboard.press('Enter');
+
+/*
+ * The run's clock, taken from the wire rather than from this keypress.
+ *
+ * The composer does work between Enter and the POST (it creates the chat
+ * through the front end's own backend first), and on a cold container that
+ * gap was six seconds. Measuring from here would have added it to every
+ * step's lateness equally, in both modes, which is a measurement of the
+ * harness rather than of the product.
+ */
+let submittedAt = performance.now();
+for (let i = 0; i < 60; i++) {
+	const state = await page
+		.evaluate(async () => {
+			const response = await fetch('/api/v1/hive/agent/__elapsed');
+			return response.json();
+		})
+		.catch(() => null);
+	if (state && state.submitted) {
+		submittedAt = performance.now() - state.elapsed_ms;
+		break;
+	}
+	await page.waitForTimeout(250);
+}
 say('submitted');
 
 /*

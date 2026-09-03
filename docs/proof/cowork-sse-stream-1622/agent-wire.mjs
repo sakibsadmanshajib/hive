@@ -170,6 +170,20 @@ const serveAgent = (req, res) => {
 	const url = new URL(req.url, 'http://localhost');
 	const path = url.pathname;
 
+	if (path.endsWith('/__elapsed')) {
+		/*
+		 * How far into the run this process thinks it is.
+		 *
+		 * Not part of the product's API; the capture reads it to base its own
+		 * measurements on the moment the submission actually landed here
+		 * rather than on the moment it pressed Enter. On a cold container
+		 * those are six seconds apart, and the first capture taken this way
+		 * reported every step as uniformly six seconds late, which is a
+		 * measurement of the harness rather than of the product.
+		 */
+		req.resume();
+		return sendJSON(res, { submitted: submittedAt !== null, elapsed_ms: elapsed() });
+	}
 	if (req.method === 'POST' && path.endsWith('/tasks')) {
 		submittedAt = Date.now();
 		say('composer submitted the run');

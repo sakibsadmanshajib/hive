@@ -1,16 +1,16 @@
 mode=stream listening on 3423, upstream http://127.0.0.1:3422
 [run +  0.00s] composer submitted the run
-[run +  0.09s] stream opened at after_seq=0
-[run +  0.59s] frame status=queued
-[run +  2.13s] frame status=running
+[run +  0.12s] stream opened at after_seq=0
+[run +  0.62s] frame status=queued
+[run +  2.14s] frame status=running
 [run +  3.14s] frame step seq=1 tool_call list the workspace
 [run +  4.64s] frame step seq=2 tool_result AGENTS.md
 [run +  5.65s] frame step seq=3 tool_call write sixcap.txt
 [run +  6.65s] frame step seq=4 tool_result wrote 14 bytes
 [run +  8.17s] frame step seq=5 file sixcap.txt
-[run +  9.17s] frame step seq=6 tool_call cat sixcap.txt
-[run + 10.67s] frame step seq=7 tool_result HIVE-COWORK-OK
-[run + 11.69s] frame status=succeeded
-[run + 11.69s] frame end status=succeeded
-[run + 11.77s] task read -> succeeded
-[run + 11.78s] cursor read after_seq=7 -> 0 step(s)
+[run +  9.18s] frame step seq=6 tool_call cat sixcap.txt
+[run + 10.46s] frame step seq=7 tool_result HIVE-COWORK-OK
+[run + 11.97s] frame status=succeeded
+[run + 11.97s] frame end status=succeeded
+[run + 12.08s] task read -> succeeded
+[run + 12.09s] cursor read after_seq=7 -> 0 step(s)
