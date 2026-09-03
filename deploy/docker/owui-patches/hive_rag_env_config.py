@@ -29,7 +29,7 @@ the whole nested permission tree, so a leaf inside it cannot be reconciled by
 naming a dotted key: that would write a row nothing reads. `PERMISSION_ENV`
 below carries the leaves the environment owns, and `reconcile` reads the tree,
 merges them in and writes the tree back. See that table for why
-`workspace.skills` is one of them.
+`workspace.skills` and `workspace.knowledge` are both in it.
 
 Issue #1575: `WEB_LOADER_TIMEOUT` (PR #1570) merged into the container
 environment and nowhere else, because `web.loader.timeout` was never in this
@@ -528,7 +528,23 @@ FEATURE_CONFIG_ENV = {
 # `sharing.public_skills` stay at their upstream defaults, both false, so a
 # skill is private to the account that wrote it and no member can put authored
 # text into another account's prompt.
+#
+# `workspace.knowledge` is here for the same reason and by the same mechanism
+# (issue #1505). It gates exactly one route in the pinned image,
+# `POST /api/v1/knowledge/create`; listing, reading, adding a file, and
+# deleting are scoped by ownership or an access grant instead. A Project IS a
+# knowledge collection on this backend
+# (vendor/open-webui/src/lib/hive/projects/projects.ts), so leaving the
+# permission at its upstream default of false shipped a Projects page whose
+# New project button answered 401 for every ordinary customer, while the page
+# went on rendering the button. The same 2026-08-23 role migration is what
+# made it bite: before it, every tenant owner was an Open WebUI `admin` and
+# skipped the gate.
+#
+# Sharing stays untouched here too. The grant is the right to author a
+# collection of one's own, not the right to hand it to another member.
 PERMISSION_ENV = {
+    ("workspace", "knowledge"): "USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS",
     ("workspace", "skills"): "USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS",
 }
 

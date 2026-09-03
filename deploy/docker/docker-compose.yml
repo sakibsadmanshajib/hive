@@ -1377,6 +1377,20 @@ services:
       # box. Sharing is deliberately not granted alongside it: a skill stays
       # private to the account that wrote it.
       USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS: "true"
+      # The right to author a knowledge collection, which is what a Project is
+      # on this backend (issue #1505). Upstream defaults it false and it gates
+      # exactly one route, POST /api/v1/knowledge/create; every other knowledge
+      # route is scoped by ownership or an access grant. So an ordinary
+      # customer could open a project and never create one, and the Projects
+      # page went on rendering a New project button that answered 401. Invisible
+      # until supabase/migrations/20260823_03_owui_role_never_admin.sql, for the
+      # same reason the skills permission above was.
+      #
+      # Reaches an already-booted deployment through the same seam as the line
+      # above: `user.permissions` is one persisted row holding the whole tree,
+      # and owui-patches/hive_rag_env_config.py merges both leaves into it on
+      # every start. Sharing is deliberately not granted alongside it.
+      USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: "true"
       # Model visibility belongs to the gateway, not to Open WebUI. edge-api
       # already filters /v1/models per tenant (AliasVisibleToTenant, PR #205),
       # so a second independent filter here adds nothing and actively hides

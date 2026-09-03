@@ -688,6 +688,51 @@ def test_reconcile_skips_the_write_when_the_tree_already_agrees() -> None:
     assert config.upsert_calls == 0
 
 
+def test_knowledge_permission_is_read_from_the_environment() -> None:
+    """Issue #1505. `workspace.knowledge` gates exactly one route in the pinned
+    image, `POST /api/v1/knowledge/create` (routers/knowledge.py), and upstream
+    defaults it false. Listing, reading, file add and delete are all scoped by
+    ownership or an access grant instead, so an ordinary customer could see and
+    open a knowledge base and could never author one: the Projects page's New
+    project button answered 401 for every non-admin account."""
+    assert hive_rag_env_config.permission_overrides(
+        {"USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS": "true"}
+    ) == {("workspace", "knowledge"): True}
+    assert hive_rag_env_config.permission_overrides(
+        {"USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS": "false"}
+    ) == {("workspace", "knowledge"): False}
+
+
+def test_reconcile_grants_knowledge_without_disturbing_skills() -> None:
+    """Both leaves live in the same single row, so the second one added has to
+    merge rather than replace. A tree written from one override alone would
+    revoke the other permission on the next boot."""
+    config = FakeConfig({PERMISSIONS_KEY: _tree(knowledge=False, skills=True)})
+    reconcile(
+        config,
+        {
+            "USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS": "true",
+            "USER_PERMISSIONS_WORKSPACE_SKILLS_ACCESS": "true",
+        },
+    )
+
+    assert config.stored[PERMISSIONS_KEY]["workspace"]["knowledge"] is True
+    assert config.stored[PERMISSIONS_KEY]["workspace"]["skills"] is True
+    assert config.stored[PERMISSIONS_KEY]["workspace"]["models"] is False
+
+
+def test_compose_grants_the_knowledge_permission() -> None:
+    """Same reason the skills assertion below exists: a reconcile that works
+    and a compose file that never sets the variable changes nothing on the
+    box."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text()
+    assert re.search(
+        r"USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS:\s*\"?true\"?", compose
+    ), "docker-compose.yml does not grant workspace.knowledge"
+
+
 def test_compose_grants_the_skills_permission() -> None:
     """The deployment's own answer, read from the file that reaches the box.
     A reconcile that works and a compose file that never sets the variable is
