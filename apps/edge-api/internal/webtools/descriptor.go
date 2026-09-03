@@ -17,6 +17,15 @@ package webtools
 // (criterion A5). The measured legacy dump was 12,089 bytes.
 const MaxDescriptorBytes = 1200
 
+// ToolList is the GET /v1/tools body: the descriptors, and nothing else.
+//
+// Shaped like every other list this gateway serves (`object`, `data`) so a
+// caller that already reads /v1/models needs no second convention.
+type ToolList struct {
+	Object string     `json:"object"`
+	Data   []ToolSpec `json:"data"`
+}
+
 // ToolSpec is one entry of an OpenAI-shaped `tools` array.
 type ToolSpec struct {
 	Type     string       `json:"type"`

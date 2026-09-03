@@ -176,8 +176,36 @@ func NewHandler(d Deps) *Handler {
 // though only one is implemented, so the route table is touched once by one
 // change rather than twice.
 func (h *Handler) Register(mux *http.ServeMux) {
+	mux.HandleFunc("/v1/tools", h.handleList)
 	mux.HandleFunc("/v1/tools/"+ToolWebSearch, h.handleSearch)
 	mux.HandleFunc("/v1/tools/"+ToolWebFetch, h.handleFetch)
+}
+
+// handleList serves GET /v1/tools: the two tool specifications, verbatim from
+// Descriptors().
+//
+// This route is why the feature can exist at all (issue #1718). Descriptors()
+// had no non-test caller, so the chat shim had no way to advertise these tools
+// except a hardcoded copy of their JSON, and a copy drifts from the handler
+// that implements them: a description promising an "UNTRUSTED WEB CONTENT"
+// fence, or an argument this handler does not read, becomes a lie the moment
+// either side is edited alone. One source, served over HTTP, cannot drift.
+//
+// Deliberately unauthenticated, unlike the two call routes below. What it
+// serves is a compiled-in constant with no tenant, user or account data in it,
+// it is already transmitted verbatim to whichever upstream provider serves the
+// turn, and it spends nothing: there is no hold, no charge and no per-turn
+// budget on a read of a constant. Requiring a principal here would buy no
+// confidentiality and would instead mean the shim needs a signed-in user
+// before it can decide whether to advertise anything, which is the wrong
+// ordering: advertisement is decided once per request, before a user's tool
+// call exists.
+func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeEnvelope(w, http.StatusMethodNotAllowed, NewError(CodeInvalidRequest, msgMethodNotAllwed, 0))
+		return
+	}
+	writeEnvelope(w, http.StatusOK, ToolList{Object: "list", Data: Descriptors()})
 }
 
 type searchRequest struct {

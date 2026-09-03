@@ -253,6 +253,28 @@ env:
   # `openssl rand -hex 32` and stored as the SEARXNG_SECRET repository
   # secret, wins here instead.
   SEARXNG_SECRET: ${{ secrets.SEARXNG_SECRET }}
+  # Issue #1718: the model calls web_search and web_fetch itself, with nothing
+  # toggled. Set HERE and not only in compose for one reason: the box's own
+  # untracked .env was seeded from .env.example, which carried
+  # OWUI_DEFAULT_FUNCTION_CALLING=legacy for as long as that was the right
+  # answer, and --env-file would keep winning over a changed compose default
+  # forever. Shell environment beats --env-file during compose interpolation,
+  # so this is the versioned place that actually reaches the deployment. Under
+  # legacy, utils/middleware.py gates the entire form_data['tools'] attachment
+  # away and no tool specification can reach a model at any price, which would
+  # be a merged feature that is not deployed rather than a visible failure.
+  #
+  # Proof that it reached the container:
+  #   docker compose exec open-webui env | grep HIVE_DEFAULT_FUNCTION_CALLING
+  OWUI_DEFAULT_FUNCTION_CALLING: "native"
+  # OWUI_WEB_TOOLS_ENABLED is deliberately NOT set here, and the reasoning
+  # above does not extend to it. That variable is the documented kill switch
+  # (.env.example), compose already defaults it to true
+  # (HIVE_WEB_TOOLS_ENABLED: ${OWUI_WEB_TOOLS_ENABLED:-true}), and the box's
+  # own .env predates the variable, so forcing it here would change nothing
+  # today while permanently overriding the one value an operator would set to
+  # turn the feature off in an incident. A switch the deployment cannot honour
+  # is worse than no switch.
   # Issue #1602: same reasoning as SEARXNG_SECRET above. Open WebUI's compose
   # fallback (WEBUI_SECRET_KEY:-hive-local-webui-secret) is a dev convenience
   # only, and it is a value committed in the repo, so it must never be what

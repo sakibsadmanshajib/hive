@@ -1249,6 +1249,13 @@
       "notes": "Hive proprietary (Anthropic Messages compatibility): local token-count estimate for a Messages request. No dispatch, no billing."
     },
     {
+      "method": "GET",
+      "path": "/v1/tools",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (issue #1718): the two web tool specifications, served verbatim from webtools.Descriptors(). The chat shim reads this to decide what to advertise to a tool capable model, so the description a model reads and the handler that implements it cannot drift. Unauthenticated by design: a compiled in constant with no tenant data, already sent verbatim to whichever upstream provider serves the turn, and it spends nothing."
+    },
+    {
       "method": "POST",
       "path": "/v1/tools/web_search",
       "status": "supported_now",

@@ -955,7 +955,22 @@ func registerAudioVoicesRoute(mux httpMux) {
 // route_matrix_guard_test.go drives the real registration function, so a
 // route that ships with no support-matrix entry turns that test red instead
 // of only failing at boot on the deployed box.
+
+// webToolsListPath is the descriptor list route. One constant, because it is
+// named twice: at registration below, and in authSelectorMiddleware, which
+// exempts exactly this path and method from authentication.
+const webToolsListPath = "/v1/tools"
+
 func registerWebToolRoutes(mux httpMux, webToolsHandler http.Handler) {
+	// GET /v1/tools, the descriptor list the chat shim reads (issue #1718).
+	// Registered alongside the two call routes rather than in its own family
+	// because it is the same handler and the same package; what it must never
+	// be is a second copy of the specifications living in the front end.
+	// Spelled through webToolsListPath because authSelectorMiddleware exempts
+	// that same constant from authentication: two string literals could drift
+	// apart, and the drift would be silent in the safe-looking direction,
+	// leaving the route registered and unreachable.
+	mux.Handle(webToolsListPath, webToolsHandler)
 	mux.Handle("/v1/tools/"+webtools.ToolWebSearch, webToolsHandler)
 	mux.Handle("/v1/tools/"+webtools.ToolWebFetch, webToolsHandler)
 }
@@ -1453,6 +1468,25 @@ func authSelectorMiddleware(jwtMW func(http.Handler) http.Handler, next http.Han
 	selector = anthropic.APIKeyNormalizer(selector)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/v1/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// GET /v1/tools is the one /v1/ route with no principal, and the
+		// selector is where that has to be honoured: everything under /v1/
+		// with no Authorization header falls through to the JWT handler,
+		// which answers 401 on a missing bearer before any mux entry runs.
+		// The handler's own doc comment already calls this route
+		// "deliberately unauthenticated" (webtools.Handler.handleList), and
+		// the chat shim reads it with no credential on purpose, so without
+		// this the shim would receive 401 on every read, advertise nothing,
+		// and put every turn back on the legacy path. That is a merged
+		// feature that never runs, which is the exact shape of issue #776.
+		//
+		// Exact path and method only. POST /v1/tools/web_search and
+		// /v1/tools/web_fetch spend credits and keep their authentication;
+		// so does anything else, including a non-GET to this same path,
+		// which the handler answers 405 for itself.
+		if r.Method == http.MethodGet && r.URL.Path == webToolsListPath {
 			next.ServeHTTP(w, r)
 			return
 		}

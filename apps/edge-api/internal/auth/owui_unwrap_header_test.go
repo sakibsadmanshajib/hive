@@ -359,3 +359,57 @@ func TestOWUIUnwrap_NonAgentBodylessShimRequestStillPassesThrough(t *testing.T) 
 		t.Fatal("a pass-through must not be marked unwrapped")
 	}
 }
+
+// Issue #1718. The two web tool routes spend real money: a search is charged
+// 100,000 credits and a fetch 200,000, settled through sessionbilling against
+// whichever principal edge-api resolves. Before this, they were not in
+// requiresPerUserAuth, so a shim-key call arriving without a per-user token
+// passed through under the shim account's own principal. That is the exact
+// mis-attribution the agent-task arm was added to prevent, and here it would
+// bill the shim account for every customer's web search while auditing none of
+// them. Fail closed instead.
+func TestOWUIUnwrap_ShimKeyOnWebToolCallWithoutCarrier_Rejects401(t *testing.T) {
+	for _, path := range []string{"/v1/tools/web_search", "/v1/tools/web_fetch"} {
+		t.Run(path, func(t *testing.T) {
+			mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+			next, captured := newCarrierHandler()
+
+			body, err := json.Marshal(map[string]any{"query": "who won", "url": "https://example.com"})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+testShimKey)
+			req.Header.Set("Content-Type", "application/json")
+
+			rec := httptest.NewRecorder()
+			mw(next).ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", rec.Code)
+			}
+			if captured.served {
+				t.Fatal("a shim-key web tool call with no per-user token must never reach the handler: it would be billed to the shim account")
+			}
+		})
+	}
+}
+
+// The descriptor list is not a call and costs nothing, so it must stay
+// reachable with the shim key alone. The chat shim reads it once per process
+// to decide what to advertise, before any user's tool call exists.
+func TestOWUIUnwrap_ShimKeyOnToolDescriptorListPassesThrough(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCarrierHandler()
+
+	req := carrierRequest(http.MethodGet, "/v1/tools", "Bearer "+testShimKey, "")
+	rec := httptest.NewRecorder()
+	mw(next).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !captured.served {
+		t.Fatal("GET /v1/tools under the shim key must reach the handler")
+	}
+}

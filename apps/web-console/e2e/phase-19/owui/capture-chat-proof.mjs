@@ -41,8 +41,30 @@ const SCENARIO = "chat";
 // The prompt is deliberately one whose right answer is one word, so "the model
 // replied" is checkable rather than eyeballed. Same reasoning, and the same
 // question, as 01-chat-send-stream.spec.ts.
-const PROMPT = "What colour is a banana? Reply with only the single colour word.";
-const REPLY_PATTERN = /yellow/i;
+//
+// Both are overridable, because one question cannot serve two claims. The
+// default proves the surface is healthy, which is what every chat pull request
+// asks for. A feature capture needs a question the model cannot answer from
+// memory, and the answer to one of those is not a single word a pattern can
+// check; see REQUIRE_SOURCES below for what carries the assertion there.
+const PROMPT = process.env.PROOF_PROMPT ?? "What colour is a banana? Reply with only the single colour word.";
+const REPLY_PATTERN = new RegExp(process.env.PROOF_REPLY_PATTERN ?? "yellow", "i");
+
+// The web tools claim (issue #1718). Both off by default, so the capture that
+// runs on every chat pull request is unchanged by their existence.
+//
+// REQUIRE_SOURCES makes the assistant turn's own source list the assertion. A
+// turn that rendered sources called a tool, and a turn that called a tool on a
+// message where nothing was toggled is the whole claim under proof. It is also
+// the half issue #1621 reported missing, so it is the element that has to be in
+// the frame rather than merely inferred from a good answer.
+//
+// CONTROL_MODEL is the negative half: an alias the catalog reports as not tool
+// capable, where the same question must settle with no source list at all. It
+// is what separates "the tools are offered when the route can serve them" from
+// "the tools are offered unconditionally".
+const REQUIRE_SOURCES = process.env.PROOF_REQUIRE_SOURCES === "1";
+const CONTROL_MODEL = (process.env.PROOF_CONTROL_MODEL ?? "").trim();
 // Which alias the captured turn is allowed to run on.
 //
 // This is a money guard, not a cosmetic one. The workflow runs on every pull
@@ -85,6 +107,46 @@ function safeUrl(raw) {
   } catch {
     return "(unparseable url)";
   }
+}
+
+/**
+ * The assistant turn's "N Sources" control, which Open WebUI renders only when
+ * the turn carries sources at all (Citations.svelte). Its aria-label is the
+ * stable half: the visible text is "1 Source" or "3 Sources", while the label
+ * is always "Toggle N source(s)".
+ */
+function sourcesToggle(scope) {
+  return scope.getByRole("button", { name: /toggle \d+ sources?/i });
+}
+
+/**
+ * Sends PROMPT in the composer and returns the request Open WebUI made, so the
+ * caller can read what was actually on the wire rather than infer it from the
+ * page. `features` is where the composer's toggles land, which is what makes
+ * "the globe was off" a checked fact instead of a claim about pixels.
+ */
+async function sendPrompt(page) {
+  await page.locator("#chat-input").fill(PROMPT);
+  const pending = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" && request.url().includes("/api/chat/completions"),
+    { timeout: 30_000 },
+  );
+  await page.keyboard.press("Enter");
+  return pending;
+}
+
+/**
+ * Waits for the assistant turn to finish streaming and returns it with its
+ * text. The Copy button appears on an assistant turn only once the stream has
+ * finished, which is what makes it the signal that a reply arrived rather than
+ * that a spinner did.
+ */
+async function settledTurn(page) {
+  const turn = page.getByRole("listitem").last();
+  await turn.getByRole("button", { name: "Copy" }).waitFor({ state: "visible", timeout: 180_000 });
+  const text = (await turn.innerText()).replace(/\s+/g, " ").trim();
+  return { turn, text };
 }
 
 async function main() {
@@ -166,25 +228,59 @@ async function main() {
       );
     }
 
-    await composer.fill(PROMPT);
-    const chatRequest = page.waitForRequest(
-      (request) =>
-        request.method() === "POST" && request.url().includes("/api/chat/completions"),
-      { timeout: 30_000 },
-    );
-    await page.keyboard.press("Enter");
-    await chatRequest;
-    record("chat completion request left the browser");
+    // What the user did NOT do, photographed before the message is sent. Open
+    // WebUI renders the globe as a chip beside the composer only while web
+    // search is on (MessageInput.svelte), so an off toggle is an absence, and
+    // an absence is exactly what a screenshot cannot distinguish from a missing
+    // feature. The control itself lives in the Integrations menu and carries
+    // aria-pressed, so opening that menu turns the absence into a readable
+    // state. Recorded on every run; the shot is taken only for the feature
+    // capture, so the default capture's image set is unchanged.
+    const integrations = page.locator("#integration-menu-button");
+    if (await integrations.isVisible().catch(() => false)) {
+      await integrations.click();
+      const webSearchToggle = page.getByRole("button", { name: /(enable|disable) web search/i }).first();
+      if (await webSearchToggle.isVisible().catch(() => false)) {
+        const pressed = await webSearchToggle.getAttribute("aria-pressed");
+        const label = await webSearchToggle.getAttribute("aria-label");
+        record(`web search toggle before sending: aria-label="${label}" aria-pressed=${pressed}`);
+        if (pressed === "true") {
+          throw new Error(
+            "the web search toggle was already on before the message was sent, so this capture cannot show what the model does with nothing toggled",
+          );
+        }
+        if (REQUIRE_SOURCES) {
+          shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "02b-web-toggle-off", note: NOTE }));
+        }
+      } else {
+        record("the Integrations menu carries no web search control on this surface");
+      }
+      await page.keyboard.press("Escape");
+    } else {
+      record("no Integrations menu on this surface, so there is no globe to have toggled");
+    }
 
-    // The Copy button appears on an assistant turn only once the stream has
-    // finished, which is what makes it the signal that a reply arrived rather
-    // than that a spinner did.
-    const assistantTurn = page.getByRole("listitem").last();
-    await assistantTurn
-      .getByRole("button", { name: "Copy" })
-      .waitFor({ state: "visible", timeout: 180_000 });
-    const replyText = (await assistantTurn.innerText()).replace(/\s+/g, " ").trim();
-    record(`assistant turn settled: ${replyText.slice(0, 200)}`);
+    const chatRequest = await sendPrompt(page);
+    let outgoing = null;
+    try {
+      outgoing = chatRequest.postDataJSON();
+    } catch {
+      outgoing = null;
+    }
+    const features = outgoing?.features ?? {};
+    record(
+      `chat completion request left the browser: model=${outgoing?.model ?? "(unreadable)"} features=${JSON.stringify(features)}`,
+    );
+    // The wire, not the page. This is the assertion that the turn below was not
+    // helped along by the toggle the feature exists to make unnecessary.
+    if (features.web_search === true) {
+      throw new Error(
+        "the outgoing request carried features.web_search = true, so this turn used Open WebUI's own toggled search rather than the model's own tool call",
+      );
+    }
+
+    const { turn: assistantTurn, text: replyText } = await settledTurn(page);
+    record(`assistant turn settled: ${replyText.slice(0, 400)}`);
     if (!REPLY_PATTERN.test(replyText)) {
       throw new Error(
         `the assistant turn settled but does not answer the question (expected ${REPLY_PATTERN}), so the surface rendered something other than a working completion`,
@@ -192,6 +288,94 @@ async function main() {
     }
 
     shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "03-streamed-reply", note: NOTE }));
+
+    // The feature half. A source list on this turn means a tool call was
+    // executed and its result came back into the turn, and the turn was sent
+    // with nothing toggled, which is the claim. Issue #1621 is the reason the
+    // list itself is the assertion rather than a good-looking answer: a correct
+    // search that renders no sources is the exact symptom it reported.
+    if (REQUIRE_SOURCES) {
+      const toggle = sourcesToggle(assistantTurn);
+      try {
+        await toggle.waitFor({ state: "visible", timeout: 30_000 });
+      } catch {
+        throw new Error(
+          "the assistant turn settled with no source list, so either no tool was called on a turn that needed live data, or a tool was called and its citations did not render (issue #1621)",
+        );
+      }
+      record(`source list on the assistant turn: ${await toggle.getAttribute("aria-label")}`);
+      await toggle.click();
+      const entries = assistantTurn.getByRole("button", { name: /^view source:/i });
+      await entries.first().waitFor({ state: "visible", timeout: 15_000 });
+      const names = (await entries.allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
+      record(`sources: ${names.join(" | ")}`);
+      shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "04-sources-expanded", note: NOTE }));
+    }
+
+    // The control. Same question, same untouched toggle, on an alias whose
+    // every enabled route reports tools_supported = false, so the patch offers
+    // it nothing. No source list here is what makes the offer above capability
+    // gated rather than unconditional.
+    if (CONTROL_MODEL) {
+      record(`control turn on ${CONTROL_MODEL}, which the catalog reports as not tool capable`);
+      await page.goto(`${OWUI_URL}/`, { waitUntil: "domcontentloaded" });
+      await page.locator("#chat-input").waitFor({ state: "visible", timeout: 60_000 });
+      await page.getByRole("button", { name: /^select(ed)? .*model/i }).click();
+      // The picker labels an option with the alias's DISPLAY name, not its id:
+      // "deepseek-v4-flash" is offered as "Deepseek V4 Flash". Matching the id
+      // verbatim finds nothing, so the hyphens are relaxed to any separator.
+      const controlPattern = new RegExp(
+        CONTROL_MODEL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/-/g, "[\\s-]?"),
+        "i",
+      );
+      const option = page.getByRole("option", { name: controlPattern }).first();
+      try {
+        await option.waitFor({ state: "visible", timeout: 15_000 });
+      } catch {
+        const offered = (await page.getByRole("option").allInnerTexts())
+          .map((t) => t.replace(/\s+/g, " ").trim().slice(0, 40))
+          .join(" | ");
+        throw new Error(
+          `the model picker offers nothing matching ${controlPattern}, so the control turn cannot be sent. It lists: ${offered}`,
+        );
+      }
+      await option.click();
+
+      const controlRequest = await sendPrompt(page);
+      let controlBody = null;
+      try {
+        controlBody = controlRequest.postDataJSON();
+      } catch {
+        controlBody = null;
+      }
+      const controlModel = controlBody?.model ?? "";
+      const controlFeatures = controlBody?.features ?? {};
+      record(
+        `control request left the browser: model=${controlModel || "(unreadable)"} features=${JSON.stringify(controlFeatures)}`,
+      );
+      // Asserted, because a picker click that silently did not take would send
+      // the control question to the tool capable alias and then read its
+      // rendered sources as a failure of the gate.
+      if (!controlModel.toLowerCase().includes(CONTROL_MODEL.toLowerCase())) {
+        throw new Error(
+          `the control turn was sent to "${controlModel}" rather than ${CONTROL_MODEL}, so the model switch did not take`,
+        );
+      }
+      if (controlFeatures.web_search === true) {
+        throw new Error("the control turn carried features.web_search = true, so it is not the same untouched condition");
+      }
+
+      const { turn: controlTurn, text: controlText } = await settledTurn(page);
+      record(`control turn settled: ${controlText.slice(0, 400)}`);
+      if (await sourcesToggle(controlTurn).isVisible().catch(() => false)) {
+        throw new Error(
+          "the control turn rendered a source list on an alias the catalog reports as not tool capable, so tool advertisement is not capability gated",
+        );
+      }
+      record("control turn rendered no source list, so the tools were not offered there");
+      shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "05-control-no-sources", note: NOTE }));
+    }
+
     record(`captured ${shots.length} screenshot(s)`);
   } catch (error) {
     record(`::error::${error instanceof Error ? error.message : String(error)}`);

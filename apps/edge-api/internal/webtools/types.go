@@ -38,10 +38,18 @@ const (
 	StatusError = "error"
 )
 
-// Tool names, as advertised to the model and as registered by the Open WebUI
-// shim. These are upstream's own builtin names, kept so the fork's citation
-// extraction (utils/middleware.py get_citation_source_from_tool_result) keeps
-// working unchanged.
+// Tool names, as advertised to the model, as registered by the Open WebUI shim
+// and as spelled in the two route paths.
+//
+// A note that was here claimed these are upstream's own builtin names, so that
+// the fork's citation extraction would keep working unchanged. They are not:
+// the pinned v0.10.2 image calls its builtins `search_web` and `fetch_url`, and
+// its extraction (utils/middleware.py get_citation_source_from_tool_result)
+// dispatches on those literals, so a result under these names produced no
+// citation at all. Rather than rename these, which would also rename the
+// routes, the shim patch normalises the two names onto upstream's inside that
+// one function (deploy/docker/owui-patches/apply_web_tools_patch.py, issue
+// #1718). The intent the old note described is now true rather than assumed.
 const (
 	ToolWebSearch = "web_search"
 	ToolWebFetch  = "web_fetch"

@@ -1,0 +1,69 @@
+Feature capture: a model calls web_fetch with no toggle, and the sources render
+==============================================================================
+
+PR      #1730, issue #1718 (refs #1621)
+Run     https://github.com/sakibsadmanshajib/hive/actions/runs/33696844690
+        workflow "chat visual proof", scenario=webtools, on refs/pull/1730/merge
+Stack   Booted in CI on a hosted runner from the pull request's own merge ref,
+        with this run's own Supabase, its own registered OAuth client, its own
+        throwaway Postgres carrying the full migration chain, and the real
+        "Continue with Hive" sign-in journey. Not the deployed box.
+Images  Posted on the pull request from the permanent visual-proof-assets
+        release: https://github.com/sakibsadmanshajib/hive/pull/1730#issuecomment-5518213458
+
+WHY THIS CAPTURE EXISTS ALONGSIDE THE GENERIC ONE
+
+The chat visual proof that runs on every chat pull request asks what colour a
+banana is. That proves the signed-in surface is healthy, and it cannot prove
+anything about this branch: a banana triggers no search. This run asks a
+question the model cannot answer from memory instead.
+
+WHAT WAS ASSERTED BEFORE THE CAPTURE, IN THE JOB ITSELF
+
+  GET /v1/tools, unauthenticated, the exact form the chat shim sends: 200,
+  serving web_search and web_fetch. Measured at 401 on run 33694706249, before
+  the selector exemption in commit ad05537c7; that run is the reason this
+  assertion exists.
+
+  The model listing edge-api serves reports hive_capabilities.tools = true for
+  hive-free and false for deepseek-v4-flash. That field is the only fact
+  deploy/docker/owui-patches/hive_web_tools.py consults before it attaches a
+  tools array, so it is the gate itself rather than a proxy for it.
+
+THE NEGATIVE CONTROL IS CONSTRUCTED, AND SAYS SO
+
+Every chat capable alias in the shipped catalog is tool capable, and the three
+that are not (hive-embedding-default, hive-stt, hive-tts) have no chat route at
+all, so a turn on one would fail at routing and prove nothing about
+advertisement. The job therefore cleared tools_supported on deepseek-v4-flash's
+routes IN THIS RUN'S OWN THROWAWAY DATABASE and asserted the clear took. What it
+exercises is the real gate over a real catalog row.
+
+WHAT THE GATEWAY LOGGED
+
+Nothing, and that is the current state rather than a failure: edge-api logs a
+webtools line only when a call fails, and the chat shim logs only when it
+advertises nothing, so a served tool call is silent on both. SearXNG logged no
+query either, correctly: the model chose web_fetch, not web_search. The visible
+evidence of the call is Open WebUI's own "View Result from web_fetch" chip in
+the third and fourth screenshots.
+
+CAPTURE LOG (verbatim, query strings stripped by the harness)
+
+2026-09-02T23:59:57.515Z  commit under proof: e4123b3+local-edits
+2026-09-02T23:59:57.515Z  chat origin: http://localhost:3003
+2026-09-02T23:59:57.515Z  session: storage state minted by owui.setup.ts through the real Continue with Hive journey
+2026-09-02T23:59:57.634Z  landed on http://localhost:3003/
+2026-09-02T23:59:58.993Z  composer is present, so the session is live
+2026-09-02T23:59:59.072Z  model in the composer: Hive Free
+2026-09-02T23:59:59.184Z  model picker lists 8 model(s): Deepseek V4 Flash Very low-cost long-context chat with tool use and reasoning. Largest context window in the catalog., Deepseek V4 Pro Highest-capability long-context chat with tool use and reasoning, for harder work., Hive Auto Automatic routing: each request gets a per-request model choice and is billed at actual usage., Hive Default Default alias for requests that name no model. Full tool-calling parity on the paid quality tier., Hive Fast Low-latency alias for chat and responses requests that prioritize speed., Hive Free Free-tier alias served from a load-balanced pool of our free provider keys; requests fail over automatically when one key is exhausted. Tool calling and structured output are supported., Hive Medium Larger general-purpose chat model. Same family as Hive Small, more capacity per request., Hive Small Fast, low-cost chat for everyday prompts. Replaces hive-fast, which is deprecated and now resolves to the same model at the same price.
+2026-09-02T23:59:59.350Z  the Integrations menu carries no web search control on this surface
+2026-09-02T23:59:59.442Z  chat completion request left the browser: model=hive-free features={"voice":false,"image_generation":false,"code_interpreter":false,"web_search":false}
+2026-09-03T00:00:01.785Z  assistant turn settled: View Result from web_fetch The top headline currently displayed on the BBC News front page is: "Rosenberg: Putin's veiled threat to UK part of Russia's campaign against West" bbc.com This headline is accompanied by the subheading: "The Russian president wants to keep Britain guessing - and stressing - over Moscow's real intentions." The content was retrieved directly from https://www.bbc.com/news.
+2026-09-03T00:00:01.866Z  source list on the assistant turn: Toggle 1 source
+2026-09-03T00:00:01.927Z  sources: bbc.com | 1 https://www.bbc.com/news
+2026-09-03T00:00:01.995Z  control turn on deepseek-v4-flash, which the catalog reports as not tool capable
+2026-09-03T00:00:02.854Z  control request left the browser: model=deepseek-v4-flash features={"voice":false,"image_generation":false,"code_interpreter":false,"web_search":false}
+2026-09-03T00:00:50.967Z  control turn settled: Thought for 27 seconds I don't have real-time access to the live internet or current homepage data, so I cannot see the exact top headline on the BBC News front page at this precise moment. My knowledge is not updated in real-time, and the BBC updates its front page headline continuously throughout the day. To see the current top headline, please visit the official BBC News homepage directly: Sour
+2026-09-03T00:00:50.981Z  control turn rendered no source list, so the tools were not offered there
+2026-09-03T00:00:51.059Z  captured 5 screenshot(s)

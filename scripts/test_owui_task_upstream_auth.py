@@ -616,6 +616,10 @@ def main() -> int:
                 '"/v1/embeddings"',
                 '"/v1/agent/tasks"',
                 '"/v1/agent/tasks/"',
+                # Issue #1718: the two charged web tool routes, added for the
+                # same reason /v1/embeddings was. A shim-key call with no user
+                # token is refused rather than billed to the shim account.
+                '"/v1/tools/"',
             )
         ),
         "edge-api still requires a per-user token on /v1/chat/completions "

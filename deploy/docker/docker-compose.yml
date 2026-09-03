@@ -1579,30 +1579,66 @@ services:
       OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"
-      # Open WebUI attaches its builtin tool schemas (time, knowledge, chats,
-      # tasks, notes, channels) to every UI chat request while native function
-      # calling is on, which is its hardcoded default. Nothing this deployment
-      # routes to can serve them, and the schemas are not small: 21 specs,
-      # 12089 bytes of JSON, 3144 Groq prompt tokens for a one word answer that
-      # costs 52 tokens without them. OpenRouter refused them with 404 "No
-      # endpoints found that support tool use. Try disabling
-      # get_current_timestamp" and the Groq free tier refused them with 429
-      # "Requested 6035 > TPM limit 6000", which between them is why no chat
-      # completion succeeded on three consecutive nightlies. The demo is not
-      # demonstrating tool calling, and buying a tool capable paid route to
-      # satisfy schemas nobody asked for is the wrong trade.
+      # Native tool calling, which is what lets a model call web_search and
+      # web_fetch without the user toggling anything (issue #1718). "legacy" is
+      # Open WebUI's own name for its pre native tool path, and it strips the
+      # native tool block outright: utils/middleware.py gates the whole
+      # form_data['tools'] attachment on params.function_calling != 'legacy',
+      # so under legacy no specification reaches a model and no tool call can
+      # come back. The tools cannot exist on that path at any price.
       #
-      # "legacy" is Open WebUI's own name for its pre native tool path
-      # (utils/middleware.py gates every builtin injection on
-      # params.function_calling != 'legacy'), so this also restores the classic
-      # document RAG injection the RAG_* wiring below expects, instead of
-      # routing uploads through builtin knowledge tools. Set
-      # OWUI_DEFAULT_FUNCTION_CALLING=native to hand tool calling back once a
-      # route that can serve it is enabled. Upstream has no env var for this
-      # and it is not persisted config either, so the name is read by the
-      # Dockerfile.open-webui patch that makes Open WebUI's own default
+      # This value was "legacy" for a measured reason, and that reason is now
+      # answered rather than ignored. Open WebUI attaches its 21 builtin tool
+      # schemas (time, knowledge, chats, tasks, notes, channels) to every UI
+      # chat request while native calling is on: 12089 bytes of JSON, 3144 Groq
+      # prompt tokens for a one word answer that costs 52 without them.
+      # OpenRouter refused that payload with 404 "No endpoints found that
+      # support tool use. Try disabling get_current_timestamp" and the Groq
+      # free tier with 429 "Requested 6035 > TPM limit 6000", which between
+      # them is why no chat completion succeeded on three consecutive
+      # nightlies. deploy/docker/owui-patches/apply_web_tools_patch.py drops
+      # that entire builtin set and attaches Hive's two specifications instead,
+      # which webtools.MaxDescriptorBytes holds under 1200 bytes. So what goes
+      # out on a chat request now is roughly a tenth of what failed then, and
+      # it only goes out to an alias whose route reports tools_supported.
+      #
+      # Cost of the flip, and how it is paid. Two of Open WebUI's retrieval
+      # paths inject documents into the request only under legacy and hand the
+      # work to builtin knowledge tools under native: a folder's attached files
+      # and a custom model's own knowledge. The patch keeps exactly those tools
+      # on exactly the turns that carry such knowledge, so an ordinary chat
+      # still ships two specifications and a knowledge turn still reaches its
+      # documents. A file attached to the message, and a Hive project's files
+      # (PR #1707 appends them to the same request list), are unaffected either
+      # way: upstream runs chat_completion_files_handler on both paths.
+      #
+      # Set OWUI_DEFAULT_FUNCTION_CALLING=legacy to go back. Upstream has no env
+      # var for this and it is not persisted config either, so the name is read
+      # by the Dockerfile.open-webui patch that makes Open WebUI's own default
       # environment driven.
-      HIVE_DEFAULT_FUNCTION_CALLING: ${OWUI_DEFAULT_FUNCTION_CALLING:-legacy}
+      HIVE_DEFAULT_FUNCTION_CALLING: ${OWUI_DEFAULT_FUNCTION_CALLING:-native}
+      # Upstream builtin tool names to keep attached, comma separated. Empty by
+      # default: the whole builtin set is what made native function calling
+      # unaffordable on this deployment's routes, and nothing this deployment
+      # routes to was asking for it. Adding an entry here puts that one
+      # specification back on every chat request, so it is a payload budget
+      # decision, not a feature flag.
+      HIVE_OWUI_BUILTIN_TOOLS: ${OWUI_BUILTIN_TOOLS:-}
+      # Set false to advertise no Hive web tools at all. Kept as a kill switch
+      # for the live box, not as a per user setting: the point of #1718 is that
+      # no toggle decides whether a model is told these tools exist.
+      #
+      # It restores the state before #1718 on its own, and that takes both
+      # halves of the patch to be true. Advertising nothing is only the first:
+      # under native function calling utils/middleware.py skips
+      # chat_web_search_handler entirely, so a deployment that switched the
+      # tools off and changed nothing else would have no web search on any
+      # path and a globe toggle wired to nothing, which is worse than either
+      # state this switch chooses between. So the patch also downgrades such a
+      # turn to the legacy path, where the globe drives Open WebUI's own search
+      # exactly as it did before, and it leaves upstream's own builtin tool set
+      # alone rather than dropping it. Off means off, not half off.
+      HIVE_WEB_TOOLS_ENABLED: ${OWUI_WEB_TOOLS_ENABLED:-true}
       # These four are persistent config in Open WebUI: normally the value here
       # is only a first-boot seed and Open WebUI's own database wins forever
       # after. The image patch deploy/docker/owui-patches/hive_rag_env_config.py

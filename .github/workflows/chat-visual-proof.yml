@@ -71,6 +71,20 @@ on:
         required: false
         default: false
         type: boolean
+      scenario:
+        description: >-
+          chat, the default, photographs the signed-in surface with a question
+          whose answer is one word. webtools photographs the claim in issue
+          #1718 instead: a question needing live data, sent with the globe
+          untouched, answered with the model's own web_search or web_fetch call
+          and a rendered source list, plus a control turn on an alias the
+          catalog reports as not tool capable.
+        required: false
+        default: chat
+        type: choice
+        options:
+          - chat
+          - webtools
   pull_request:
     branches: [main]
     # Deliberately the Hive-owned chat paths and not vendor/open-webui as a
@@ -588,6 +602,117 @@ jobs:
             exit 1
           fi
 
+      - name: Aim the capture at the web tools claim
+        # Only for the `webtools` scenario. Everything here is environment for
+        # the capture script, which defaults every one of these off, so a `chat`
+        # run reaches the capture with exactly the values it had before this
+        # step existed.
+        #
+        # The prompt has to be one the model cannot answer from memory, because
+        # the claim is that it goes and looks. "What colour is a banana" proves
+        # nothing here: it triggers no search, which is exactly why the existing
+        # capture, sound as proof that the surface is healthy, is not proof of
+        # this feature.
+        if: github.event.inputs.scenario == 'webtools'
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGDATABASE: hive_ci
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          {
+            echo "PROOF_PROMPT=What is the current top headline on the BBC News front page right now? Give the headline and cite the source URL."
+            # Not the answer, which nobody can know in advance. This only has to
+            # separate a real attempt from a refusal; the assertion carrying the
+            # claim is the rendered source list, which the capture requires
+            # outright and fails without.
+            echo "PROOF_REPLY_PATTERN=bbc"
+            echo "PROOF_REQUIRE_SOURCES=1"
+          } >> "$GITHUB_ENV"
+
+          # THE NEGATIVE CONTROL, AND WHY IT IS CONSTRUCTED RATHER THAN FOUND
+          #
+          # The control has to be an alias whose every enabled route reports
+          # tools_supported = false, because that is the fact the chat shim
+          # reads (hive_capabilities.tools) to decide whether to offer the tools
+          # at all. Measured against the full migration chain on 2026-09-02:
+          # every chat capable alias in the shipped catalog is tool capable, and
+          # the three that are not (hive-embedding-default, hive-stt, hive-tts)
+          # have no chat route at all, so a turn on one would fail at routing
+          # and prove nothing about advertisement.
+          #
+          # So there is no naturally occurring negative case to photograph, and
+          # the choice is between constructing one and having no control. This
+          # constructs one, in THIS RUN'S OWN THROWAWAY DATABASE and nowhere
+          # else, by clearing tools_supported on one real alias's routes. What
+          # it exercises is the real gate over a real catalog row, which is the
+          # condition any future non tool capable route would present. It is
+          # stated in the capture log and in the posted caption rather than
+          # left for a reader to discover.
+          control=$(psql --no-psqlrc -qtAX -c "
+            SELECT a.alias_id
+            FROM public.model_aliases a
+            WHERE a.visibility IN ('public', 'preview')
+              AND a.alias_id <> 'hive-free'
+              AND EXISTS (
+                SELECT 1 FROM public.provider_routes r
+                JOIN public.provider_capabilities c ON c.route_id = r.route_id
+                WHERE r.alias_id = a.alias_id
+                  AND r.health_state <> 'disabled'
+                  AND c.supports_chat_completions)
+            ORDER BY (a.pricing_mode = 'fixed') DESC,
+                     (coalesce(a.input_price_credits, 0) + coalesce(a.output_price_credits, 0)) ASC,
+                     a.alias_id ASC
+            LIMIT 1;")
+          if [ -z "$control" ]; then
+            echo "::error::the catalog holds no chat capable alias to use as the negative control"
+            exit 1
+          fi
+          echo "control alias: $control"
+
+          psql --no-psqlrc -qX -v ON_ERROR_STOP=1 -c "
+            UPDATE public.provider_capabilities c
+               SET tools_supported = false
+              FROM public.provider_routes r
+             WHERE r.route_id = c.route_id
+               AND r.alias_id = '$control';"
+
+          # Fixed pricing first, cheapest second. A deliberate spend wants an
+          # alias whose cost is knowable before the turn rather than the
+          # cheapest column value, and the cheapest column value here belongs to
+          # a router priced on upstream actuals, which is also the worst control
+          # for a second reason: which model answers is not decided in advance.
+          # Asserted, not assumed: a silent no-op here would send the control
+          # turn to a tool capable alias, and its rendered sources would then be
+          # read as a broken gate rather than as a broken control.
+          remaining=$(psql --no-psqlrc -qtAX -c "
+            SELECT count(*) FROM public.provider_routes r
+            JOIN public.provider_capabilities c ON c.route_id = r.route_id
+            WHERE r.alias_id = '$control' AND r.health_state <> 'disabled' AND c.tools_supported;")
+          if [ "$remaining" != "0" ]; then
+            echo "::error::$control still has $remaining tool capable enabled route(s), so it is not a negative control"
+            exit 1
+          fi
+          echo "$control now reports no tool capable route in this run's catalog"
+          echo "PROOF_CONTROL_MODEL=$control" >> "$GITHUB_ENV"
+
+          # Visible to the run tenant, so the picker can be switched to it. The
+          # alias is public, so this row only makes the grant explicit.
+          psql --no-psqlrc -qX -v ON_ERROR_STOP=1 -c "
+            INSERT INTO public.tenant_model_visibility (tenant_id, alias_id, visible)
+            SELECT t.id, '$control', true FROM public.tenants t WHERE t.slug = 'owui-e2e'
+            ON CONFLICT (tenant_id, alias_id) DO UPDATE
+              SET visible = true, updated_at = now();"
+
+          # The one deliberate spend in this job. It is a single short turn on
+          # the cheapest chat alias in the catalog, from a hand dispatch only:
+          # the per-pull-request capture still runs on hive-free and is still
+          # held there by PROOF_MODEL_PATTERN, so the owner's 2026-08-30
+          # directive is untouched.
+          echo "the control turn will spend on $control, one short message"
+
       - name: Materialize .env.ci
         # One file, because nine compose invocations and the two in-container
         # helper scripts owui.setup.ts runs all have to resolve the same stack.
@@ -832,6 +957,47 @@ jobs:
           fi
           exit 0
 
+      - name: Assert the catalog gates tool advertisement
+        # The server side half of the claim, read from the same listing the chat
+        # shim reads. hive_capabilities.tools is the only fact
+        # deploy/docker/owui-patches/hive_web_tools.py consults before it
+        # attaches a tools array, so this is the gate itself rather than a proxy
+        # for it, and it fails here with a readable message instead of fifteen
+        # minutes later as a screenshot of the wrong thing.
+        if: github.event.inputs.scenario == 'webtools'
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -H "Authorization: Bearer ${OWUI_SHIM_KEY}" \
+            http://localhost:8080/v1/models > /tmp/models.json
+          subject=$(jq -r '.data[] | select(.id=="hive-free") | .hive_capabilities.tools' /tmp/models.json)
+          control=$(jq -r --arg c "$PROOF_CONTROL_MODEL" '.data[] | select(.id==$c) | .hive_capabilities.tools' /tmp/models.json)
+          echo "hive_capabilities.tools -- hive-free: ${subject:-absent}, ${PROOF_CONTROL_MODEL}: ${control:-absent}"
+          if [ "$subject" != "true" ]; then
+            echo "::error::the listing reports hive_capabilities.tools=${subject:-absent} for hive-free, so the chat shim would advertise nothing and the capture could not show a tool call at all"
+            exit 1
+          fi
+          if [ "$control" != "false" ]; then
+            echo "::error::the listing reports hive_capabilities.tools=${control:-absent} for the control alias ${PROOF_CONTROL_MODEL}, so it is not a negative control"
+            exit 1
+          fi
+
+      - name: Assert the gateway serves the tool descriptors
+        # GET /v1/tools is what the chat shim fetches the two specifications
+        # from, and it has no hardcoded fallback: a gateway that does not serve
+        # this advertises nothing at all. Unauthenticated on purpose, so this
+        # asks for it the way the shim does.
+        if: github.event.inputs.scenario == 'webtools'
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body http://localhost:8080/v1/tools > /tmp/tools.json
+          jq -r '"served tools: " + ([.data[].function.name] | join(", "))' /tmp/tools.json
+          for name in web_search web_fetch; do
+            if ! jq -e --arg n "$name" '.data | map(.function.name) | index($n) != null' /tmp/tools.json >/dev/null; then
+              echo "::error::GET /v1/tools does not serve $name, so the chat shim has nothing to attach"
+              exit 1
+            fi
+          done
+
       - name: Install the harness dependencies
         working-directory: apps/web-console
         run: |
@@ -908,6 +1074,33 @@ jobs:
           PROOF_NOTE: PR #${{ steps.target.outputs.pr }} · run ${{ github.run_id }}
         run: npm run e2e:owui:proof
 
+      - name: What the gateway and the search backend actually saw
+        # The other half of the webtools claim, from the server side rather than
+        # the page: SearXNG logs every query it served, so a line here is a
+        # search that really happened, and edge-api logs a webtools line only
+        # when a call FAILED, so silence there is the good case and a line is
+        # the explanation for a turn that rendered no sources.
+        #
+        # always(), because this is at its most useful on the run where the
+        # capture failed: it says whether the model never called a tool or
+        # called one that could not be served.
+        if: always() && github.event.inputs.scenario == 'webtools'
+        working-directory: deploy/docker
+        run: |
+          set -uo pipefail
+          echo "--- searxng: queries served ---"
+          docker compose --env-file ../../.env.ci logs --no-color searxng 2>/dev/null \
+            | grep -iE '"?GET /search' | tail -20 || echo "(no /search line in the SearXNG log)"
+          echo "--- edge-api: web tool failures, if any ---"
+          docker compose --env-file ../../.env.ci logs --no-color edge-api 2>/dev/null \
+            | grep -i 'webtools:' | python3 ../../scripts/redact-log-credentials.py | tail -20 \
+            || echo "(no webtools failure line, which is the good case)"
+          echo "--- open-webui: tool selection and execution ---"
+          docker compose --env-file ../../.env.ci logs --no-color open-webui 2>/dev/null \
+            | grep -iE 'web_search|web_fetch|hive_web_tools' \
+            | python3 ../../scripts/redact-log-credentials.py | tail -40 \
+            || echo "(no web tool line in the chat container log)"
+
       - name: Refuse an empty capture
         # Belt and braces over the harness's own check: a capture directory with
         # no images has to fail the job, never pass quietly.
@@ -960,6 +1153,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ steps.target.outputs.pr }}
+          SCENARIO: ${{ github.event.inputs.scenario }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -968,8 +1162,11 @@ jobs:
             echo "::error::nothing to post"
             exit 1
           fi
-          scripts/post-pr-visual-proof.sh "$PR" "${images[@]}" \
-            --caption "Signed-in Hive chat, captured in CI against a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase, its own registered OAuth client and a real streamed completion. Run ${GITHUB_RUN_ID}."
+          caption="Signed-in Hive chat, captured in CI against a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase, its own registered OAuth client and a real streamed completion. Run ${GITHUB_RUN_ID}."
+          if [ "${SCENARIO:-chat}" = "webtools" ]; then
+            caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. A question needing live data, sent with the web search toggle off and features.web_search absent from the outgoing request, answered with the model's own tool call and a rendered source list; then the same question on ${PROOF_CONTROL_MODEL:-a non tool capable alias}, whose every enabled route reports tools_supported = false, settling with no source list. Run ${GITHUB_RUN_ID}."
+          fi
+          scripts/post-pr-visual-proof.sh "$PR" "${images[@]}" --caption "$caption"
           {
             echo "<details><summary>Capture log (screenshot stamps carry no URL, and the log is"
             echo "query-string stripped and linted by \`lint:proof-tokens\`)</summary>"
