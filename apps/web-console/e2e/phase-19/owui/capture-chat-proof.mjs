@@ -26,8 +26,11 @@
 // authority it did not earn.
 
 import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { buildVoiceFixture } from "./fixtures/build-voice-fixture.mjs";
 
 import { commitStamp, loadChromium, shoot } from "../../../../agent-console/proof/harness/stamp.mjs";
 
@@ -37,7 +40,21 @@ const OWUI_URL = (process.env.OWUI_URL ?? "http://localhost:3003").replace(/\/$/
 const OUT_DIR = process.env.PROOF_OUT;
 const NOTE = process.env.PROOF_NOTE ?? "";
 const STATE = process.env.PROOF_STORAGE_STATE ?? join(HERE, ".auth", "owui-user.json");
-const SCENARIO = "chat";
+// Which claim this run photographs. `chat` is the default and is what every
+// chat pull request gets. `voice` photographs issue #1627 instead: the call
+// overlay speaking into a synthetic microphone, where the assertion is that a
+// second utterance spoken while the first is still being answered opens no
+// second transcription.
+const SCENARIO = (process.env.PROOF_SCENARIO ?? "chat").trim();
+if (SCENARIO !== "chat" && SCENARIO !== "voice") {
+  console.error(`::error::PROOF_SCENARIO="${SCENARIO}" is not a scenario this capture knows`);
+  process.exit(2);
+}
+const VOICE = SCENARIO === "voice";
+// How long the transcription response is held open in the voice capture. Long
+// enough that the first two interruptions each complete an utterance and its
+// silence window while the upload is still in flight. See captureVoice.
+const TRANSCRIPTION_HOLD_MS = 6_000;
 // The prompt is deliberately one whose right answer is one word, so "the model
 // replied" is checkable rather than eyeballed. Same reasoning, and the same
 // question, as 01-chat-send-stream.spec.ts.
@@ -149,13 +166,219 @@ async function settledTurn(page) {
   return { turn, text };
 }
 
+/**
+ * Counts the transcription requests a page makes, with the moment each one
+ * started and finished.
+ *
+ * The count is the whole assertion for the voice scenario, so it is taken from
+ * the network rather than from the page: a screenshot cannot show a request
+ * that was never made, which is exactly what this fix is. Concurrency is kept
+ * alongside it because that is the shape of the reported failure, several
+ * transcriptions open at once against one provider account until it answers
+ * 429.
+ */
+function watchTranscriptions(page, startedAt) {
+  const calls = [];
+  let open = 0;
+  let peak = 0;
+  const at = () => Number(((Date.now() - startedAt) / 1000).toFixed(2));
+  page.on("request", (request) => {
+    if (request.method() !== "POST" || !request.url().includes("/audio/transcriptions")) return;
+    open += 1;
+    peak = Math.max(peak, open);
+    calls.push({ started: at(), finished: null, status: null });
+  });
+  page.on("requestfinished", async (request) => {
+    if (request.method() !== "POST" || !request.url().includes("/audio/transcriptions")) return;
+    open -= 1;
+    const call = calls.find((c) => c.finished === null);
+    if (call) {
+      call.finished = at();
+      call.status = await request.response().then((r) => r?.status() ?? null).catch(() => null);
+    }
+  });
+  page.on("requestfailed", (request) => {
+    if (request.method() !== "POST" || !request.url().includes("/audio/transcriptions")) return;
+    open -= 1;
+    const call = calls.find((c) => c.finished === null);
+    if (call) {
+      call.finished = at();
+      call.status = "failed";
+    }
+  });
+  return {
+    get calls() {
+      return calls;
+    },
+    get peakConcurrent() {
+      return peak;
+    },
+  };
+}
+
+/**
+ * Photographs the call overlay speaking into the synthetic microphone, and
+ * asserts the claim of issue #1627.
+ *
+ * The track the fake device plays is one opening utterance and then three
+ * short interruptions, each separated by more than the two second silence
+ * threshold that ends an utterance. Before this fix the first of them landed
+ * on a microphone that had already been restarted while the utterance before
+ * it was still being uploaded for transcription, and opened a second
+ * concurrent upload against the same provider account. After it the whole
+ * track produces exactly one transcription.
+ *
+ * The window this turns on is the transcription round trip, not the model
+ * turn: `assistantSpeaking` rises at `chat:start`, so the reply was already
+ * suppressed before this fix. That makes the timing of the first interruption
+ * load bearing. It is placed just after the opening utterance closes, which is
+ * where the unsuppressed window was.
+ *
+ * That count is the assertion. The screenshots are what a person reads: the
+ * overlay listening, the overlay busy with the turn it captured, and the chat
+ * behind it carrying one transcribed message and one reply.
+ */
+async function captureVoice(page, shots, fixture) {
+  const startedAt = Date.now();
+  const seen = watchTranscriptions(page, startedAt);
+
+  // The provider is held slow on purpose, and this is what makes the assertion
+  // below a real control rather than a lucky one.
+  //
+  // The window this fix closes is the transcription round trip. Left at its
+  // natural speed that window was about 1.3 seconds, and the first interruption
+  // begins 0.8 seconds after the opening utterance closes, so the overlap was
+  // real but thin: a faster provider would have closed the window before the
+  // interruption could open an utterance, the existing assistantSpeaking
+  // suppression would have carried the run on its own, and the capture would
+  // have reported one transcription whether or not this fix were present.
+  //
+  // Holding the response keeps the page's own fetch pending, which is exactly
+  // what a loaded provider does and exactly the condition the issue reports. It
+  // is not a fabricated state: it is the slow provider that produced the 429 in
+  // the first place, reproduced on demand. The hold covers the first two
+  // interruptions in full, so each of them has a complete utterance and a
+  // complete silence window inside the transcription interval. Without the fix
+  // each opens its own concurrent upload, and the peak concurrency this records
+  // goes above one.
+  await page.route("**/audio/transcriptions", async (route) => {
+    const response = await route.fetch();
+    record(`holding the transcription response for ${TRANSCRIPTION_HOLD_MS}ms, so the interruptions land inside the window this fix closes`);
+    await new Promise((resolve) => setTimeout(resolve, TRANSCRIPTION_HOLD_MS));
+    await route.fulfill({ response });
+  });
+
+  const callButton = page.getByRole("button", { name: /voice mode/i });
+  await callButton.waitFor({ state: "visible", timeout: 30_000 });
+  await callButton.click();
+
+  // The overlay's only labelled control, so its presence is what says the
+  // overlay opened rather than that the click was swallowed by a permission
+  // prompt.
+  const muteButton = page.getByRole("button", { name: /^(mute|unmute)$/i });
+  await muteButton.waitFor({ state: "visible", timeout: 30_000 });
+  record("call overlay is open, so getUserMedia was granted and capture has begun");
+
+  // Listening: the overlay renders its level circle, and the busy spinner is
+  // absent because nothing has been captured yet.
+  const spinner = page.locator("circle.spinner_qM83").first();
+  shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "03-listening", note: NOTE }));
+
+  // The opening utterance ends and its turn begins. The spinner appearing is
+  // the overlay's own statement that a turn is in flight, which is the state
+  // this fix suppresses capture during.
+  await spinner.waitFor({ state: "visible", timeout: 90_000 });
+  const spinnerAt = Number(((Date.now() - startedAt) / 1000).toFixed(2));
+  record(`the overlay went busy at ${spinnerAt}s, so the opening utterance closed and its turn is in flight`);
+  shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "04-turn-in-flight", note: NOTE }));
+
+  // Let the whole track play out, interruptions included, so the count below
+  // is taken after every utterance the microphone was given has been spoken.
+  const remaining = Math.max(0, fixture.seconds * 1000 - (Date.now() - startedAt)) + 5_000;
+  record(`waiting ${(remaining / 1000).toFixed(1)}s for the rest of the track, which carries ${fixture.utterances - 1} interruption(s)`);
+  await page.waitForTimeout(remaining);
+
+  // The overlay covers the conversation, so the transcript is photographed
+  // with the call ended. Ending it is also what releases the microphone, which
+  // is the other half of the issue's acceptance criteria.
+  const endCall = page.getByRole("button", { name: /^end call$/i });
+  await endCall.waitFor({ state: "visible", timeout: 15_000 });
+  await endCall.click();
+  await muteButton.waitFor({ state: "hidden", timeout: 15_000 });
+  record("call ended, so the overlay released the microphone");
+
+  const turns = page.getByRole("listitem");
+  const transcript = (await turns.allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
+  record(`conversation carries ${transcript.length} turn(s)`);
+  transcript.forEach((t, i) => record(`  turn ${i + 1}: ${t.slice(0, 200)}`));
+  shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "05-transcript", note: NOTE }));
+
+  const calls = seen.calls;
+  record(`transcription requests: ${calls.length}, peak concurrent: ${seen.peakConcurrent}`);
+  calls.forEach((c, i) =>
+    record(`  request ${i + 1}: started ${c.started}s finished ${c.finished ?? "(still open)"}s status ${c.status ?? "(none)"}`),
+  );
+
+  if (calls.length === 0) {
+    throw new Error(
+      "the microphone was open for the whole track and no transcription request was ever made, so this capture proves nothing: either the fake audio device is not feeding the page or voice activity detection never opened an utterance",
+    );
+  }
+  if (transcript.length === 0) {
+    throw new Error(
+      "a transcription request was made but the conversation carries no turn, so nothing was transcribed into the chat",
+    );
+  }
+  if (seen.peakConcurrent > 1) {
+    throw new Error(
+      `${seen.peakConcurrent} transcriptions were open at once. That is the failure issue #1627 reports: ` +
+        "several uploads against one provider account until it answers 429.",
+    );
+  }
+  if (calls.length > 1) {
+    throw new Error(
+      `the track was spoken once but opened ${calls.length} transcription requests (peak ${seen.peakConcurrent} concurrent). ` +
+        "That is the defect of issue #1627: capture restarts before the turn it captured has been answered, so every " +
+        "sentence spoken across one slow turn becomes another request, which is what reaches a provider rate limit.",
+    );
+  }
+  record("exactly one transcription for the whole track, so the interruptions opened no second capture");
+}
+
 async function main() {
   mkdirSync(OUT_DIR, { recursive: true });
+
+  // The synthetic microphone. Chrome's fake capture device reads a WAV from
+  // disk and presents it to getUserMedia as a real input, which is the only
+  // way a runner with no sound card can speak into a call. %noloop stops the
+  // track restarting under the assistant's own reply, which would put speech
+  // back on the microphone after the experiment had finished.
+  let fixture = null;
+  const launchArgs = [];
+  if (VOICE) {
+    fixture = await buildVoiceFixture(join(tmpdir(), "hive-voice-proof-mic.wav"));
+    launchArgs.push(
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream",
+      `--use-file-for-fake-audio-capture=${fixture.path}%noloop`,
+      // The overlay speaks the reply back, and a headless browser refuses to
+      // start audio without a gesture unless told otherwise. Without this the
+      // assistant never "speaks", which is one of the two states that suppress
+      // capture, so the capture would be testing a different page than the one
+      // a person uses.
+      "--autoplay-policy=no-user-gesture-required",
+    );
+  }
+
   const chromium = loadChromium();
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ args: launchArgs });
   const context = await browser.newContext({
     storageState: STATE,
     viewport: { width: 1440, height: 900 },
+    // Belt and braces with --use-fake-ui-for-media-stream: the overlay only
+    // opens if getUserMedia resolves, and a denied permission surfaces as a
+    // toast rather than as an error this capture could read.
+    permissions: VOICE ? ["microphone"] : [],
     // The stack under proof serves plain http on the runner; this is here for
     // the JWKS front's local authority, which the browser may meet on a
     // redirect. It narrows nothing about what is being proven: the surface is
@@ -258,6 +481,16 @@ async function main() {
       await page.keyboard.press("Escape");
     } else {
       record("no Integrations menu on this surface, so there is no globe to have toggled");
+    }
+
+    if (VOICE) {
+      record(`synthetic microphone: ${fixture.seconds}s, ${fixture.sampleRate} Hz, ${fixture.channels} channel(s), ${fixture.utterances} utterance(s)`);
+      for (const step of fixture.timeline) {
+        record(`  t=${step.at}s ${step.event}`);
+      }
+      await captureVoice(page, shots, fixture);
+      record(`captured ${shots.length} screenshot(s)`);
+      return;
     }
 
     const chatRequest = await sendPrompt(page);

@@ -78,13 +78,17 @@ on:
           #1718 instead: a question needing live data, sent with the globe
           untouched, answered with the model's own web_search or web_fetch call
           and a rendered source list, plus a control turn on an alias the
-          catalog reports as not tool capable.
+          catalog reports as not tool capable. voice photographs issue #1627:
+          the call overlay speaking into a synthetic microphone, asserting that
+          utterances spoken while a turn is in flight open no second
+          transcription.
         required: false
         default: chat
         type: choice
         options:
           - chat
           - webtools
+          - voice
   pull_request:
     branches: [main]
     # Deliberately the Hive-owned chat paths and not vendor/open-webui as a
@@ -676,6 +680,32 @@ jobs:
             exit 1
           fi
 
+      - name: Aim the capture at the voice claim
+        # Only for the `voice` scenario (issue #1627). The capture builds its
+        # own microphone track from espeak-ng and hands it to Chrome's fake
+        # capture device, so this step only has to provide the synthesiser and
+        # name the scenario.
+        #
+        # espeak-ng rather than a committed WAV: the pauses in that track are
+        # the entire experiment, and a binary blob cannot be reviewed. Generated
+        # from a phrase list, the timing sits in the source in seconds where it
+        # can be checked against the two second silence threshold the fix uses.
+        # See apps/web-console/e2e/phase-19/owui/fixtures/build-voice-fixture.mjs.
+        #
+        # No prompt is set here. The words spoken are in that file, and the
+        # assertion the run turns on is the number of transcription requests the
+        # page made, not what any of them said.
+        if: github.event.inputs.scenario == 'voice'
+        run: |
+          set -euo pipefail
+          # Bounded. Neither call has a timeout of its own, so a stalled mirror
+          # would otherwise spend the whole job budget before the capture that
+          # this job exists for has started.
+          timeout 300 sudo apt-get update
+          timeout 300 sudo apt-get install -y espeak-ng
+          espeak-ng --version
+          echo "PROOF_SCENARIO=voice" >> "$GITHUB_ENV"
+
       - name: Aim the capture at the web tools claim
         # Only for the `webtools` scenario. Everything here is environment for
         # the capture script, which defaults every one of these off, so a `chat`
@@ -1258,7 +1288,9 @@ jobs:
             exit 1
           fi
           caption="Signed-in Hive chat, captured in CI against a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase, its own registered OAuth client and a real streamed completion. Run ${GITHUB_RUN_ID}."
-          if [ "${SCENARIO:-chat}" = "webtools" ]; then
+          if [ "${SCENARIO:-chat}" = "voice" ]; then
+            caption="Signed-in Hive voice mode on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. Chrome's fake capture device plays a generated track into the call overlay: one utterance, then three interruptions spoken while the first is still being transcribed. The frames are the overlay listening, the overlay busy with the turn it captured, and the conversation carrying the transcribed message and its reply. The claim is in the log below, not the pictures: the number of transcription requests the page made. Run ${GITHUB_RUN_ID}."
+          elif [ "${SCENARIO:-chat}" = "webtools" ]; then
             caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. A question needing live data, sent with the web search toggle off and features.web_search absent from the outgoing request, answered with the model's own tool call and a rendered source list; then the same question on ${PROOF_CONTROL_MODEL:-a non tool capable alias}, whose every enabled route reports tools_supported = false, settling with no source list. Run ${GITHUB_RUN_ID}."
           fi
           scripts/post-pr-visual-proof.sh "$PR" "${images[@]}" --caption "$caption"

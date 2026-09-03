@@ -13,7 +13,12 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import VideoInputMenu from './CallOverlay/VideoInputMenu.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
-	import { createVoiceActivityState, stepVoiceActivity } from '$lib/hive/voiceActivity';
+	import {
+		createVoiceActivityState,
+		parkVoiceActivity,
+		shouldSuppressCapture,
+		stepVoiceActivity
+	} from '$lib/hive/voiceActivity';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 	const i18n = getContext('i18n');
@@ -30,6 +35,13 @@
 	let model = null;
 
 	let loading = false;
+	// The transcription round trip, and nothing wider (issue #1627). Capture is
+	// suppressed while this holds, so it must cover exactly the window that was
+	// open and no more: from the utterance closing to the provider answering.
+	// `loading` spans the whole turn including generation, and suppressing on
+	// that would kill barge-in for anyone with voice interruption enabled,
+	// which is a setting this fix has no business touching.
+	let transcribing = false;
 	let confirmed = false;
 	let interrupted = false;
 	let assistantSpeaking = false;
@@ -161,17 +173,35 @@
 			return;
 		}
 
-		await tick();
-		const file = blobToFile(audioBlob, 'recording.wav');
+		// Set before the first await and cleared the moment the provider
+		// answers, so the suppression covers the upload and not the model turn
+		// that follows it. The analyser loop restarted by stopRecordingCallback
+		// does not run until the next animation frame, and everything from that
+		// restart to here is synchronous, so there is no unsuppressed gap at
+		// the front of this window.
+		let res = null;
+		try {
+			transcribing = true;
+			await tick();
+			const file = blobToFile(audioBlob, 'recording.wav');
 
-		const res = await transcribeAudio(
-			localStorage.token,
-			file,
-			$settings?.audio?.stt?.language
-		).catch((error) => {
-			toast.error(`${error}`);
-			return null;
-		});
+			res = await transcribeAudio(
+				localStorage.token,
+				file,
+				$settings?.audio?.stt?.language
+			).catch((error) => {
+				toast.error(`${error}`);
+				return null;
+			});
+		} finally {
+			// Cleared before submitPrompt, deliberately. From here the assistant
+			// is answering, `assistantSpeaking` governs, and interruption works
+			// exactly as it did before this change. Parking means calibration
+			// restarts when this clears, so the few hundred milliseconds before
+			// chat:start fires are spent measuring the room rather than being
+			// mistaken for speech.
+			transcribing = false;
+		}
 
 		if (res) {
 			console.log(res.text);
@@ -198,25 +228,42 @@
 			}
 
 			if (confirmed) {
-				loading = true;
-				emoji = null;
+				// The flag is raised inside the try, not before it. Everything
+				// below can throw, takeScreenshot included, and a throw between
+				// raising it and entering the block would leave it raised with
+				// no finally to lower it. Capture is suppressed while it holds,
+				// so that is a call that never hears anything again.
+				try {
+					loading = true;
+					emoji = null;
 
-				if (cameraStream) {
-					const imageUrl = takeScreenshot();
+					if (cameraStream) {
+						const imageUrl = takeScreenshot();
 
-					files = [
-						{
-							type: 'image',
-							url: imageUrl
-						}
-					];
+						files = [
+							{
+								type: 'image',
+								url: imageUrl
+							}
+						];
+					}
+
+					const audioBlob = new Blob(_audioChunks, { type: 'audio/wav' });
+					await transcribeHandler(audioBlob);
+				} finally {
+					// `submitPrompt` inside transcribeHandler is awaited with no
+					// catch of its own, so an exception from the model turn
+					// escapes here as an unhandled rejection. Without this the
+					// overlay kept its loading state forever.
+					//
+					// `transcribing` has its own finally around the narrow window
+					// it guards; clearing it again here is the backstop for the
+					// paths that never reach that block at all, such as an audio
+					// blob too small to send.
+					confirmed = false;
+					loading = false;
+					transcribing = false;
 				}
-
-				const audioBlob = new Blob(_audioChunks, { type: 'audio/wav' });
-				await transcribeHandler(audioBlob);
-
-				confirmed = false;
-				loading = false;
 			}
 		} else {
 			audioChunks = [];
@@ -350,10 +397,24 @@
 				analyser.getByteTimeDomainData(timeDomainData);
 				rmsLevel = calculateRMS(timeDomainData);
 
-				if (muted || (assistantSpeaking && !($settings?.voiceInterruption ?? false))) {
-					// The microphone is still live, but nothing it hears counts:
-					// muted, or the assistant is talking and interruption is off.
+				if (
+					shouldSuppressCapture({
+						muted,
+						assistantSpeaking,
+						turnInFlight: transcribing,
+						voiceInterruption: $settings?.voiceInterruption ?? false
+					})
+				) {
+					// Parked, not stepped with a zero. Feeding a suppressed frame
+					// through the detector as silence drags the tracked noise floor
+					// down to nearly nothing over the length of a spoken reply and
+					// lets the calibration window expire, so capture resumes on the
+					// bare minimum threshold with no lift from the room, once per
+					// turn. That is the state PR #1662 exists to prevent.
 					rmsLevel = 0;
+					voiceActivity = parkVoiceActivity(voiceActivity);
+					window.requestAnimationFrame(processFrame);
+					return;
 				}
 
 				// performance.now(), not Date.now(): the wall clock can move backwards
@@ -1113,6 +1174,7 @@
 
 				<button
 					class="p-3 rounded-full bg-gray-50 dark:bg-gray-900"
+					aria-label={$i18n.t('End call')}
 					on:click={async () => {
 						await stopAudioStream();
 						await stopVideoStream();

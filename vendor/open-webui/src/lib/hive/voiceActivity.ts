@@ -167,3 +167,84 @@ export const stepVoiceActivity = (
 
 	return { state: { ...state, listeningSince, lastSoundAt }, action: 'listening' };
 };
+
+export interface CaptureSuppression {
+	/** The user is holding the microphone shut. */
+	muted: boolean;
+	/** Text-to-speech is playing the assistant's answer. */
+	assistantSpeaking: boolean;
+	/** The utterance already captured is still being transcribed and answered. */
+	turnInFlight: boolean;
+	/** The setting that allows talking over the assistant. */
+	voiceInterruption: boolean;
+}
+
+/**
+ * Whether an analyser frame counts for nothing, so no new utterance may begin
+ * from it (issue #1627).
+ *
+ * `turnInFlight` is the half PR #1662 did not reach, and it is what makes a
+ * provider rate limit reachable from one person talking.
+ * `stopRecordingCallback` restarts capture BEFORE the utterance it just
+ * captured has been transcribed, and the only suppressions here were mute and
+ * a playing voice. `assistantSpeaking` rises at `chat:start`, so the model turn
+ * was already covered; what was not covered is the transcription round trip
+ * before it, from the moment an utterance closes to the moment the chat request
+ * begins. That is a network call to a speech to text provider, and it is
+ * precisely where the concurrency was born: anything said during it opened a
+ * second upload against the same account, then a third, until the provider
+ * answered 429.
+ *
+ * The order is the meaning. Mute is the user's own hand on the microphone and
+ * nothing overrides it.
+ *
+ * `turnInFlight` comes next, and unlike `assistantSpeaking` it is NOT subject
+ * to `voiceInterruption`. That setting exists so a person can talk over the
+ * assistant, and during the transcription round trip there is nothing to talk
+ * over: no reply has begun, so there is nothing to cut short. Honouring the
+ * setting there would buy no interruption at all and would cost exactly the
+ * concurrent upload this fix exists to prevent. Interruption still works where
+ * it means something, over the reply itself, which `assistantSpeaking` governs.
+ */
+export const shouldSuppressCapture = ({
+	muted,
+	assistantSpeaking,
+	turnInFlight,
+	voiceInterruption
+}: CaptureSuppression): boolean => {
+	if (muted) {
+		return true;
+	}
+	if (turnInFlight) {
+		return true;
+	}
+	if (voiceInterruption) {
+		return false;
+	}
+	return assistantSpeaking;
+};
+
+/**
+ * Parks the detector for a frame that counts for nothing.
+ *
+ * Feeding a suppressed frame through `stepVoiceActivity` as a zero looks
+ * harmless and is not. `noiseFloor` is smoothed towards whatever it is given,
+ * at 0.98 per frame, so a suppression lasting the length of a spoken reply
+ * drives the tracked floor to nearly zero; and `listeningSince` keeps running,
+ * so the calibration window is long expired by the time capture resumes. The
+ * threshold that comes back is therefore the bare `minRms`, with no lift from
+ * the room at all, once per turn. That is the state PR #1662 exists to prevent,
+ * re-armed on every reply.
+ *
+ * So a suppressed frame updates nothing. The learned floor is kept, because the
+ * room has not changed while the assistant was talking, and everything about
+ * the current utterance is dropped, including `listeningSince`, so the first
+ * frames after suppression lifts are spent measuring the room again rather than
+ * being mistaken for speech.
+ */
+export const parkVoiceActivity = (state: VoiceActivityState): VoiceActivityState => ({
+	noiseFloor: state.noiseFloor,
+	listeningSince: null,
+	speechStartedAt: null,
+	lastSoundAt: null
+});

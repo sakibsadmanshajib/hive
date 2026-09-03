@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import {
 	DEFAULT_VOICE_ACTIVITY_CONFIG,
 	createVoiceActivityState,
+	parkVoiceActivity,
+	shouldSuppressCapture,
 	speechThreshold,
 	stepVoiceActivity,
 	type VoiceActivityConfig
@@ -296,5 +298,204 @@ describe('the call overlay uses it (issue #1627)', () => {
 		// mistake fails here too, and it survives the comment above the fix
 		// quoting the expression verbatim.
 		expect(overlay).not.toContain('getByteFrequencyData');
+	});
+});
+
+// The second half of issue #1627, which PR #1662 did not reach: the flood.
+//
+// PR #1662 gave the overlay a real speech threshold, so room noise no longer
+// opens the microphone. What it left in place is the amplifier that turns
+// ordinary speech into stacked requests. `stopRecordingCallback` restarts
+// capture BEFORE the utterance it just captured has been transcribed, and the
+// only suppressions were mute and a playing voice. `assistantSpeaking` rises
+// at `chat:start`, so the model turn was already covered; the transcription
+// round trip before it was not. That is a network call to a speech to text
+// provider, and anything said during it opened a second upload against the
+// same account, then a third, until the provider answered 429.
+describe('capture suppression while a turn is in flight (issue #1627)', () => {
+	const base = {
+		muted: false,
+		assistantSpeaking: false,
+		turnInFlight: false,
+		voiceInterruption: false
+	};
+
+	it('lets an idle overlay hear the room', () => {
+		expect(shouldSuppressCapture(base)).toBe(false);
+	});
+
+	it('suppresses while the utterance just captured is still being transcribed', () => {
+		// The fix. Without it a second utterance opens a second concurrent
+		// upload to the same provider account while the first is still going.
+		expect(shouldSuppressCapture({ ...base, turnInFlight: true })).toBe(true);
+	});
+
+	it('still suppresses while the assistant is speaking', () => {
+		// Unchanged behaviour, pinned so the new condition cannot be written in
+		// a way that drops the old one.
+		expect(shouldSuppressCapture({ ...base, assistantSpeaking: true })).toBe(true);
+	});
+
+	it('lets voice interruption talk over the assistant', () => {
+		expect(
+			shouldSuppressCapture({ ...base, assistantSpeaking: true, voiceInterruption: true })
+		).toBe(false);
+	});
+
+	it('does not let voice interruption reopen the transcription window', () => {
+		// The setting exists so a person can talk over the assistant. During
+		// the transcription round trip no reply has begun, so there is nothing
+		// to talk over: honouring the setting there would buy no interruption
+		// and would cost exactly the concurrent upload this fix prevents.
+		expect(
+			shouldSuppressCapture({ ...base, turnInFlight: true, voiceInterruption: true })
+		).toBe(true);
+	});
+
+	it('leaves barge-in during generation exactly as it was', () => {
+		// The regression this flag's narrowness exists to avoid. Once the
+		// upload has finished the assistant is answering, so `assistantSpeaking`
+		// governs and "Allow Voice Interruption in Call" still works. A flag
+		// that spanned the whole turn would return true here and silently
+		// disable that setting.
+		expect(
+			shouldSuppressCapture({
+				...base,
+				assistantSpeaking: true,
+				turnInFlight: false,
+				voiceInterruption: true
+			})
+		).toBe(false);
+		// And with the setting off it still suppresses, unchanged.
+		expect(
+			shouldSuppressCapture({ ...base, assistantSpeaking: true, turnInFlight: false })
+		).toBe(true);
+	});
+
+	it('keeps mute above everything', () => {
+		// Mute is the user holding the microphone shut. Nothing overrides it.
+		expect(
+			shouldSuppressCapture({ ...base, muted: true, voiceInterruption: true })
+		).toBe(true);
+		expect(shouldSuppressCapture({ ...base, muted: true, assistantSpeaking: true })).toBe(true);
+	});
+});
+
+describe('parking the detector while suppressed (issue #1627)', () => {
+	it('keeps the learned noise floor, because the room has not changed', () => {
+		const parked = parkVoiceActivity({
+			noiseFloor: 0.02,
+			listeningSince: 1000,
+			speechStartedAt: 1200,
+			lastSoundAt: 1400
+		});
+		expect(parked.noiseFloor).toBe(0.02);
+	});
+
+	it('drops the utterance and re-arms calibration', () => {
+		const parked = parkVoiceActivity({
+			noiseFloor: 0.02,
+			listeningSince: 1000,
+			speechStartedAt: 1200,
+			lastSoundAt: 1400
+		});
+		expect(parked.speechStartedAt).toBeNull();
+		expect(parked.lastSoundAt).toBeNull();
+		// The one that matters. Leaving `listeningSince` set means the
+		// calibration window has long expired when capture resumes, so the very
+		// first frame after a reply can open an utterance without the room ever
+		// having been measured.
+		expect(parked.listeningSince).toBeNull();
+	});
+
+	it('is what a suppressed frame must do instead of stepping with a zero', () => {
+		// The concrete reason parking exists, measured rather than asserted in
+		// prose: stepping a suppressed frame as silence smooths the tracked
+		// floor towards zero, and a reply lasts hundreds of frames.
+		let stepped = { noiseFloor: 0.02, listeningSince: 0, speechStartedAt: null, lastSoundAt: null };
+		for (let frame = 1; frame <= 300; frame += 1) {
+			stepped = stepVoiceActivity(stepped, 0, frame * 16).state;
+		}
+		expect(stepped.noiseFloor).toBeLessThan(0.002);
+		expect(speechThreshold(stepped)).toBe(DEFAULT_VOICE_ACTIVITY_CONFIG.minRms);
+
+		const parked = parkVoiceActivity({
+			noiseFloor: 0.02,
+			listeningSince: 0,
+			speechStartedAt: null,
+			lastSoundAt: null
+		});
+		expect(speechThreshold(parked)).toBeGreaterThan(DEFAULT_VOICE_ACTIVITY_CONFIG.minRms);
+	});
+});
+
+describe('the call overlay wires the suppression and always clears the turn (issue #1627)', () => {
+	const overlay = readFileSync(
+		fileURLToPath(new URL('../components/chat/MessageInput/CallOverlay.svelte', import.meta.url)),
+		'utf8'
+	);
+
+	/**
+	 * The body of `stopRecordingCallback`, so an assertion about it cannot be
+	 * satisfied by an unrelated construct elsewhere in a 1100 line component.
+	 */
+	const stopRecordingCallback = (() => {
+		const start = overlay.indexOf('const stopRecordingCallback');
+		const end = overlay.indexOf('const startRecording');
+		expect(start).toBeGreaterThan(-1);
+		expect(end).toBeGreaterThan(start);
+		return overlay.slice(start, end);
+	})();
+
+	it('asks the shared decision rather than inlining the condition', () => {
+		expect(overlay).toContain('shouldSuppressCapture');
+	});
+
+	it('feeds it the transcription window and not the whole turn', () => {
+		// `transcribing`, deliberately, not `loading`. `loading` stays true for
+		// the entire turn including generation, and suppressing on that would
+		// kill barge-in for anyone with voice interruption enabled, which is a
+		// setting this fix has no business touching. The window that was open
+		// is the upload, so that is the window the flag covers.
+		expect(overlay).toContain('turnInFlight: transcribing');
+		expect(overlay).not.toContain('turnInFlight: loading');
+	});
+
+	it('clears the transcription flag before the model turn begins', () => {
+		// The boundary that keeps barge-in alive. If this were cleared after
+		// submitPrompt instead, the flag would span generation and the
+		// unconditional suppression above would silence the microphone for the
+		// whole reply.
+		const handler = overlay.slice(
+			overlay.indexOf('const transcribeHandler'),
+			overlay.indexOf('const stopRecordingCallback')
+		);
+		// Matched on the call, not the word: a comment mentioning submitPrompt
+		// sits inside the finally block and would otherwise be found first,
+		// which made this assertion fail for a reason that was not the code.
+		const cleared = handler.indexOf('transcribing = false;');
+		const submitted = handler.indexOf('await submitPrompt(');
+		expect(cleared).toBeGreaterThan(-1);
+		expect(submitted).toBeGreaterThan(-1);
+		expect(cleared).toBeLessThan(submitted);
+	});
+
+	it('parks the detector rather than stepping it with a forced zero', () => {
+		expect(overlay).toContain('parkVoiceActivity(voiceActivity)');
+	});
+
+	it('clears the in-flight turn even when the turn throws', () => {
+		// `submitPrompt` is awaited with no catch of its own. Before this, an
+		// exception from it escaped stopRecordingCallback as an unhandled
+		// rejection with `loading` still true, so the overlay showed its
+		// loading state forever. That is fatal now rather than merely ugly:
+		// capture is suppressed while `loading` holds, so a stuck flag would
+		// mean a call that never hears anything again.
+		//
+		// Scoped to the function, not the file: `} finally {` anywhere in a
+		// component this size would satisfy a whole-file search, so that
+		// assertion could go green for a reason unrelated to this fix.
+		expect(stopRecordingCallback).toContain('} finally {');
+		expect(stopRecordingCallback).toContain('loading = false;');
 	});
 });
