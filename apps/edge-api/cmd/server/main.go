@@ -1499,11 +1499,14 @@ func authSelectorMiddleware(jwtMW func(http.Handler) http.Handler, next http.Han
 		// fallback, which is the exact shape issue #996 was closed to prevent.
 		// The names in that fallback are not the voices the provider offers.
 		//
-		// Exact paths and exact method only. Everything else keeps its
-		// authentication, including the three audio routes one segment away
-		// that spend credits, POST /v1/tools/web_search and /v1/tools/web_fetch
-		// which do the same, and any non-GET to either exempt path, which each
-		// handler answers 405 for itself.
+		// Exact paths and exact method only, compared by equality rather than
+		// by prefix, so a traversal or an extra segment cannot widen this into
+		// a neighbouring route. Everything else keeps its authentication,
+		// including the three audio routes one segment away that spend
+		// credits, POST /v1/tools/web_search and /v1/tools/web_fetch which do
+		// the same, and any non-GET to either exempt path. A non-GET reaches
+		// the JWT path here and is refused there before the handler sees it;
+		// the handler's own 405 answers a credentialed caller, not this one.
 		if r.Method == http.MethodGet && (r.URL.Path == webToolsListPath || r.URL.Path == audioVoicesPath) {
 			next.ServeHTTP(w, r)
 			return

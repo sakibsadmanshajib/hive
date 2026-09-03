@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -63,8 +64,9 @@ func TestVoiceRosterIsReachableWithoutACredential(t *testing.T) {
 //
 // The neighbouring audio routes are the ones that matter. All three spend
 // credits, all three sit one path segment away from the roster, and all three
-// keep their authentication. So does a non-GET to the roster path itself,
-// which the handler answers 405 for on its own.
+// keep their authentication. So does a non-GET to the roster path itself: the
+// exemption names one method, so an uncredentialed non-GET is refused at the
+// JWT path before the handler's own 405 ever applies.
 func TestOnlyTheTwoPublicReadsAreExemptFromAuth(t *testing.T) {
 	t.Setenv("OWUI_SHIM_KEY", "")
 
@@ -85,6 +87,7 @@ func TestOnlyTheTwoPublicReadsAreExemptFromAuth(t *testing.T) {
 		{http.MethodPost, "/v1/audio/translations"},
 		{http.MethodPost, audioVoicesPath},
 		{http.MethodDelete, audioVoicesPath},
+		{http.MethodHead, audioVoicesPath},
 		{http.MethodGet, audioVoicesPath + "/"},
 		{http.MethodGet, audioVoicesPath + "x"},
 		{http.MethodGet, "/v1/audio"},
@@ -92,6 +95,15 @@ func TestOnlyTheTwoPublicReadsAreExemptFromAuth(t *testing.T) {
 		{http.MethodPost, "/v1/tools/web_search"},
 		{http.MethodPost, "/v1/tools/web_fetch"},
 		{http.MethodGet, "/v1/models"},
+		{http.MethodPost, "/v1/chat/completions"},
+		// The shapes an exemption written with HasPrefix or with a cleaned
+		// path would let through. The comparison is equality on the decoded
+		// r.URL.Path, so each of these is a different string and stays gated;
+		// naming them here is what makes a later rewrite to prefix matching
+		// turn this red instead of silently opening a paid route.
+		{http.MethodGet, "/v1/audio/voices/../speech"},
+		{http.MethodGet, "/v1//audio/voices"},
+		{http.MethodGet, "/v1/audio/Voices"},
 	}
 
 	for _, tc := range exempt {
@@ -136,6 +148,59 @@ func TestOnlyTheTwoPublicReadsAreExemptFromAuth(t *testing.T) {
 		}
 		if !jwtInvoked {
 			t.Errorf("%s %s with no credential was not sent to the JWT path", tc.method, tc.path)
+		}
+	}
+}
+
+// TestVoiceRosterServesTheRealRosterWithNoCredential joins the two halves that
+// each looked correct on their own while the route was unreachable.
+//
+// The exemption test above proves the middleware lets the request past. The
+// route-matrix tests prove the path is registered. Neither notices if the
+// handler behind it later grows an authorizer, or if the exemption and the
+// registration stop naming the same path, and #1377 is exactly what that gap
+// looks like from outside: a route registered "without the authorizer", a
+// middleware that 401s it anyway, and no test anywhere that put the two
+// together and read the body.
+//
+// So this one drives the real registerAudioVoicesRoute onto a real ServeMux,
+// wraps it in the real authSelectorMiddleware, sends the request Open WebUI
+// sends, and asserts a roster comes back.
+func TestVoiceRosterServesTheRealRosterWithNoCredential(t *testing.T) {
+	t.Setenv("OWUI_SHIM_KEY", "")
+
+	mux := http.NewServeMux()
+	registerAudioVoicesRoute(mux)
+
+	jwtMW := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodGet, audioVoicesPath, nil)
+	rr := httptest.NewRecorder()
+	authSelectorMiddleware(jwtMW, mux).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET %s with no credential answered %d, want 200: %s", audioVoicesPath, rr.Code, rr.Body.String())
+	}
+
+	var body struct {
+		Voices []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"voices"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("voice roster is not the JSON the dropdown parses: %v (body %s)", err, rr.Body.String())
+	}
+	if len(body.Voices) == 0 {
+		t.Fatalf("voice roster came back empty, which sends the dropdown to its hardcoded fallback (issue #996): %s", rr.Body.String())
+	}
+	for _, v := range body.Voices {
+		if v.ID == "" {
+			t.Errorf("a voice came back with no id, which the dropdown cannot select: %s", rr.Body.String())
 		}
 	}
 }
