@@ -70,6 +70,20 @@ func TestAuthSelectorExemptions(t *testing.T) {
 		{"the voice roster, unauthenticated", http.MethodGet, audioVoicesPath, true},
 		{"the descriptor list, unauthenticated", http.MethodGet, webToolsListPath, true},
 
+		// The decoded-path semantics, pinned rather than assumed. r.URL.Path is
+		// decoded before this comparison, so these spell the exempt path and
+		// are exempt. Asserting them as exempt documents what the code actually
+		// does; asserting them as gated would claim a stricter rule than the
+		// middleware implements and would go red against correct code. If the
+		// exemption is ever made strict about the raw spelling, this is where
+		// that change shows up.
+		{"percent-encoded spelling of the roster", http.MethodGet, "/v1/%61udio/voices", true},
+		{"percent-encoded final character", http.MethodGet, "/v1/audio/voice%73", true},
+		// Exempt at the middleware and a 404 at the mux, because an encoded
+		// separator matches no registered pattern. Named so that the divergence
+		// is recorded rather than discovered.
+		{"encoded separator", http.MethodGet, "/v1/audio%2fvoices", true},
+
 		// The neighbours that spend credits. All three audio routes sit one
 		// path segment from the roster and all three keep their authentication.
 		{"speech", http.MethodPost, "/v1/audio/speech", false},

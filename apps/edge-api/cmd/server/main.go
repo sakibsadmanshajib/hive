@@ -1501,7 +1501,21 @@ func authSelectorMiddleware(jwtMW func(http.Handler) http.Handler, next http.Han
 		//
 		// Exact paths and exact method only, compared by equality rather than
 		// by prefix, so a traversal or an extra segment cannot widen this into
-		// a neighbouring route. Everything else keeps its authentication,
+		// a neighbouring route.
+		//
+		// Equality, but on r.URL.Path, which is the DECODED path. So this is
+		// not quite "one literal string": /v1/%61udio/voices and
+		// /v1/audio/voice%73 decode to the exempt path and are exempt too. That
+		// is harmless rather than merely tolerable, because net/http decodes
+		// the same way before matching, so every spelling that clears this
+		// check lands on the same static handler. The one divergence is
+		// /v1/audio%2fvoices, which is exempt here and 404s at the mux, since
+		// an encoded separator cannot match any registered pattern. No encoded
+		// form reaches a different route, and none reaches a credit-spending
+		// one: audio_voices_auth_test.go pins both the exempt spellings and the
+		// refusals.
+		//
+		// Everything else keeps its authentication,
 		// including the three audio routes one segment away that spend
 		// credits, POST /v1/tools/web_search and /v1/tools/web_fetch which do
 		// the same, and any non-GET to either exempt path. A non-GET reaches
