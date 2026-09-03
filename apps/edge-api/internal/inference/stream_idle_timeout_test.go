@@ -322,7 +322,7 @@ func TestStreamDataDeadline_KeepalivesDoNotRenewTheBudget(t *testing.T) {
 		"whitespace-only array":  {ToolCalls: json.RawMessage("[ \n ]")},
 	} {
 		if chunkCarriesData(ChatCompletionChunk{Choices: []ChunkChoice{{Delta: empty}}}) {
-			t.Errorf("a %s carries no tool call and no data: counting it renews the budget on a keepalive", name)
+			t.Errorf("%s: carries no tool call and no data, so counting it renews the budget on a keepalive", name)
 		}
 	}
 
