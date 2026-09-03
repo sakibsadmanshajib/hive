@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
 	DEFAULT_VOICE_ACTIVITY_CONFIG,
 	createVoiceActivityState,
+	shouldSuppressCapture,
 	speechThreshold,
 	stepVoiceActivity,
 	type VoiceActivityConfig
@@ -296,5 +297,91 @@ describe('the call overlay uses it (issue #1627)', () => {
 		// mistake fails here too, and it survives the comment above the fix
 		// quoting the expression verbatim.
 		expect(overlay).not.toContain('getByteFrequencyData');
+	});
+});
+
+// The second half of issue #1627, which PR #1662 did not reach: the flood.
+//
+// PR #1662 gave the overlay a real speech threshold, so room noise no longer
+// opens the microphone. What it left in place is the amplifier that turns
+// ordinary speech into stacked requests. `stopRecordingCallback` restarts
+// capture BEFORE the utterance it just captured has been transcribed and
+// answered, and nothing suppressed capture while that turn was in flight. So
+// every sentence spoken over a slow turn opened another concurrent
+// transcription and another `submitPrompt`, with no bound but how fast a
+// person can talk. That is what makes a provider rate limit reachable from a
+// single user, and it is what the issue's "continuous capture floods the
+// transcription endpoint" line describes.
+describe('capture suppression while a turn is in flight (issue #1627)', () => {
+	const base = {
+		muted: false,
+		assistantSpeaking: false,
+		turnInFlight: false,
+		voiceInterruption: false
+	};
+
+	it('lets an idle overlay hear the room', () => {
+		expect(shouldSuppressCapture(base)).toBe(false);
+	});
+
+	it('suppresses while the turn just captured is still being answered', () => {
+		// The fix. Without it a second utterance opens a second transcription
+		// and a second model turn while the first is still running.
+		expect(shouldSuppressCapture({ ...base, turnInFlight: true })).toBe(true);
+	});
+
+	it('still suppresses while the assistant is speaking', () => {
+		// Unchanged behaviour, pinned so the new condition cannot be written in
+		// a way that drops the old one.
+		expect(shouldSuppressCapture({ ...base, assistantSpeaking: true })).toBe(true);
+	});
+
+	it('lets voice interruption through both suppressions', () => {
+		// `voiceInterruption` is the existing setting for talking over the
+		// assistant. A turn in flight is the same situation one step earlier,
+		// so it answers to the same setting rather than to a second one.
+		expect(
+			shouldSuppressCapture({ ...base, assistantSpeaking: true, voiceInterruption: true })
+		).toBe(false);
+		expect(
+			shouldSuppressCapture({ ...base, turnInFlight: true, voiceInterruption: true })
+		).toBe(false);
+	});
+
+	it('keeps mute above voice interruption', () => {
+		// Mute is the user holding the microphone shut. Nothing overrides it,
+		// least of all a setting about interrupting the assistant.
+		expect(
+			shouldSuppressCapture({ ...base, muted: true, voiceInterruption: true })
+		).toBe(true);
+	});
+});
+
+describe('the call overlay wires the suppression and always clears the turn (issue #1627)', () => {
+	const overlay = readFileSync(
+		fileURLToPath(new URL('../components/chat/MessageInput/CallOverlay.svelte', import.meta.url)),
+		'utf8'
+	);
+
+	it('asks the shared decision rather than inlining the condition', () => {
+		expect(overlay).toContain('shouldSuppressCapture');
+	});
+
+	it('feeds it the in-flight turn', () => {
+		// `loading` is the overlay's only flag for "this turn is being
+		// transcribed and answered", set in stopRecordingCallback and cleared
+		// when the turn ends. Passing anything else here would leave the
+		// window this fix exists to close.
+		expect(overlay).toContain('turnInFlight: loading');
+	});
+
+	it('clears the in-flight turn even when the turn throws', () => {
+		// `submitPrompt` is awaited with no catch of its own. Before this, an
+		// exception from it escaped stopRecordingCallback as an unhandled
+		// rejection with `loading` still true, so the overlay showed its
+		// loading state forever. That is fatal now rather than merely ugly:
+		// capture is suppressed while `loading` holds, so a stuck flag would
+		// mean a call that never hears anything again.
+		expect(overlay).toContain('} finally {');
 	});
 });
