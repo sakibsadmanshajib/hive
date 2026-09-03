@@ -39,12 +39,18 @@ type Deps struct {
 	// Memories supplies the cross-chat recall block (issue #172, ruling
 	// D-020). Optional: nil disables injection entirely, and a recall read
 	// failure degrades to serving without the block, never fails the chat.
-	Memories   MemorySource
-	LiteLLMURL string
-	LiteLLMKey string
-	DeploySHA  string
-	Env        string
-	HTTP       *http.Client
+	Memories MemorySource
+	// Instructions supplies the user's own standing custom instructions
+	// (issue #1363). Optional on exactly the same terms as Memories: nil
+	// disables injection, and a read failure serves the turn without the
+	// block rather than failing the chat. Someone's preferred tone is not
+	// worth refusing their message over.
+	Instructions InstructionSource
+	LiteLLMURL   string
+	LiteLLMKey   string
+	DeploySHA    string
+	Env          string
+	HTTP         *http.Client
 }
 
 type Handler struct {
@@ -259,6 +265,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			injected, injectErr := injectMemoryBlock(raw, block)
 			if injectErr != nil {
 				slog.Warn("chat memory injection failed; serving without recall block", "err", injectErr)
+			} else {
+				raw = injected
+			}
+		}
+	}
+
+	// Custom instructions (issue #1363): the standing "how should you respond"
+	// text this person wrote, prepended as its own system block. Runs AFTER
+	// the recall block above so it ends up FIRST in the messages array, which
+	// is the order it has to be in: instructions are what the user asked for,
+	// recall is background the system supplied, and a model reading the two
+	// should meet the request before the context.
+	//
+	// Same degradation contract as recall: a read or injection failure logs
+	// and serves the turn unshaped.
+	if h.deps.Instructions != nil {
+		text, insErr := h.deps.Instructions.Instructions(r.Context(), user.TenantID, user.ID)
+		if insErr != nil {
+			slog.Warn("custom instructions read failed; serving without them", "err", insErr)
+		} else if block := buildInstructionBlock(text); block != "" {
+			injected, injectErr := injectMemoryBlock(raw, block)
+			if injectErr != nil {
+				slog.Warn("custom instructions injection failed; serving without them", "err", injectErr)
 			} else {
 				raw = injected
 			}
