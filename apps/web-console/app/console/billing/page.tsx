@@ -194,7 +194,7 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
       {activeTab === "invoices" ? <InvoicesTab /> : null}
 
       {showCheckout ? (
-        <CheckoutLauncher accountCountryCode={profile?.country_code ?? ""} />
+        <CheckoutLauncher />
       ) : null}
     </ConsoleShell>
   );

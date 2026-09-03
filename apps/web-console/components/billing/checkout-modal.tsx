@@ -12,7 +12,6 @@ import { Field, Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/format/money";
 
 interface CheckoutModalProps {
-  accountCountryCode: string;
   onClose: () => void;
 }
 
@@ -60,40 +59,46 @@ function isCheckoutOptions(value: unknown): value is CheckoutOptions {
   ).every((field) => Number.isFinite(value[field]));
 }
 
-// computeBlockSplitAmountMinor prices `credits` at `pricePerBlockMinor`
-// minor units per `creditBlockSize` credits, floor-rounded, WITHOUT forming
-// the raw product: at the current unit a max-size purchase would multiply to
-// ~7.5e16, past Number.MAX_SAFE_INTEGER. Whole blocks are priced as an exact
-// Number product (block quotient x price stays far below 2^53 for every real
-// currency rate); the sub-block remainder goes through BigInt, whose floor
-// division is exact for any inputs. Exported so tests exercise THIS code
-// rather than a copy of it.
-export function computeBlockSplitAmountMinor(
+// computeAmountMinor prices `credits` at the exact fraction the selected rail
+// published: floor(credits x numerator / denominator), in that rail's minor
+// unit.
+//
+// Entirely in BigInt. The whole product overflows Number for a large purchase
+// (a max-size one reaches ~7.5e16, past 2^53 - 1), and BigInt division floors
+// exactly for non-negative operands, which is the same direction the control
+// plane truncates in.
+//
+// The predecessor took the price of one CreditsPerUSD block, ALREADY truncated
+// to whole minor units, and multiplied it by the block count. That is exact for
+// a dollar payer, whose block costs a whole 106 cents, and it under-quoted a
+// taka payer a little more with every block once D-066 made the effective rate
+// carry three decimals: at a mid rate of 127 a block costs 13798.55 paisa, and
+// half a paisa was dropped twenty times over on a twenty dollar purchase. A
+// fraction has nothing to drop.
+//
+// Exported so tests exercise THIS code rather than a copy of it.
+export function computeAmountMinor(
   credits: number,
-  creditBlockSize: number,
-  pricePerBlockMinor: number,
+  numerator: number,
+  denominator: number,
 ): number {
+  // Every guard is against BigInt(), which throws on a non-integer, on NaN and
+  // on Infinity. A thrown error inside render would blank the whole modal, so a
+  // value that cannot be priced renders as no amount instead.
   if (
-    !Number.isFinite(credits) ||
-    !Number.isFinite(creditBlockSize) ||
-    creditBlockSize <= 0 ||
-    !Number.isFinite(pricePerBlockMinor)
+    !Number.isInteger(credits) ||
+    credits < 0 ||
+    !Number.isInteger(numerator) ||
+    numerator < 0 ||
+    !Number.isInteger(denominator) ||
+    denominator <= 0
   ) {
-    // NaN comparisons return false for `<= 0`, so a pathological upstream
-    // value would otherwise reach the division and render as NaN.
     return 0;
   }
-  const wholeBlocks = Math.trunc(credits / creditBlockSize);
-  const remainderMinor =
-    (BigInt(credits - wholeBlocks * creditBlockSize) * BigInt(pricePerBlockMinor)) /
-    BigInt(creditBlockSize);
-  return wholeBlocks * pricePerBlockMinor + Number(remainderMinor);
+  return Number((BigInt(credits) * BigInt(numerator)) / BigInt(denominator));
 }
 
-export function CheckoutModal({
-  accountCountryCode,
-  onClose,
-}: CheckoutModalProps) {
+export function CheckoutModal({ onClose }: CheckoutModalProps) {
   const [options, setOptions] = useState<CheckoutOptions | null>(null);
   const [selectedRail, setSelectedRail] = useState<string>("");
   const [creditAmount, setCreditAmount] = useState<number>(1000);
@@ -147,36 +152,6 @@ export function CheckoutModal({
   const selectedRailData: CheckoutRail | undefined = options?.rails.find(
     (r) => r.rail === selectedRail,
   );
-
-  // Whether to render a pre-checkout estimate. BD accounts must never
-  // see any FX conversion language or non-local currency total
-  // (regulatory rule); the hosted checkout page (Stripe / bKash /
-  // SSLCommerz) is the only place a BD user sees the BDT total,
-  // computed server-side at initiate time. For non-BD accounts the
-  // estimate is rendered in the resolved options.currency.
-  const isBdAccount = accountCountryCode === "BD";
-
-  // FX-17-04 (post-review): the server prices in minor units per
-  // `credit_block_size` credits (= CreditsPerUSD = 1,000,000,000 since the
-  // 2026-08-23 credit unit rescale). To get the localised total for an
-  // arbitrary credit count we integer-divide by the block size, matching the
-  // server-side math/big truncation.
-  //
-  function computeAmountMinor(): number {
-    if (
-      !options ||
-      !Number.isFinite(options.credit_block_size) ||
-      options.credit_block_size <= 0 ||
-      !Number.isFinite(options.price_per_block_minor)
-    ) {
-      return 0;
-    }
-    return computeBlockSplitAmountMinor(
-      creditAmount,
-      options.credit_block_size,
-      options.price_per_block_minor,
-    );
-  }
 
   async function handleCheckout() {
     if (!selectedRail || !options) return;
@@ -422,23 +397,37 @@ export function CheckoutModal({
               </div>
             </Field>
 
+            {/*
+              One price, in the currency the selected rail settles in, for every
+              account. A BD account used to reach this box and be told only that
+              the amount would be "shown on the bKash payment page", which asked
+              the payer to commit to a purchase without telling them the cost
+              (issue #1737). That silence was the last of the Phase 17 rule that
+              stripped every FX and USD figure from a BD surface, and the owner
+              retired that rule on 2026-08-08 (D-035) and then required this
+              figure on 2026-09-02 (D-066).
+
+              What is deliberately NOT here: a second line. The 2.5 percent FX
+              markup is folded into the rate the control plane priced with and
+              is never itemised (D-066), and no USD equivalent sits beside a
+              taka figure. One rail, one currency, one number.
+            */}
             {selectedRailData ? (
               <div className="flex items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-4 py-3">
-                <span className="text-xs text-[var(--color-ink-3)]">
-                  {isBdAccount ? "Final amount" : "Total"}
+                <span className="text-xs text-[var(--color-ink-3)]">Total</span>
+                <span
+                  className="metric text-lg text-[var(--color-ink)]"
+                  data-numeric
+                >
+                  {formatCurrency(
+                    computeAmountMinor(
+                      creditAmount,
+                      selectedRailData.price_minor_numerator,
+                      selectedRailData.price_credits_denominator,
+                    ),
+                    selectedRailData.currency,
+                  )}
                 </span>
-                {isBdAccount ? (
-                  <span className="text-xs text-[var(--color-ink-3)]">
-                    Shown on the {selectedRailData.label} payment page.
-                  </span>
-                ) : (
-                  <span
-                    className="metric text-lg text-[var(--color-ink)]"
-                    data-numeric
-                  >
-                    {formatCurrency(computeAmountMinor(), options.currency)}
-                  </span>
-                )}
               </div>
             ) : null}
 

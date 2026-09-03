@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { formatCurrency as formatPrice } from "@/lib/format/money";
-import { computeBlockSplitAmountMinor } from "./checkout-modal";
+import { computeAmountMinor } from "./checkout-modal";
 
 describe("CheckoutModal price formatting", () => {
   it("formats BDT price", () => {
@@ -16,132 +16,128 @@ describe("CheckoutModal price formatting", () => {
   });
 });
 
-// FX-17-04 (post-review): the pricing primitive is per-block, NOT per-credit.
-// `price_per_block_minor` is the minor-unit cost of `credit_block_size`
-// credits (CreditsPerUSD = 1,000,000,000 since the 2026-08-23 credit unit
-// rescale). Display total in modal:
+// The selected rail publishes the exact price of one credit in its own minor
+// unit, as a fraction. The modal renders
 //
-//   floor(credits * price_per_block_minor / credit_block_size)
+//   floor(credits * price_minor_numerator / price_credits_denominator)
 //
-// Locked-in invariants below catch the regression that codex-rescue
-// flagged: prior code computed `credits * price_per_credit_minor`,
-// inflating non-BD totals by 100,000×.
-// The test cases call the PRODUCTION helper (argument order adapted), not a
-// copy of its math: a copy would keep passing after the component's real
-// computation regressed.
-function computeAmountMinor(
-  credits: number,
-  pricePerBlockMinor: number,
-  creditBlockSize: number,
-): number {
-  return computeBlockSplitAmountMinor(credits, creditBlockSize, pricePerBlockMinor);
-}
-
-describe("computeAmountMinor (FX-17-04 post-review per-block contract)", () => {
+// and that has to equal what the control plane charges for the same quantity,
+// because it is the same fraction truncated the same way (issue #1737).
+//
+// Every case calls the PRODUCTION helper, not a copy of its arithmetic: a copy
+// would keep passing after the component's real computation regressed, which is
+// what the FX-17-04 review pass found the first time round.
+describe("computeAmountMinor", () => {
   const CREDITS_PER_USD = 1_000_000_000;
+  // 1.06 US cents per USD block: the peg (1 USD = 1e9 credits, D-046) plus the
+  // 6 percent purchase markup (D-065), reduced. This is verbatim what the
+  // control plane publishes for a Stripe rail.
+  const USD = { num: 53, den: 500_000_000 };
 
-  it("USD non-BD: 50M credits at 100 cents/block → 5 cents = $0.05", () => {
-    const got = computeAmountMinor(50_000_000, 100, CREDITS_PER_USD);
+  it("USD: 50M credits is 5 cents", () => {
+    const got = computeAmountMinor(50_000_000, USD.num, USD.den);
     expect(got).toBe(5);
     expect(formatPrice(got, "USD")).toContain("$0.05");
   });
 
-  it("USD non-BD: 10M credits at 100 cents/block → 1 cent = $0.01", () => {
-    const got = computeAmountMinor(10_000_000, 100, CREDITS_PER_USD);
-    expect(got).toBe(1);
-    expect(formatPrice(got, "USD")).toContain("$0.01");
+  it("USD: one block is 106 cents, the peg plus the 6 percent markup", () => {
+    const got = computeAmountMinor(CREDITS_PER_USD, USD.num, USD.den);
+    expect(got).toBe(106);
+    expect(formatPrice(got, "USD")).toContain("$1.06");
   });
 
-  it("USD non-BD: 1B credits at 100 cents/block → 100 cents = $1.00", () => {
-    const got = computeAmountMinor(1_000_000_000, 100, CREDITS_PER_USD);
-    expect(got).toBe(100);
-    expect(formatPrice(got, "USD")).toContain("$1.00");
+  it("USD: twenty blocks is 21.20, twenty times the single-block price", () => {
+    const got = computeAmountMinor(20 * CREDITS_PER_USD, USD.num, USD.den);
+    expect(got).toBe(2120);
+    expect(formatPrice(got, "USD")).toContain("$21.20");
   });
 
-  it("BDT: 10M credits at 11550 paisa/block → 115 paisa = ৳1.15 (floor parity)", () => {
-    const got = computeAmountMinor(10_000_000, 11_550, CREDITS_PER_USD);
-    expect(got).toBe(115);
-    const formatted = formatPrice(got, "BDT");
-    expect(formatted).toContain("1.15");
+  // The D-066 worked example: a mid rate of 127 carries a flat 2.5 percent
+  // markup folded into the rate, giving an effective 130.175. One credit then
+  // costs 1.06 * 130.175 / 1e7 paisa, which is 275971 / 20000000000.
+  const BDT = { num: 275_971, den: 20_000_000_000 };
+
+  it("BDT: one block at a mid rate of 127 is 138.00 taka", () => {
+    const got = computeAmountMinor(CREDITS_PER_USD, BDT.num, BDT.den);
+    expect(got).toBe(13_798);
+    expect(formatPrice(got, "BDT")).toContain("137.98");
   });
 
-  it("BDT: 1B credits at 11550 paisa/block → 11550 paisa = ৳115.50", () => {
-    const got = computeAmountMinor(1_000_000_000, 11_550, CREDITS_PER_USD);
-    expect(got).toBe(11_550);
-    expect(formatPrice(got, "BDT")).toContain("115.50");
+  it("BDT: twenty blocks keeps the paisa a per-block price would have dropped", () => {
+    // The exact price is 275971 paisa for twenty blocks. The predecessor sent
+    // the block price already truncated to 13798 paisa and multiplied, landing
+    // on 275960 and under-quoting the payer by 11 paisa. That gap is the reason
+    // the fraction is on the wire.
+    const got = computeAmountMinor(20 * CREDITS_PER_USD, BDT.num, BDT.den);
+    expect(got).toBe(275_971);
+    expect(got - 20 * 13_798).toBe(11);
   });
 
-  it("magnitude: max-size purchase stays exact past 2^53 raw product", () => {
-    // 5e12 credits x 15000 paisa would be 7.5e16 if multiplied naively,
-    // which is past Number.MAX_SAFE_INTEGER. The block-split computation
-    // must still return the exact floor.
-    const got = computeAmountMinor(5_000_000_000_000, 15_000, CREDITS_PER_USD);
-    expect(got).toBe(75_000_000); // BDT 500K in paisa
-  });
-
-  it("magnitude: non-aligned input matches a BigInt reference exactly", () => {
-    const credits = 5_000_775_014_999;
-    const price = 15_001;
-    const blockSize = CREDITS_PER_USD;
-    const reference =
-      Number((BigInt(credits) * BigInt(price)) / BigInt(blockSize));
+  it("stays exact past the point a Number product would round", () => {
+    // 5e12 credits against this numerator is ~1.4e18 before the division, well
+    // past 2^53 - 1. BigInt carries it; a Number product would not.
+    const credits = 5_000_000_000_000;
+    const reference = Number(
+      (BigInt(credits) * BigInt(BDT.num)) / BigInt(BDT.den),
+    );
     expect(Number.isSafeInteger(reference)).toBe(true);
-    expect(computeBlockSplitAmountMinor(credits, blockSize, price)).toBe(reference);
+    expect(computeAmountMinor(credits, BDT.num, BDT.den)).toBe(reference);
   });
 
-  it("regression: NEVER returns per-credit inflation (the pre-review bug)", () => {
-    // The buggy formula `credits * price` would have produced 500,000,000
-    // cents here. The corrected formula must produce 5 cents ($0.05).
-    const credits = 50_000_000;
-    const pricePerBlockMinor = 100;
-    const buggy = credits * pricePerBlockMinor;
-    const corrected = computeAmountMinor(credits, pricePerBlockMinor, CREDITS_PER_USD);
-    expect(corrected).toBeLessThan(buggy / 1000);
-    expect(corrected).toBe(5);
+  it("floors rather than rounding, matching the control plane's truncation", () => {
+    // One credit short of a whole paisa must not round up into one.
+    expect(computeAmountMinor(3, 1, 2)).toBe(1);
+    expect(computeAmountMinor(1, 1, 2)).toBe(0);
   });
 
-  it("zero/invalid block size collapses to 0 (defensive)", () => {
-    expect(computeAmountMinor(50_000_000, 100, 0)).toBe(0);
-    expect(computeAmountMinor(50_000_000, 100, -1)).toBe(0);
+  it("renders no amount rather than throwing on an unusable price", () => {
+    // BigInt() throws on a non-integer, on NaN and on Infinity, and a throw
+    // inside render would blank the whole modal.
+    expect(computeAmountMinor(50_000_000, 53, 0)).toBe(0);
+    expect(computeAmountMinor(50_000_000, 53, -1)).toBe(0);
+    expect(computeAmountMinor(50_000_000, Number.NaN, 500_000_000)).toBe(0);
+    expect(computeAmountMinor(50_000_000, 53, Number.POSITIVE_INFINITY)).toBe(0);
+    expect(computeAmountMinor(50_000_000.5, 53, 500_000_000)).toBe(0);
+    expect(computeAmountMinor(-1, 53, 500_000_000)).toBe(0);
   });
 });
 
-// FX-17-04: getCheckoutOptions decoder MUST reject any payload missing
-// `price_per_block_minor`, `credit_block_size`, or `currency`. Source-level
-// assertions because client.ts depends on next/headers (server-only) and
-// cannot be imported into a jsdom worker.
-describe("getCheckoutOptions decoder (FX-17-04 strict shape, source guard)", () => {
+// Source-level assertions because client.ts depends on next/headers
+// (server-only) and cannot be imported into a jsdom worker.
+describe("getCheckoutRails decoder (source guard)", () => {
   const clientSrc = readFileSync(
     join(__dirname, "..", "..", "lib", "control-plane", "client.ts"),
     "utf8",
   );
 
-  it("does not reference the misleading per-credit pricing name (post-review rename)", () => {
-    // Post-review rename: ensure the misleading per-credit name (which
-    // caused the 100,000x non-BD total inflation bug) is gone in favor of
-    // the per-block primitive.
+  it("does not reference either superseded pricing name", () => {
+    // price_per_credit_minor inflated a non-BD total 100,000 times over.
+    // price_per_block_minor replaced it and then under-quoted a taka payer,
+    // because a block price truncated to whole minor units cannot carry a
+    // three decimal rate. Neither name may come back.
     expect(clientSrc).not.toContain("price_per_credit_minor");
-    expect(clientSrc).not.toContain("pricePerCreditMinor");
+    expect(clientSrc).not.toContain("price_per_block_minor");
+    expect(clientSrc).not.toContain("credit_block_size");
   });
 
-  it("declares the new per-block pricing primitive on CheckoutOptions", () => {
-    expect(clientSrc).toContain("price_per_block_minor: number");
-    expect(clientSrc).toContain("credit_block_size: number");
-    expect(clientSrc).toMatch(/CheckoutOptions[\s\S]{0,800}currency: string/);
-  });
-
-  it("decoder reads price_per_block_minor + credit_block_size + currency as required fields", () => {
-    expect(clientSrc).toContain(
-      'readNumberField(payload, "price_per_block_minor")',
-    );
-    expect(clientSrc).toContain(
-      'readNumberField(payload, "credit_block_size")',
-    );
-    expect(clientSrc).toContain('readStringField(payload, "currency")');
-    // Required-field rejection: missing/zero block size throws rather
-    // than defaulting silently and producing a divide-by-zero render.
+  it("declares the price on the rail, not on the account", () => {
     expect(clientSrc).toMatch(
-      /creditBlockSize === null[\s\S]{0,400}throw new Error\("Failed to parse checkout rails response"\)/,
+      /CheckoutRail[\s\S]{0,1400}price_minor_numerator: number;[\s\S]{0,200}price_credits_denominator: number;/,
+    );
+  });
+
+  it("drops a rail whose price is absent or unusable", () => {
+    expect(clientSrc).toContain(
+      'readNumberField(value, "price_minor_numerator")',
+    );
+    expect(clientSrc).toContain(
+      'readNumberField(value, "price_credits_denominator")',
+    );
+    // A rail that cannot be priced is dropped, never defaulted: an invented
+    // money figure is how issue #1386 displayed a purchase ceiling 100 times
+    // too low with nothing complaining.
+    expect(clientSrc).toMatch(
+      /numerator === null[\s\S]{0,400}denominator <= 0\s*\)\s*\{\s*return null;/,
     );
   });
 });

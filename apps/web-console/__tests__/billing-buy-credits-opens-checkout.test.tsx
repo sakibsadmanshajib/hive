@@ -43,12 +43,12 @@ vi.mock("@/components/billing/budget-alert-form", () => ({
   BudgetAlertForm: () => <div data-testid="budget-alert-form" />,
 }));
 
-// The launcher is the seam under test: assert it is mounted and handed the
-// account's country, without dragging the modal's own fetch into a page test.
+// The launcher is the seam under test: assert it is mounted, without dragging
+// the modal's own fetch into a page test. It takes no props: the account's
+// country used to decide whether the modal showed a price at all, and the price
+// now comes from the rail the payer selects (issue #1737).
 vi.mock("@/components/billing/checkout-launcher", () => ({
-  CheckoutLauncher: ({ accountCountryCode }: { accountCountryCode: string }) => (
-    <div data-testid="checkout-launcher">{accountCountryCode}</div>
-  ),
+  CheckoutLauncher: () => <div data-testid="checkout-launcher" />,
 }));
 
 const VIEWER_PAYLOAD = {
@@ -132,9 +132,6 @@ describe("app/console/billing/page.tsx mounts the checkout modal", () => {
     // Without this the "Buy credits" link is inert: it navigates to this exact
     // URL and the page renders identically to the one it left.
     expect(screen.getByTestId("checkout-launcher")).toBeTruthy();
-    // The modal branches on this to price in BDT rather than USD, so a page
-    // that mounted it with the wrong country would misprice the checkout.
-    expect(screen.getByTestId("checkout-launcher").textContent).toBe("BD");
   });
 
   it("does not mount it for a plain visit to the billing page", async () => {

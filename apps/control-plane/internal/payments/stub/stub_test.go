@@ -246,7 +246,18 @@ func TestStubService_GetCheckoutOptions_BD_includesAllRails(t *testing.T) {
 	assert.True(t, rails[payments.RailBkash])
 	assert.True(t, rails[payments.RailSSLCommerz])
 
-	assert.Equal(t, "BDT", opts.Currency)
+	// Currency belongs to the rail, not the account: a BD account is offered a
+	// dollar rail alongside two taka rails, and every rail carries the price of
+	// a credit in its own currency.
+	for _, r := range opts.Rails {
+		want := "USD"
+		if r.Rail == payments.RailBkash || r.Rail == payments.RailSSLCommerz {
+			want = "BDT"
+		}
+		assert.Equal(t, want, r.Currency, "rail %s", r.Rail)
+		assert.Positive(t, r.PriceMinorNumerator, "rail %s", r.Rail)
+		assert.Positive(t, r.PriceCreditsDenominator, "rail %s", r.Rail)
+	}
 	assert.NotEmpty(t, opts.PredefinedTiers)
 }
 
@@ -264,7 +275,8 @@ func TestStubService_GetCheckoutOptions_nonBD_stripeOnly(t *testing.T) {
 	assert.False(t, rails[payments.RailBkash], "non-BD must NOT offer bKash")
 	assert.False(t, rails[payments.RailSSLCommerz], "non-BD must NOT offer SSLCommerz")
 
-	assert.Equal(t, "USD", opts.Currency)
+	require.Len(t, opts.Rails, 1)
+	assert.Equal(t, "USD", opts.Rails[0].Currency)
 }
 
 // ---------------------------------------------------------------------------

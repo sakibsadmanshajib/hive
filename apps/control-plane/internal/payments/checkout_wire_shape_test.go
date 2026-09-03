@@ -42,8 +42,7 @@ func TestCheckoutOptionsWireShapeMatchesConsoleDecoder(t *testing.T) {
 	}
 
 	for _, key := range []string{
-		"rails", "predefined_tiers", "price_per_block_minor", "credit_block_size",
-		"currency", "credit_increment", "min_credits", "max_credits",
+		"rails", "predefined_tiers", "credit_increment", "min_credits", "max_credits",
 	} {
 		if _, ok := payload[key]; !ok {
 			t.Errorf("checkout options payload is missing %q, which the console reads", key)
@@ -54,10 +53,12 @@ func TestCheckoutOptionsWireShapeMatchesConsoleDecoder(t *testing.T) {
 	// string drops the item just as surely as a missing field does. Assert the
 	// values, not just the shape.
 	var railItems []struct {
-		Rail     string `json:"rail"`
-		Label    string `json:"label"`
-		Currency string `json:"currency"`
-		Enabled  *bool  `json:"enabled"`
+		Rail                    string `json:"rail"`
+		Label                   string `json:"label"`
+		Currency                string `json:"currency"`
+		Enabled                 *bool  `json:"enabled"`
+		PriceMinorNumerator     *int64 `json:"price_minor_numerator"`
+		PriceCreditsDenominator *int64 `json:"price_credits_denominator"`
 	}
 	if err := json.Unmarshal(payload["rails"], &railItems); err != nil {
 		t.Fatalf("unmarshal rails: %v", err)
@@ -77,6 +78,12 @@ func TestCheckoutOptionsWireShapeMatchesConsoleDecoder(t *testing.T) {
 		}
 		if item.Enabled == nil {
 			t.Errorf("rail item %d has no enabled flag, so the console decoder drops it", i)
+		}
+		// The price moved onto the rail in issue #1737, and the decoder drops a
+		// rail that has no price for the same reason it drops one with no
+		// currency: the modal cannot render an amount it was not sent.
+		if item.PriceMinorNumerator == nil || item.PriceCreditsDenominator == nil {
+			t.Errorf("rail item %d carries no price, so the console decoder drops it", i)
 		}
 	}
 }

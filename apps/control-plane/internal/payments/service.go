@@ -527,23 +527,17 @@ func (s *Service) PostPurchaseGrant(ctx context.Context, intent PaymentIntent) e
 
 // CheckoutOptions holds available rails and predefined tiers for a checkout session.
 //
-// Phase 17 FX/USD zero-leak (FX-17-03): per-country pricing primitive.
-//   - PricePerBlockMinor: minor units of resolved currency per
-//     `CreditBlockSize` credits (paisa for BDT, cents for USD).
-//   - CreditBlockSize: number of credits that one block of `PricePerBlockMinor`
-//     pays for. Mirrors `CreditsPerUSD` (1,000,000,000 credits =
-//     1 USD-equivalent since the 2026-08-23 credit unit rescale).
-//   - Currency: ISO 4217 code of the resolved currency. "BDT" for BD
-//     accounts, "USD" otherwise.
+// The price of a purchase lives on the RAIL (see RailOption), not here. It used
+// to be one per-account scalar, resolved from the account's country, and that
+// was wrong in both directions for a BD account: the country says taka while
+// InitiateCheckout charges in whatever currency the SELECTED rail settles in,
+// and a BD account is offered Stripe alongside bKash and SSLCommerz
+// (AvailableRails). A single figure cannot be right for a dollar rail and a
+// taka rail at once (issue #1737).
 //
-// Front-end renders a localised total using integer arithmetic:
-//
-//	total_minor = floor(credits * PricePerBlockMinor / CreditBlockSize)
-//
-// FX rate is NEVER exposed in the response. The server resolves USD →
-// local-currency minor units via `math/big` against the latest FX
-// snapshot mid-rate (with the standard fee markup) and returns only the
-// resolved scalar.
+// The FX rate itself is still never exposed. What a rail publishes is the
+// resolved price of a credit in its own currency, with the markup already
+// folded in and no way to read the rate back out of it.
 // CreditIncrement, MinCredits and MaxCredits repeat the purchase bounds at the
 // top level because that is where the console reads them
 // (`apps/web-console/lib/control-plane/client.ts`). Their absence was not
@@ -558,14 +552,11 @@ func (s *Service) PostPurchaseGrant(ctx context.Context, intent PaymentIntent) e
 // enforces the real per-rail ceiling on initiate, so this wire value can only
 // ever be stricter than enforcement, never looser.
 type CheckoutOptions struct {
-	Rails              []RailOption `json:"rails"`
-	PredefinedTiers    []int64      `json:"predefined_tiers"`
-	PricePerBlockMinor int64        `json:"price_per_block_minor"`
-	CreditBlockSize    int64        `json:"credit_block_size"`
-	Currency           string       `json:"currency"`
-	CreditIncrement    int64        `json:"credit_increment"`
-	MinCredits         int64        `json:"min_credits"`
-	MaxCredits         int64        `json:"max_credits"`
+	Rails           []RailOption `json:"rails"`
+	PredefinedTiers []int64      `json:"predefined_tiers"`
+	CreditIncrement int64        `json:"credit_increment"`
+	MinCredits      int64        `json:"min_credits"`
+	MaxCredits      int64        `json:"max_credits"`
 }
 
 // RailOption describes a single payment rail with its credit limits.
@@ -585,6 +576,27 @@ type RailOption struct {
 	Enabled    bool   `json:"enabled"`
 	MinCredits int64  `json:"min_credits"`
 	MaxCredits int64  `json:"max_credits"`
+
+	// PriceMinorNumerator and PriceCreditsDenominator are the EXACT price of one
+	// credit on this rail, in this rail's own Currency, as a fraction:
+	//
+	//	amount_minor = floor(credits * PriceMinorNumerator / PriceCreditsDenominator)
+	//
+	// The console applies that formula to the quantity the payer typed and
+	// renders the result, so what the modal shows is what InitiateCheckout
+	// charges. Both halves of the fraction are whole numbers below 2^53 - 1, so
+	// JavaScript reads them exactly and does the division in BigInt.
+	//
+	// A fraction rather than a scalar because a scalar cannot be exact. The
+	// previous wire sent the price of one CreditsPerUSD block already truncated
+	// to whole minor units and let the console multiply it by the block count.
+	// That is exact in dollars, where a block costs a whole 106 cents, and it
+	// stopped being exact in taka when D-066 replaced the 5 percent FX markup
+	// with 2.5 percent: a mid rate of 127 becomes an effective 130.175, a block
+	// costs 13798.55 paisa, and dropping that half paisa on every block
+	// under-quoted the payer a little more with every block they bought.
+	PriceMinorNumerator     int64 `json:"price_minor_numerator"`
+	PriceCreditsDenominator int64 `json:"price_credits_denominator"`
 }
 
 // RailLabel returns the customer-facing name of a payment rail.
@@ -620,15 +632,68 @@ func RailLabel(r Rail) string {
 // NewRailOption builds the wire option for one rail. `enabled` says whether the
 // deployment can actually execute a checkout on it. Defined once so the real
 // service and the demo stub cannot drift into two different payload shapes.
-func NewRailOption(rail Rail, enabled bool) RailOption {
-	return RailOption{
-		Rail:       rail,
-		Label:      RailLabel(rail),
-		Currency:   localCurrencyFor(rail),
-		Enabled:    enabled,
-		MinCredits: MinPurchaseCredits,
-		MaxCredits: maxCreditsForRail(rail),
+//
+// effectiveRate is the FX snapshot's effective rate, and it is REQUIRED for a
+// rail that settles in local currency. Pricing a taka rail without one would
+// quote the dollar figure under a taka label, which is the same defect the
+// per-account price had, only off by the whole exchange rate. It is ignored for
+// a rail that settles in USD, which does no conversion and takes no FX markup.
+func NewRailOption(rail Rail, enabled bool, effectiveRate string) (RailOption, error) {
+	rate := ""
+	if isBDRail(rail) {
+		if effectiveRate == "" {
+			return RailOption{}, fmt.Errorf("payments: rail %s settles in local currency and needs an effective FX rate", rail)
+		}
+		rate = effectiveRate
 	}
+
+	numerator, denominator, err := railPriceFraction(rate)
+	if err != nil {
+		return RailOption{}, err
+	}
+
+	return RailOption{
+		Rail:                    rail,
+		Label:                   RailLabel(rail),
+		Currency:                localCurrencyFor(rail),
+		Enabled:                 enabled,
+		MinCredits:              MinPurchaseCredits,
+		MaxCredits:              maxCreditsForRail(rail),
+		PriceMinorNumerator:     numerator,
+		PriceCreditsDenominator: denominator,
+	}, nil
+}
+
+// maxSafeJSNumber is 2^53 - 1, the largest integer a JSON number survives
+// intact in a browser. Every JSON number is a float64 there, so a value past
+// this arrives at the console silently rounded.
+const maxSafeJSNumber int64 = 9007199254740991
+
+// railPriceFraction turns the exact per-credit price into the whole-number
+// fraction the console divides with, in lowest terms.
+//
+// The bound check is the point of the function. big.Rat will happily hand back
+// a numerator with forty digits for a pathological rate, JSON will happily
+// serialise it, and the browser will silently round it and price the purchase
+// wrong with nothing to show for it. Refusing to answer is the failure a
+// customer and an on-call engineer can both see; a quietly rounded price is
+// not. Real rates come nowhere near the bound: FXService formats the effective
+// rate to six decimal places, which caps the denominator at CreditIncrement x
+// 100 x 1e6 = 1e15 before reduction.
+func railPriceFraction(effectiveRate string) (int64, int64, error) {
+	rate, err := PriceRatePerCredit(effectiveRate)
+	if err != nil {
+		return 0, 0, err
+	}
+	num, den := rate.Num(), rate.Denom()
+	if !num.IsInt64() || !den.IsInt64() {
+		return 0, 0, fmt.Errorf("payments: price fraction %s does not fit in an int64", rate.RatString())
+	}
+	n, d := num.Int64(), den.Int64()
+	if n <= 0 || n > maxSafeJSNumber || d <= 0 || d > maxSafeJSNumber {
+		return 0, 0, fmt.Errorf("payments: price fraction %d/%d is outside the range a JSON number carries exactly", n, d)
+	}
+	return n, d, nil
 }
 
 // MostRestrictiveMaxCredits returns the smallest per-rail purchase ceiling among
@@ -656,19 +721,21 @@ func MostRestrictiveMaxCredits(options []RailOption) int64 {
 	return minMax
 }
 
-// GetCheckoutOptions returns available payment rails, predefined tiers, and
-// the per-country resolved pricing primitive for the account.
+// GetCheckoutOptions returns the payment rails available to the account, the
+// predefined tiers, the purchase bounds, and the resolved price of a credit on
+// each rail.
 //
-// Branching, in both cases through PriceForCredits so the quote carries the
-// same 6 percent markup the charge does:
-//   - BD accounts → resolve via FX snapshot to BDT paisa. PricePerBlockMinor is
-//     the marked-up USD price of one block converted at the effective rate,
-//     which already has the FX markup folded into it.
-//   - non-BD accounts → 106 cents per `CreditBlockSize` (= `CreditsPerUSD`)
-//     credits: 1 USD at the peg plus the markup, and no FX markup at all.
+// One FX snapshot is taken for the whole call, and only when the account is
+// offered a rail that settles in local currency. Both BD rails then quote from
+// the same rate, which is also what a purchase on either of them will be
+// charged at: FXService caches the mid rate for five minutes, so a quote and
+// the checkout that follows it agree unless the payer sits on the modal longer
+// than that.
 //
-// FX rate is computed server-side only and never returned. If FX is
-// unavailable for a BD account, the FX provider error surfaces.
+// The rate is never returned. What leaves this function is the resolved price
+// of one credit on one rail, with the 6 percent purchase markup (D-065) and the
+// 2.5 percent FX markup (D-066) already folded in and not separable, which is
+// what D-066 requires: the payer sees one price and no fee line.
 func (s *Service) GetCheckoutOptions(ctx context.Context, accountID uuid.UUID) (*CheckoutOptions, error) {
 	countryCode, err := s.profiles.CountryCode(ctx, accountID)
 	if err != nil {
@@ -676,6 +743,20 @@ func (s *Service) GetCheckoutOptions(ctx context.Context, accountID uuid.UUID) (
 	}
 
 	available := AvailableRails(countryCode)
+
+	effectiveRate := ""
+	for _, rail := range available {
+		if !isBDRail(rail) {
+			continue
+		}
+		snap, err := s.fx.CreateSnapshot(ctx, s.repo, accountID)
+		if err != nil {
+			return nil, fmt.Errorf("payments: create FX snapshot: %w", err)
+		}
+		effectiveRate = snap.EffectiveRate
+		break
+	}
+
 	railOptions := make([]RailOption, 0, len(available))
 	for _, rail := range available {
 		// A rail is offered only if this deployment registered it, which it
@@ -683,53 +764,20 @@ func (s *Service) GetCheckoutOptions(ctx context.Context, accountID uuid.UUID) (
 		// unregistered rail would hand the payer a choice that InitiateCheckout
 		// refuses.
 		_, configured := s.rails[rail]
-		railOptions = append(railOptions, NewRailOption(rail, configured))
-	}
-
-	priceMinor, currency, err := s.resolvePricePerUSDBlock(ctx, countryCode, accountID)
-	if err != nil {
-		return nil, fmt.Errorf("payments: resolve price per credit: %w", err)
+		opt, err := NewRailOption(rail, configured, effectiveRate)
+		if err != nil {
+			return nil, fmt.Errorf("payments: price rail %s: %w", rail, err)
+		}
+		railOptions = append(railOptions, opt)
 	}
 
 	return &CheckoutOptions{
-		Rails:              railOptions,
-		PredefinedTiers:    PredefinedTiers,
-		PricePerBlockMinor: priceMinor,
-		CreditBlockSize:    CreditsPerUSD,
-		Currency:           currency,
-		CreditIncrement:    CreditIncrement,
-		MinCredits:         MinPurchaseCredits,
-		MaxCredits:         MostRestrictiveMaxCredits(railOptions),
+		Rails:           railOptions,
+		PredefinedTiers: PredefinedTiers,
+		CreditIncrement: CreditIncrement,
+		MinCredits:      MinPurchaseCredits,
+		MaxCredits:      MostRestrictiveMaxCredits(railOptions),
 	}, nil
-}
-
-// resolvePricePerUSDBlock returns the resolved minor-units price for one
-// `CreditsPerUSD` block of credits (i.e. 1 USD-equivalent), and the ISO
-// 4217 currency code, branching on the account's country.
-//
-// All arithmetic uses `math/big` to avoid float64 corruption (per
-// `CLAUDE.md` math/big mandate for financial calcs).
-func (s *Service) resolvePricePerUSDBlock(ctx context.Context, countryCode string, accountID uuid.UUID) (int64, string, error) {
-	// One block is CreditsPerUSD credits, and it is priced through the SAME
-	// function InitiateCheckout prices a real purchase with. The quoted price
-	// and the charged price cannot disagree about the markup, because there is
-	// only one place either of them can get it from.
-	if countryCode == "BD" {
-		snap, err := s.fx.CreateSnapshot(ctx, s.repo, accountID)
-		if err != nil {
-			return 0, "", fmt.Errorf("payments: create FX snapshot: %w", err)
-		}
-		price, err := PriceForCredits(CreditsPerUSD, snap.EffectiveRate)
-		if err != nil {
-			return 0, "", err
-		}
-		return price.LocalMinor, "BDT", nil
-	}
-	price, err := PriceForCredits(CreditsPerUSD, "")
-	if err != nil {
-		return 0, "", err
-	}
-	return price.USDCents, "USD", nil
 }
 
 // maxCreditsForRail returns the maximum purchasable credits for a given rail.

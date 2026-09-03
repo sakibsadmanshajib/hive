@@ -10,7 +10,8 @@ import {
 // Drives the *full proxied path* a browser-side BD customer hits when
 // loading /console/billing, then fetches the underlying control-plane JSON
 // via the proxy and asserts the CheckoutOptions wire shape the console
-// depends on (currency, price_per_block_minor, credit_block_size).
+// depends on: every rail carries its own currency and its own exact price
+// fraction, which is what the checkout modal renders an amount from.
 //
 // Spec is env-gated. Skips when E2E_VERIFIED_EMAIL/PASSWORD absent
 // (CI without seeded fixtures, local without a logged-in account).
@@ -73,7 +74,7 @@ test.describe("billing checkout-rails contract (FX-17-08)", () => {
     ).toBeGreaterThan(0);
 
     expect(responseBody).toContain('"currency"');
-    expect(responseBody).toContain('"price_per_block_minor"');
-    expect(responseBody).toContain('"credit_block_size"');
+    expect(responseBody).toContain('"price_minor_numerator"');
+    expect(responseBody).toContain('"price_credits_denominator"');
   });
 });

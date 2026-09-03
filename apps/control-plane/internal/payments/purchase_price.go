@@ -172,3 +172,50 @@ func truncateToMinorUnit(amount *big.Rat) (int64, error) {
 	}
 	return whole.Int64(), nil
 }
+
+// PriceRatePerCredit returns the EXACT price of ONE credit as a rational
+// number, in the minor unit of the currency the purchase settles in: US cents
+// when effectiveRate is empty, the local currency's minor unit otherwise.
+//
+// It is the same rate PriceForCredits applies, published so a QUOTE can be
+// derived from it. The checkout options endpoint sends its numerator and
+// denominator to the console, which floors the identical product for whatever
+// quantity the payer typed, so the figure the modal shows is the figure the
+// rail charges.
+//
+// This exists because the console used to be handed the price of one
+// CreditsPerUSD block ALREADY TRUNCATED to a whole minor unit and multiplied
+// that. Exact for a USD payer, whose block costs a whole number of cents. Not
+// exact for a taka payer once D-066 replaced the 5 percent FX markup with 2.5
+// percent, because a mid rate with three decimals produces a block price with a
+// fraction of a paisa in it, and dropping that fraction on every block
+// under-quoted the payer by up to one paisa per block.
+//
+// TestQuotedRateReproducesTheChargedAmount pins it equal to PriceForCredits, so
+// the two cannot drift into quoting one price and charging another.
+func PriceRatePerCredit(effectiveRate string) (*big.Rat, error) {
+	local := effectiveRate != ""
+
+	// Steps 2 and 3 of the header's order of operations, per credit rather than
+	// per purchase: one credit is 1/CreditIncrement of a US cent at the D-046
+	// peg, times the markup when it applies.
+	rate := new(big.Rat).SetFrac(big.NewInt(1), big.NewInt(CreditIncrement))
+	if !local || PurchaseMarkupAppliesToLocalCurrency {
+		multiplier, err := markupMultiplier(PurchaseMarkupRate)
+		if err != nil {
+			return nil, err
+		}
+		rate.Mul(rate, multiplier)
+	}
+	if !local {
+		return rate, nil
+	}
+
+	// Step 4. No rounding happens here, which is the whole point: the caller
+	// truncates once, at the end, against the quantity actually being bought.
+	fx, ok := new(big.Rat).SetString(effectiveRate)
+	if !ok {
+		return nil, fmt.Errorf("payments: invalid effective rate %q", effectiveRate)
+	}
+	return rate.Mul(rate, fx), nil
+}
