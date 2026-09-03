@@ -13,7 +13,11 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import VideoInputMenu from './CallOverlay/VideoInputMenu.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
-	import { createVoiceActivityState, stepVoiceActivity } from '$lib/hive/voiceActivity';
+	import {
+		createVoiceActivityState,
+		shouldSuppressCapture,
+		stepVoiceActivity
+	} from '$lib/hive/voiceActivity';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 
 	const i18n = getContext('i18n');
@@ -212,11 +216,20 @@
 					];
 				}
 
-				const audioBlob = new Blob(_audioChunks, { type: 'audio/wav' });
-				await transcribeHandler(audioBlob);
-
-				confirmed = false;
-				loading = false;
+				try {
+					const audioBlob = new Blob(_audioChunks, { type: 'audio/wav' });
+					await transcribeHandler(audioBlob);
+				} finally {
+					// `submitPrompt` inside transcribeHandler is awaited with no
+					// catch of its own, so an exception from the model turn used
+					// to escape here as an unhandled rejection with `loading`
+					// still true, leaving the overlay in its loading state
+					// forever. That was merely ugly before. It is fatal now:
+					// capture is suppressed while `loading` holds, so a stuck
+					// flag would mean a call that never hears anything again.
+					confirmed = false;
+					loading = false;
+				}
 			}
 		} else {
 			audioChunks = [];
@@ -350,9 +363,24 @@
 				analyser.getByteTimeDomainData(timeDomainData);
 				rmsLevel = calculateRMS(timeDomainData);
 
-				if (muted || (assistantSpeaking && !($settings?.voiceInterruption ?? false))) {
+				if (
+					shouldSuppressCapture({
+						muted,
+						assistantSpeaking,
+						turnInFlight: loading,
+						voiceInterruption: $settings?.voiceInterruption ?? false
+					})
+				) {
 					// The microphone is still live, but nothing it hears counts:
-					// muted, or the assistant is talking and interruption is off.
+					// muted, the assistant is talking, or the utterance already
+					// captured is still being transcribed and answered. That last
+					// one is the other half of issue #1627: stopRecordingCallback
+					// restarts capture before the turn it just captured has
+					// finished, and text-to-speech does not begin until the model
+					// has, so the seconds in between used to be fully live. Every
+					// sentence spoken across one slow turn opened another
+					// concurrent transcription, which is how one person reaches a
+					// provider's rate limit.
 					rmsLevel = 0;
 				}
 

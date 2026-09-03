@@ -167,3 +167,51 @@ export const stepVoiceActivity = (
 
 	return { state: { ...state, listeningSince, lastSoundAt }, action: 'listening' };
 };
+
+export interface CaptureSuppression {
+	/** The user is holding the microphone shut. */
+	muted: boolean;
+	/** Text-to-speech is playing the assistant's answer. */
+	assistantSpeaking: boolean;
+	/** The utterance already captured is still being transcribed and answered. */
+	turnInFlight: boolean;
+	/** The setting that allows talking over the assistant. */
+	voiceInterruption: boolean;
+}
+
+/**
+ * Whether an analyser frame counts for nothing, so no new utterance may begin
+ * from it (issue #1627).
+ *
+ * `turnInFlight` is the half PR #1662 did not reach, and it is what makes a
+ * provider rate limit reachable from one person talking. `stopRecordingCallback`
+ * restarts capture BEFORE the utterance it just captured has been transcribed
+ * and answered, and the only suppressions here were mute and a playing voice.
+ * Text-to-speech does not begin until the model has finished, so the several
+ * seconds of transcription and generation in between left the microphone fully
+ * live: every sentence spoken across one slow turn opened another concurrent
+ * transcription and another model turn, bounded by nothing but how fast a
+ * person can talk. Suppressing there makes one utterance cost one request,
+ * which is the fix for the flood rather than for the number the provider
+ * refuses at.
+ *
+ * The order is the meaning. Mute is the user's own hand on the microphone and
+ * nothing overrides it. `voiceInterruption` is the existing setting for talking
+ * over the assistant; a turn in flight is that same situation one step earlier,
+ * so it answers to the same setting rather than to a second one nobody knows
+ * to look for.
+ */
+export const shouldSuppressCapture = ({
+	muted,
+	assistantSpeaking,
+	turnInFlight,
+	voiceInterruption
+}: CaptureSuppression): boolean => {
+	if (muted) {
+		return true;
+	}
+	if (voiceInterruption) {
+		return false;
+	}
+	return assistantSpeaking || turnInFlight;
+};
