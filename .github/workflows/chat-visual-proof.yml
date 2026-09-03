@@ -78,13 +78,17 @@ on:
           #1718 instead: a question needing live data, sent with the globe
           untouched, answered with the model's own web_search or web_fetch call
           and a rendered source list, plus a control turn on an alias the
-          catalog reports as not tool capable.
+          catalog reports as not tool capable. instructions photographs the
+          claim in issue #1363: a standing instruction written in Settings,
+          read back from the backend after a full page reload, and an answer to
+          an unrelated question that obeys it.
         required: false
         default: chat
         type: choice
         options:
           - chat
           - webtools
+          - instructions
   pull_request:
     branches: [main]
     # Deliberately the Hive-owned chat paths and not vendor/open-webui as a
@@ -676,6 +680,26 @@ jobs:
             exit 1
           fi
 
+      - name: Aim the capture at the custom instructions claim
+        # Only for the `instructions` scenario. Everything here is environment
+        # for the capture script, which defaults it off, so a `chat` run reaches
+        # the capture with exactly the values it had before this step existed.
+        #
+        # The instruction and the question are deliberately unrelated. Asking
+        # "reply in one word" and then checking for one word would be satisfied
+        # by a model that never saw the instruction at all, because that is what
+        # a model does with that question anyway. A nonsense terminator cannot
+        # be produced by accident from "what colour is a banana", so a reply
+        # carrying it is a reply the stored text reached.
+        if: github.event.inputs.scenario == 'instructions'
+        run: |
+          set -euo pipefail
+          {
+            echo "PROOF_SET_INSTRUCTIONS=Finish every reply with the single word BANANAPHONE on its own line."
+            echo "PROOF_PROMPT=What colour is a banana? Reply with only the single colour word."
+            echo "PROOF_REPLY_PATTERN=bananaphone"
+          } >> "$GITHUB_ENV"
+
       - name: Aim the capture at the web tools claim
         # Only for the `webtools` scenario. Everything here is environment for
         # the capture script, which defaults every one of these off, so a `chat`
@@ -1237,6 +1261,9 @@ jobs:
             exit 1
           fi
           caption="Signed-in Hive chat, captured in CI against a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase, its own registered OAuth client and a real streamed completion. Run ${GITHUB_RUN_ID}."
+          if [ "${SCENARIO:-chat}" = "instructions" ]; then
+            caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. A standing custom instruction is written in Settings and saved, the page is fully reloaded and the text is read back from the Hive backend rather than from the browser, and an unrelated question is then answered in a way that obeys it. Run ${GITHUB_RUN_ID}."
+          fi
           if [ "${SCENARIO:-chat}" = "webtools" ]; then
             caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. A question needing live data, sent with the web search toggle off and features.web_search absent from the outgoing request, answered with the model's own tool call and a rendered source list; then the same question on ${PROOF_CONTROL_MODEL:-a non tool capable alias}, whose every enabled route reports tools_supported = false, settling with no source list. Run ${GITHUB_RUN_ID}."
           fi

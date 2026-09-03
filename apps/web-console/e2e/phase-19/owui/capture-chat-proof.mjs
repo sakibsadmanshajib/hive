@@ -78,6 +78,17 @@ const CONTROL_MODEL = (process.env.PROOF_CONTROL_MODEL ?? "").trim();
 // configuration to have taken.
 const MODEL_PATTERN = new RegExp(process.env.PROOF_MODEL_PATTERN ?? "free", "i");
 
+// The custom-instructions claim (issue #1363). Off by default, so the capture
+// that runs on every chat pull request is unchanged by its existence.
+//
+// Set it to the instruction text and the run writes that text into Settings
+// before it sends anything, photographs the saved pane, and then holds the
+// assistant's reply to PROOF_REPLY_PATTERN. That pairing is the whole proof:
+// an instruction nobody could satisfy by accident, and a reply to an unrelated
+// question that satisfies it anyway. A screenshot of a filled-in textarea alone
+// would prove a textarea, which is not the claim.
+const SET_INSTRUCTIONS = (process.env.PROOF_SET_INSTRUCTIONS ?? "").trim();
+
 if (!OUT_DIR) {
   console.error("::error::PROOF_OUT is not set, so there is nowhere to write the capture");
   process.exit(2);
@@ -149,6 +160,50 @@ async function settledTurn(page) {
   return { turn, text };
 }
 
+/**
+ * Opens Settings, writes `text` into the custom-instructions box and saves.
+ *
+ * Every step is fatal on failure rather than skipped. A run that could not find
+ * the control, or could not save, must not go on to photograph a reply and
+ * present it as proof that instructions were applied: the reply would then be
+ * evidence of nothing, and it would look identical to a working one.
+ *
+ * The placeholder is the selector because it belongs to this control and to no
+ * other. The pane's heading is a translated string and its position moves; the
+ * placeholder is Hive's own and is asserted by
+ * vendor/open-webui/src/lib/hive/customInstructions.test.ts, so a rename breaks
+ * a unit test before it breaks this capture.
+ */
+async function writeCustomInstructions(page, text) {
+  await page.getByRole("button", { name: /user menu|open user profile menu/i }).first().click();
+  const settingsItem = page.getByText(/^settings$/i).first();
+  await settingsItem.waitFor({ state: "visible", timeout: 15_000 });
+  await settingsItem.click();
+
+  const box = page.getByPlaceholder(/for example: be concise/i);
+  await box.waitFor({ state: "visible", timeout: 20_000 });
+  // Enabled only once the read from edge-api has landed, so waiting for it is
+  // what stops this filling a box that is about to be overwritten by the load.
+  await box.and(page.locator(":not([disabled])")).waitFor({ state: "visible", timeout: 20_000 });
+  await box.fill(text);
+  record(`custom instructions typed: ${JSON.stringify(text)}`);
+  return box;
+}
+
+async function saveSettings(page) {
+  const save = page.getByRole("button", { name: /^save$/i }).last();
+  await save.waitFor({ state: "visible", timeout: 15_000 });
+  await save.click();
+  // The pane reports a save failure as a toast and keeps the modal open. If one
+  // appears, this capture has to stop: a run that swallowed it would go on to
+  // photograph a reply shaped by nothing.
+  const failure = page.getByText(/could not be saved|sign in again/i).first();
+  if (await failure.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    throw new Error(`saving the settings pane reported a failure: ${await failure.innerText()}`);
+  }
+  record("settings saved");
+}
+
 async function main() {
   mkdirSync(OUT_DIR, { recursive: true });
   const chromium = loadChromium();
@@ -196,6 +251,37 @@ async function main() {
     record("composer is present, so the session is live");
 
     shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "01-signed-in", note: NOTE }));
+
+    // Custom instructions (issue #1363), written and saved BEFORE anything is
+    // sent, so the turn captured further down is a turn the stored text had a
+    // chance to shape. Writing them afterwards would photograph the same two
+    // things in an order that proves nothing.
+    if (SET_INSTRUCTIONS) {
+      await writeCustomInstructions(page, SET_INSTRUCTIONS);
+      shots.push(
+        await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "01b-instructions-set", note: NOTE }),
+      );
+      await saveSettings(page);
+
+      // Reopened from scratch rather than trusting the pane still on screen.
+      // The text has to come back from edge-api on a fresh read, which is what
+      // separates "the save reached Hive's backend" from "the textarea still
+      // holds what was typed into it".
+      await page.reload({ waitUntil: "domcontentloaded" });
+      const reread = await writeCustomInstructions(page, SET_INSTRUCTIONS);
+      const persisted = await reread.inputValue();
+      if (persisted.trim() !== SET_INSTRUCTIONS) {
+        throw new Error(
+          `the instructions did not survive a reload: read back ${JSON.stringify(persisted)}`,
+        );
+      }
+      record("instructions read back from the backend after a reload");
+      shots.push(
+        await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "01c-instructions-persisted", note: NOTE }),
+      );
+      await page.keyboard.press("Escape");
+      await page.locator("#chat-input").waitFor({ state: "visible", timeout: 30_000 });
+    }
 
     // The model picker, because "which models does this tenant actually see"
     // is the question a catalog or visibility change is answered with, and it
@@ -288,6 +374,22 @@ async function main() {
     }
 
     shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "03-streamed-reply", note: NOTE }));
+
+    // Put the account back the way it was found. The fixture user is reused
+    // across runs, and an instruction left behind would quietly shape every
+    // later capture on it, including the default scenario's. Best effort: a
+    // failure here is worth a log line and not worth failing a capture that has
+    // already proven what it came to prove.
+    if (SET_INSTRUCTIONS) {
+      try {
+        await writeCustomInstructions(page, "");
+        await saveSettings(page);
+        record("custom instructions cleared, so later runs start from an empty box");
+        await page.keyboard.press("Escape");
+      } catch (error) {
+        record(`could not clear the custom instructions afterwards: ${error.message}`);
+      }
+    }
 
     // The feature half. A source list on this turn means a tool call was
     // executed and its result came back into the turn, and the turn was sent
