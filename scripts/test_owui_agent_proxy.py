@@ -57,6 +57,13 @@ class JSONResponse:
         self.content = content
 
 
+class StreamingResponse:
+    def __init__(self, body, media_type: str = '', headers=None) -> None:
+        self.body = body
+        self.media_type = media_type
+        self.headers = dict(headers or {})
+
+
 class APIRouter:
     def __init__(self) -> None:
         self.routes: dict[tuple[str, str], object] = {}
@@ -120,6 +127,46 @@ class RecordingSession:
     async def json(self, content_type=None):  # noqa: ARG002
         return RecordingSession.payload
 
+    # --- the streaming half (issue #1622) ---
+    #
+    # `get` is awaited rather than used as a context manager, because the
+    # session under test has to outlive the handler that opened it. The stub
+    # mirrors that shape exactly: get the wrong one and the module fails to
+    # run rather than passing against a shape production does not have.
+    closed = False
+    released = False
+    chunks: list[bytes] = [b'event: step\ndata: {"seq":1}\n\n']
+
+    async def get(self, url, headers=None):
+        RecordingSession.calls.append(
+            {'method': 'GET', 'url': url, 'headers': dict(headers or {}), 'json': None}
+        )
+        if RecordingSession.raises is not None:
+            raise RecordingSession.raises
+        return StreamedResponse()
+
+    async def close(self):
+        RecordingSession.closed = True
+
+
+class StreamedContent:
+    async def iter_any(self):
+        for chunk in RecordingSession.chunks:
+            yield chunk
+
+
+class StreamedResponse:
+    def __init__(self) -> None:
+        self.status = RecordingSession.status
+        self.content = StreamedContent()
+
+    async def json(self, content_type=None):  # noqa: ARG002
+        return RecordingSession.payload
+
+    def release(self):
+        RecordingSession.released = True
+
+
 def install_stubs() -> None:
     fastapi = types.ModuleType('fastapi')
     fastapi.APIRouter = APIRouter
@@ -128,6 +175,7 @@ def install_stubs() -> None:
     fastapi.Request = Request
     responses = types.ModuleType('fastapi.responses')
     responses.JSONResponse = JSONResponse
+    responses.StreamingResponse = StreamingResponse
     fastapi.responses = responses
     sys.modules['fastapi'] = fastapi
     sys.modules['fastapi.responses'] = responses
@@ -135,8 +183,9 @@ def install_stubs() -> None:
     aiohttp = types.ModuleType('aiohttp')
 
     class ClientTimeout:
-        def __init__(self, total=None) -> None:
+        def __init__(self, total=None, sock_read=None) -> None:
             self.total = total
+            self.sock_read = sock_read
 
     class ClientError(Exception):
         pass
@@ -203,6 +252,9 @@ def reset() -> None:
     RecordingSession.status = 200
     RecordingSession.payload = {'tasks': []}
     RecordingSession.raises = None
+    RecordingSession.closed = False
+    RecordingSession.released = False
+    RecordingSession.chunks = [b'event: step\ndata: {"seq":1}\n\n']
     TOKEN_HOLDER['token'] = 'user-supabase-token'
 
 
@@ -452,6 +504,97 @@ def check_events_cursor_params_are_validated() -> None:
     )
 
 
+def check_stream_carries_the_same_credential_split() -> None:
+    """The subscription is the same trust decision as every other route.
+
+    It is a separate code path from `_call` (it has to be: `_call` reads the
+    whole body before it returns anything), and a separate code path is exactly
+    where a credential split drifts. Worth its own check for that reason rather
+    than because the route is new.
+    """
+    reset()
+    good = str(uuid4())
+    response = run(proxy.stream_task_events(good, Request(), USER, after_seq='7'))
+
+    check(len(RecordingSession.calls) == 1, 'the stream must make exactly one upstream call')
+    call = RecordingSession.calls[0]
+    check(
+        call['url'] == f'http://edge-api:8080/v1/agent/tasks/{good}/events/stream?after_seq=7',
+        f"unexpected stream url {call['url']}",
+    )
+    headers = call['headers']
+    check(
+        headers.get('Authorization') == 'Bearer hk_shim_key_for_tests'
+        and headers.get(proxy.UPSTREAM_AUTH_HEADER) == 'Bearer user-supabase-token',
+        'the stream must carry the same credential split as every other route',
+    )
+    check(
+        headers.get('Accept') == 'text/event-stream',
+        'the stream must ask for an event stream rather than JSON',
+    )
+    check(
+        getattr(response, 'media_type', '') == 'text/event-stream',
+        'the response handed to the browser must be an event stream',
+    )
+    check(
+        response.headers.get('X-Accel-Buffering') == 'no',
+        'a buffered event stream is a stream in name only, so the hint must be set',
+    )
+
+    # The frames reach the caller, and the session is closed once they have.
+    # Leaking it would be invisible until the worker ran out of connections.
+    body = b''.join(run(_drain(response.body)))
+    check(b'"seq":1' in body, f'the stream relayed {body!r}')
+    check(RecordingSession.closed, 'the upstream session must be closed when the relay ends')
+    check(RecordingSession.released, 'the upstream response must be released when the relay ends')
+
+
+async def _drain(generator):
+    return [chunk async for chunk in generator]
+
+
+def check_stream_refusal_stays_an_http_status() -> None:
+    """A 404 upstream is a 404 here, never a 200 carrying an apology.
+
+    Once the event-stream content type is on the wire there is no status left
+    to send, and the front end would render the refusal as a run that did
+    nothing, which is the failure mode this whole surface exists to stop
+    making.
+    """
+    reset()
+    RecordingSession.status = 404
+    RecordingSession.payload = {'error': {'message': 'task not found'}}
+    response = run(proxy.stream_task_events(str(uuid4()), Request(), USER))
+
+    check(getattr(response, 'status_code', None) == 404, 'an upstream refusal must keep its status')
+    check(
+        getattr(response, 'media_type', '') != 'text/event-stream',
+        'a refusal must not be sent as an event stream',
+    )
+    check(RecordingSession.closed, 'the upstream session must be closed on a refusal too')
+
+
+def check_stream_refuses_a_bad_cursor_and_a_bad_task_id() -> None:
+    reset()
+    for bad in ('-1', 'abc', '1.5'):
+        try:
+            run(proxy.stream_task_events(str(uuid4()), Request(), USER, after_seq=bad))
+        except HTTPException as exc:
+            check(exc.status_code == 400, f'expected 400 for after_seq {bad!r}')
+        else:
+            failures.append(f'after_seq {bad!r} must be refused before any URL is built')
+        check(RecordingSession.calls == [], f'no upstream call may be made for after_seq {bad!r}')
+
+    reset()
+    try:
+        run(proxy.stream_task_events('../../secrets', Request(), USER))
+    except HTTPException as exc:
+        check(exc.status_code == 400, 'a task id that is not a UUID must be a 400')
+    else:
+        failures.append('a task id that is not a UUID reached a URL')
+    check(RecordingSession.calls == [], 'no upstream call may be made for a bad task id')
+
+
 for check_fn in (
     check_credentials_land_on_the_right_headers,
     check_no_user_token_is_refused_before_any_upstream_call,
@@ -462,6 +605,9 @@ for check_fn in (
     check_no_gateway_configuration_is_a_stated_503,
     check_transport_failures_are_stated_not_raised,
     check_events_cursor_params_are_validated,
+    check_stream_carries_the_same_credential_split,
+    check_stream_refusal_stays_an_http_status,
+    check_stream_refuses_a_bad_cursor_and_a_bad_task_id,
     check_every_route_is_behind_the_session_dependency,
 ):
     check_fn()

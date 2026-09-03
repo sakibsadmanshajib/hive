@@ -23,6 +23,15 @@ import (
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+
+	// streamClient serves the one call on this surface that is a connection
+	// rather than a request. It carries no Timeout on purpose: httpClient's
+	// 15 seconds is a bound on a short database operation, and applied to an
+	// event stream it would cut every run off after fifteen seconds, which
+	// looks exactly like a run that stopped. The stream is bounded instead by
+	// the request context, by control-plane's own ceiling, and by the client
+	// hanging up.
+	streamClient *http.Client
 }
 
 // NewClient creates a Client pointing at the control-plane base URL.
@@ -39,8 +48,9 @@ type Client struct {
 // an interactive request able to hang for five minutes.
 func NewClient(controlPlaneURL string) *Client {
 	return &Client{
-		baseURL:    strings.TrimRight(controlPlaneURL, "/"),
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		baseURL:      strings.TrimRight(controlPlaneURL, "/"),
+		httpClient:   &http.Client{Timeout: 15 * time.Second},
+		streamClient: &http.Client{},
 	}
 }
 
@@ -160,6 +170,42 @@ func (c *Client) Events(ctx context.Context, tenantID, userID, taskID uuid.UUID,
 		return nil, fmt.Errorf("agenttask.client: decode events response: %w", err)
 	}
 	return listResp.Events, nil
+}
+
+// StreamEvents opens one task's event subscription and hands back the open
+// body for the caller to relay.
+// GET /internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/events/stream?after_seq=.
+//
+// The caller owns the returned reader and must close it. Errors are mapped
+// the same way Events maps them, so a bad cursor is still ErrCursor and a
+// task belonging to somebody else is still ErrNotFound: a stream that opened
+// 200 and then explained itself in the body would be a refusal the browser
+// renders as a run that did nothing.
+func (c *Client) StreamEvents(ctx context.Context, tenantID, userID, taskID uuid.UUID, afterSeq int64) (io.ReadCloser, error) {
+	q := url.Values{}
+	q.Set("after_seq", strconv.FormatInt(afterSeq, 10))
+	path := c.basePath(tenantID, userID) + "/" + taskID.String() + "/events/stream?" + q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("agenttask.client: build request: %w", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	cpauth.SetHeader(req)
+
+	resp, err := c.streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("agenttask.client: request failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		drain(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusBadRequest {
+			return nil, ErrCursor
+		}
+		return nil, statusErr(resp.StatusCode)
+	}
+	return resp.Body, nil
 }
 
 // Files lists one task's workspace through control-plane and the launcher.

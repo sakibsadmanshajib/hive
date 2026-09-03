@@ -27,6 +27,9 @@ type TaskClient interface {
 	Get(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
 	Cancel(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
 	Events(ctx context.Context, tenantID, userID, taskID uuid.UUID, afterSeq int64, limit int) ([]Event, error)
+	// StreamEvents opens the per-run subscription and hands back the open
+	// body; the caller closes it.
+	StreamEvents(ctx context.Context, tenantID, userID, taskID uuid.UUID, afterSeq int64) (io.ReadCloser, error)
 	Files(ctx context.Context, tenantID, userID, taskID uuid.UUID) ([]WorkspaceFile, error)
 }
 
@@ -122,6 +125,12 @@ func (h *Handler) routeTaskByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleEvents(w, r, taskID)
+	case "events/stream":
+		if r.Method != http.MethodGet {
+			apierrors.Write(w, http.StatusMethodNotAllowed, apierrors.CodeInvalidRequest, "method not allowed")
+			return
+		}
+		h.handleEventStream(w, r, taskID)
 	case "files":
 		if r.Method != http.MethodGet {
 			apierrors.Write(w, http.StatusMethodNotAllowed, apierrors.CodeInvalidRequest, "method not allowed")
@@ -418,7 +427,7 @@ func writeTaskError(w http.ResponseWriter, err error) {
 func extractTaskPath(path string) (uuid.UUID, string, bool) {
 	rest := strings.Trim(strings.TrimPrefix(path, "/v1/agent/tasks/"), "/")
 	parts := strings.Split(rest, "/")
-	if len(parts) < 1 || len(parts) > 2 || parts[0] == "" {
+	if len(parts) < 1 || len(parts) > 3 || parts[0] == "" {
 		return uuid.Nil, "", false
 	}
 	id, err := uuid.Parse(parts[0])
@@ -427,6 +436,15 @@ func extractTaskPath(path string) (uuid.UUID, string, bool) {
 	}
 	if len(parts) == 1 {
 		return id, "", true
+	}
+	// The only three-segment suffix this surface has. Spelled out rather
+	// than joined generically so a path this handler does not serve stays a
+	// 404 here instead of reaching the switch as an unknown suffix.
+	if len(parts) == 3 {
+		if parts[1] == "events" && parts[2] == "stream" {
+			return id, "events/stream", true
+		}
+		return uuid.Nil, "", false
 	}
 	switch parts[1] {
 	case "cancel", "events", "files":
@@ -482,6 +500,69 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request, taskID uu
 		events = []Event{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+// handleEventStream serves GET /v1/agent/tasks/{id}/events/stream: the
+// per-run subscription control-plane produces, relayed to the customer.
+//
+// This hop authenticates once, for the life of the connection, and then
+// copies bytes. It deliberately does not parse the frames: the wire vocabulary
+// belongs to control-plane and the front end, and a middle hop that decoded
+// and re-encoded it would be a third place that has to be taught every new
+// frame, and a place a frame can be silently dropped.
+//
+// Every write is flushed. Without that the relay would accumulate a run's
+// whole output in a buffer and deliver it at the end, which is the defect
+// issue #1622 names rather than a slower version of the fix.
+func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, taskID uuid.UUID) {
+	user, ok := auth.UserFrom(r.Context())
+	if !ok || user == nil {
+		apierrors.Write(w, http.StatusUnauthorized, apierrors.CodeUnauthenticated, "unauthenticated")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "streaming unsupported")
+		return
+	}
+
+	var afterSeq int64
+	var err error
+	if raw := r.URL.Query().Get("after_seq"); raw != "" {
+		if afterSeq, err = strconv.ParseInt(raw, 10, 64); err != nil || afterSeq < 0 {
+			apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, ErrCursor.Error())
+			return
+		}
+	}
+
+	// Opened before any header is written, so control-plane's refusal is
+	// still an HTTP status here rather than a 200 carrying an apology.
+	body, err := h.client.StreamEvents(r.Context(), user.TenantID, user.ID, taskID, afterSeq)
+	if err != nil {
+		writeTaskError(w, err)
+		return
+	}
+	defer body.Close()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		if readErr != nil {
+			return
+		}
+	}
 }
 
 // handleFiles serves GET /v1/agent/tasks/{id}/files: the running session's

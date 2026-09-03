@@ -53,7 +53,7 @@ from uuid import UUID
 
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from open_webui.utils.auth import get_verified_user
 
@@ -64,6 +64,20 @@ router = APIRouter()
 # slow on the far side of edge-api and reports itself through the task's own
 # status, not by holding this connection open.
 UPSTREAM_TIMEOUT_SECONDS = 30
+
+# The one route that is a connection rather than a request (issue #1622).
+#
+# It carries no total timeout, because a run legitimately lasts longer than any
+# number that would be safe for the routes above, and cutting the connection at
+# thirty seconds would look exactly like a run that stopped. What bounds it
+# instead: control-plane's own thirty minute ceiling on one stream, the browser
+# hanging up, and the read timeout below.
+#
+# The read timeout is the one that matters here. Control-plane writes a comment
+# line every fifteen seconds precisely so a thinking run is never silent on the
+# wire, so sixty seconds of nothing means the far side is gone rather than
+# quiet, and holding the worker open for it would be a leak.
+STREAM_READ_TIMEOUT_SECONDS = 60
 
 # Bodies here are a pack name, a goal, and since issue #1065 the text of the
 # documents the person attached in the composer.
@@ -133,20 +147,13 @@ def _task_id(raw: str) -> str:
         raise HTTPException(status_code=400, detail='Invalid task id.')
 
 
-async def _call(
-    request: Request,
-    user,
-    method: str,
-    path: str,
-    payload: dict[str, Any] | None = None,
-) -> JSONResponse:
-    """One upstream call, with the shim key on Authorization and the user's
-    token on the carrier header.
+async def _prepare(request: Request, user, accept: str) -> tuple[str, dict[str, str]]:
+    """The upstream base and the two credentials, or a refusal.
 
-    Every failure below is reported to the browser as a plain sentence with no
-    internal detail in it: no URL, no upstream error text, no credential, and
-    no provider identity, which is this repository's standing rule for anything
-    that crosses a customer boundary.
+    Extracted so the streaming route below cannot drift from the buffered one
+    on the only thing either of them must never get wrong. There is one place
+    that decides which credential goes on which header, and one place that
+    fails closed when the user's token cannot be resolved.
     """
     base = _upstream_base()
     shim = _shim_key()
@@ -168,11 +175,29 @@ async def _call(
             detail='Your Hive sign-in could not be confirmed. Sign in again and retry.',
         )
 
-    headers = {
+    return base, {
         'Authorization': f'Bearer {shim}',
         UPSTREAM_AUTH_HEADER: f'Bearer {token}',
-        'Accept': 'application/json',
+        'Accept': accept,
     }
+
+
+async def _call(
+    request: Request,
+    user,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+) -> JSONResponse:
+    """One upstream call, with the shim key on Authorization and the user's
+    token on the carrier header.
+
+    Every failure below is reported to the browser as a plain sentence with no
+    internal detail in it: no URL, no upstream error text, no credential, and
+    no provider identity, which is this repository's standing rule for anything
+    that crosses a customer boundary.
+    """
+    base, headers = await _prepare(request, user, 'application/json')
     if payload is not None:
         headers['Content-Type'] = 'application/json'
 
@@ -337,6 +362,84 @@ async def list_task_events(
         # params from its own query parsing either way.
         path += '?' + qs.lstrip('&')
     return await _call(request, user, 'GET', path)
+
+
+@router.get('/tasks/{task_id}/events/stream')
+async def stream_task_events(
+    task_id: str,
+    request: Request,
+    user=Depends(get_verified_user),
+    after_seq: str | None = None,
+):
+    """The per-run subscription, relayed byte for byte (issue #1622).
+
+    Everything else here reads an answer and hands it back. This one holds a
+    connection open and copies what arrives on it, because the point of the
+    endpoint is that a step reaches the browser when the agent takes it rather
+    than when the browser next asks.
+
+    The bodies are never decoded. The frame vocabulary belongs to control-plane
+    and to the front end, and a middle hop that parsed and re-encoded it would
+    be a third place to teach every new frame and a place one could be
+    silently dropped.
+    """
+    id_ = _task_id(task_id)
+    path = f'/agent/tasks/{id_}/events/stream'
+    cursor = _cursor_param(after_seq, 'after_seq')
+    if cursor:
+        path += '?' + cursor.lstrip('&')
+
+    base, headers = await _prepare(request, user, 'text/event-stream')
+
+    # The session is not opened with `async with`: it has to outlive this
+    # function, since the response body is consumed by the generator below
+    # after the handler has returned. It is closed in that generator's finally,
+    # which runs whether the run ended or the browser hung up.
+    timeout = aiohttp.ClientTimeout(total=None, sock_read=STREAM_READ_TIMEOUT_SECONDS)
+    session = aiohttp.ClientSession(timeout=timeout)
+    try:
+        response = await session.get(f'{base}{path}', headers=headers)
+    except asyncio.TimeoutError:
+        await session.close()
+        raise HTTPException(
+            status_code=504,
+            detail='The agent service took too long to answer. Try again shortly.',
+        )
+    except aiohttp.ClientError:
+        await session.close()
+        raise HTTPException(
+            status_code=502,
+            detail='The agent service could not be reached. Try again shortly.',
+        )
+
+    if response.status != 200:
+        # A refusal stays an HTTP status. Once a 200 and the event-stream
+        # content type are out there is nothing left to refuse with, and the
+        # front end would render the refusal as a run that did nothing.
+        try:
+            body = await response.json(content_type=None)
+        except (ValueError, aiohttp.ClientError, asyncio.TimeoutError):
+            body = {'error': {'message': 'The agent service returned an unreadable response.'}}
+        status = response.status
+        response.release()
+        await session.close()
+        return JSONResponse(status_code=status, content=body)
+
+    async def relay():
+        try:
+            async for chunk in response.content.iter_any():
+                yield chunk
+        finally:
+            response.release()
+            await session.close()
+
+    return StreamingResponse(
+        relay(),
+        media_type='text/event-stream',
+        # Named for whatever sits between this worker and the browser. A
+        # buffered event stream is a stream in name only.
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
 
 
 @router.get('/tasks/{task_id}/files')
