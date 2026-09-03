@@ -866,27 +866,48 @@ jobs:
 
           # Two waves, and caddy-owui is deliberately not in the first.
           #
-          # It declares `depends_on: open-webui: service_healthy`, and Open WebUI
-          # cold boots slowly: measured on a fresh database, 112 seconds from
-          # container start to its first passing health check, most of it its own
-          # alembic chain. Nothing in this repository defines that healthcheck,
-          # so it is inherited whole from the upstream base image with a test and
-          # nothing else, and Docker's defaults apply: start period 0s, interval
-          # 30s, three retries. The container is therefore declared unhealthy at
-          # about 90 seconds, roughly 22 seconds before it is actually up,
-          # compose treats that as a hard dependency failure, and the whole `up`
-          # aborts with "dependency failed to start" naming no cause. Docker
-          # itself recovers, flipping the container back to healthy on the first
-          # successful check, so the only thing that actually needed to happen
-          # was waiting. Filed as issue #1757: it is every fresh install, not
-          # only this job.
+          # It declares `depends_on: open-webui: service_healthy`, and Open
+          # WebUI's first boot is slow and variable: it runs its own alembic
+          # chain in full against a database that has never been migrated. On
+          # this runner, with owui-data freshly created, it answered /health
+          # 31 seconds after container start and compose saw it healthy at 70.
+          # Issue #1757 reports 112 seconds from a slower machine.
           #
-          # This job waits with a deadline it chooses and an error message that
-          # says what did not happen, instead of inheriting a compose file's
-          # judgement about how long a warm deployment should take. The
-          # healthcheck itself is left alone on purpose: widening it would change
-          # how every deployment detects a genuinely dead chat container, which
-          # is a product decision and not this job's to make.
+          # This staging was written when that raced the healthcheck. The
+          # healthcheck is defined in deploy/docker/docker-compose.yml, and at
+          # the time it gave a 30s start period, which put the unhealthy
+          # verdict at a measured 70 seconds. That is the same 70 seconds this
+          # runner needs to finish booting, which is why the defect was
+          # intermittent rather than universal: the verdict and the boot were
+          # racing. When the verdict won, compose aborted the whole `up` with
+          # "dependency failed to start", naming no cause. Issue #1757 widened
+          # the start period to 240s, roughly 3.5x the slowest boot observed,
+          # so the race is gone and a plain `up --profile chat` completes cold.
+          #
+          # An earlier revision of this comment said the healthcheck was
+          # inherited from the upstream base image with Docker's defaults of a
+          # 0s start period, a 30s interval and three retries, putting the
+          # verdict at 90 seconds. That was wrong in every number: a
+          # compose-level healthcheck overrides the image's, and this repository
+          # has defined one since PR #960.
+          #
+          # The staging is kept anyway, and is not redundant. Because
+          # caddy-owui is held out of the wave below, a slow Open WebUI boot
+          # cannot produce the caddy-owui to open-webui dependency failure
+          # here; the wait after this step polls Open WebUI's own /health from
+          # inside the container against the 420s deadline, and says what did
+          # not happen. Fold caddy-owui back into the wave and that stops being
+          # true: a boot that hangs would then surface as "dependency failed to
+          # start", naming no cause, only once the healthcheck reaches its
+          # verdict at about 290 seconds.
+          #
+          # Narrow claim, deliberately. This step can still fail with a
+          # dependency error from open-webui's OWN depends_on, which requires
+          # edge-api and control-plane to be service_healthy. Holding caddy-owui
+          # back removes one edge of the graph, not the whole class.
+          #
+          # Removing the staging is a separate decision, not a side effect of
+          # the healthcheck change.
           if ! docker compose --env-file ../../.env.ci up -d --build \
                  redis litellm markitdown searxng control-plane edge-api open-webui; then
             echo "::error::the chat stack did not come up"

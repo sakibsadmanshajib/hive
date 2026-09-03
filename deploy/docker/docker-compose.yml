@@ -2104,7 +2104,78 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      # 240s, and every number below was measured rather than reasoned about
+      # (issue #1757). Open WebUI's first boot runs its own alembic chain in
+      # full against a database that has never been migrated, which is slow and
+      # variable; a warm boot against an already-migrated database is an order
+      # of magnitude faster, which is why this only ever bites a fresh install.
+      #
+      # Cold boots observed, each with the owui-data volume freshly created:
+      #
+      #   fresh ubuntu-latest runner   answered /health at t+31s, compose saw
+      #                                the container healthy at t+70s
+      #   WSL2 dev box                 healthy at t+53s
+      #
+      # That 39s gap on the runner is wider than one interval, which the probe
+      # arithmetic below cannot produce on its own. The likeliest cause is the
+      # healthcheck's own curl hitting its 5s timeout while the alembic chain
+      # saturated the container, so "serving" and "healthy" can diverge by far
+      # more than one probe under exactly the conditions this start period
+      # exists for, which argues 240s is sized right rather than generously.
+      #
+      # Issue #1757 and the comment this replaced in chat-visual-proof.yml both
+      # cite 112s. That figure was NOT reproduced by either run above, so treat
+      # it as an upper observation from some slower machine rather than as the
+      # typical case. It is still what this value is sized against, since
+      # sizing against the fastest box seen is how you get back here.
+      #
+      # start_period is the correct knob and more retries is not. Probes that
+      # fail inside the start period do not count toward `retries` and do not
+      # mark the container unhealthy, so widening it buys headroom for a first
+      # boot without touching how fast a container that dies LATER is caught:
+      # that is still 5 consecutive failures at 10s, so 50s, exactly as before.
+      # Docker also ends the start period early on the first passing probe, so
+      # a healthy container reports healthy the moment it is up and nothing
+      # downstream waits any longer than it does today.
+      #
+      # At 30s, which is what this said before, the unhealthy verdict was
+      # measured at t+70s, and the arithmetic gives exactly that. Probes fire
+      # every `interval` from container start, and a failing probe counts
+      # toward `retries` once the elapsed time is no longer less than
+      # `start_period`, so the five counted failures landed at t=30, 40, 50, 60
+      # and 70. The naive `30 + 5*10 = 80s` overcounts by one interval, because
+      # it assumes the first counted failure comes an interval after the period
+      # ends rather than at it. Note that t+70s is
+      # exactly where the runner above finished booting, which is why this
+      # defect was intermittent rather than universal: the verdict and the boot
+      # were racing, and whichever won decided whether the stack came up.
+      # caddy-owui declares `depends_on: open-webui: service_healthy`, so when
+      # the verdict won, a cold `docker compose --profile chat up` aborted with
+      # "dependency failed to start: container ... is unhealthy", naming no
+      # cause at all. Docker recovered on its own moments later, so the only
+      # thing that ever needed to happen was waiting.
+      #
+      # 240s is roughly 3.5x the slowest cold boot actually observed and about
+      # twice the 112s the issue reports, so the race is gone under either
+      # figure. A container that never boots at all is still caught: with a
+      # probe rigged to always fail, the unhealthy verdict was measured at
+      # t+281s, which is the same arithmetic again, with counted failures at
+      # 240, 250, 260, 270 and 280. The naive `240 + 5*10 = 290s` is kept as
+      # the stated ceiling because it errs in the safe direction, and both
+      # numbers are inside the 300s `--wait-timeout` that
+      # .github/workflows/deploy-demo-box.yml gives its drift recreate.
+      #
+      # That recreate is not the only place the new verdict time lands. It
+      # carries the only explicit `--wait`, but the same workflow's
+      # `Rebuild + recreate changed services` step runs
+      # `up -d --build --remove-orphans` under the local and chat profiles,
+      # which include caddy-owui, and Compose honours a `service_healthy`
+      # condition with or without `--wait`. So that step
+      # blocks on Open WebUI's health too. Same shape as the recreate and
+      # equally harmless: an Open WebUI that never boots fails it at about
+      # t+281s rather than about t+70s, against that job's 30 minute
+      # timeout-minutes.
+      start_period: 240s
     # M10: bounded resources so a runaway pipeline / RAG batch cannot
     # starve the rest of the local stack. Numbers picked from observed
     # peak under a 10-user soak; revisit if Phase 24 packaging shifts.
