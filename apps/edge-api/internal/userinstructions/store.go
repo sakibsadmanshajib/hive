@@ -47,6 +47,14 @@ const MaxContentLen = 4000
 // empty, which means "clear my instructions" and is a legal request.
 var ErrTooLong = errors.New("userinstructions: content is too long")
 
+// The two format characters Sanitize keeps. Both are category Cf and both
+// change rendered glyphs in Indic and Arabic scripts and in emoji sequences,
+// so stripping them corrupts real text rather than removing decoration.
+const (
+	zeroWidthNonJoiner = '‌'
+	zeroWidthJoiner    = '‍'
+)
+
 // Store is the narrow data-access port for public.user_instructions. Every
 // method is scoped by the (tenantID, userID) pair the caller resolved from
 // the authenticated principal: tenant scope additionally comes from RLS
@@ -157,6 +165,22 @@ func (s *pgxStore) Put(ctx context.Context, tenantID, userID uuid.UUID, content 
 // removes the disagreement), and every remaining control character plus the
 // Unicode replacement character is dropped outright.
 //
+// FORMAT characters go too, with two named exceptions. unicode.IsControl
+// covers category Cc only, so before this the bidi overrides U+202A to U+202E
+// and U+2066 to U+2069 survived, along with zero-width spaces and joiners.
+// Those are invisible in the echo-back textarea, which is the whole problem:
+// text that reads one way to the person approving it and another way to
+// whatever renders it later. An override pair can reverse the apparent
+// meaning of a line while the box shows nothing at all.
+//
+// The exceptions are U+200C ZERO WIDTH NON-JOINER and U+200D ZERO WIDTH
+// JOINER, which are Cf and are kept deliberately. They are not decoration in
+// Bengali, Hindi or Arabic, they change which glyph is rendered, and Hive's
+// first market is Bangladesh. They also hold multi-codepoint emoji together.
+// Dropping them would silently corrupt legitimate text, which is a worse
+// failure than the invisibility they share with the overrides, and neither
+// can reorder a line the way a bidi override can.
+//
 // Empty output is a legal, meaningful answer, not an error: it means the
 // person cleared the box, which Put turns into a deleted row.
 func Sanitize(raw string) (string, error) {
@@ -167,7 +191,9 @@ func Sanitize(raw string) (string, error) {
 			return r
 		case r == '\r' || r == ' ' || r == ' ':
 			return '\n'
-		case unicode.IsControl(r) || r == unicode.ReplacementChar:
+		case r == zeroWidthNonJoiner || r == zeroWidthJoiner:
+			return r
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == unicode.ReplacementChar:
 			return -1
 		default:
 			return r

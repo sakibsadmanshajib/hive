@@ -272,11 +272,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Custom instructions (issue #1363): the standing "how should you respond"
-	// text this person wrote, prepended as its own system block. Runs AFTER
-	// the recall block above so it ends up FIRST in the messages array, which
-	// is the order it has to be in: instructions are what the user asked for,
-	// recall is background the system supplied, and a model reading the two
-	// should meet the request before the context.
+	// text this person wrote, inserted AFTER the system messages already at
+	// the front of the body rather than before them. The chat container has
+	// already spliced the deployment's own prompt in by this point, and that
+	// prompt carries the identity, citation and refusal guidance; a person's
+	// stylistic preference does not get to sit ahead of it. See
+	// injectAfterLeadingSystem for the full reasoning.
 	//
 	// Same degradation contract as recall: a read or injection failure logs
 	// and serves the turn unshaped.
@@ -285,7 +286,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if insErr != nil {
 			slog.Warn("custom instructions read failed; serving without them", "err", insErr)
 		} else if block := buildInstructionBlock(text); block != "" {
-			injected, injectErr := injectMemoryBlock(raw, block)
+			injected, injectErr := injectAfterLeadingSystem(raw, block)
 			if injectErr != nil {
 				slog.Warn("custom instructions injection failed; serving without them", "err", injectErr)
 			} else {

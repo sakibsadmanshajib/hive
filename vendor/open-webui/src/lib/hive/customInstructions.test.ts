@@ -34,29 +34,35 @@ describe('reading instructions', () => {
 		expect(seen?.method).toBe('GET');
 	});
 
-	it('treats absence and unavailability alike, because both render an empty box', async () => {
-		const cases: Array<() => Promise<Response>> = [
-			async () => jsonResponse(200, { content: '' }),
-			async () => jsonResponse(200, {}),
-			async () => jsonResponse(404, { detail: 'not configured' }),
-			async () => jsonResponse(503, { detail: 'unavailable' }),
-			async () => new Response('not json at all', { status: 200 })
+	it('reads a person who has written none as the empty string, not as a failure', async () => {
+		const stub = async () => jsonResponse(200, { content: '' });
+		expect(await getCustomInstructions(DEFAULT_INSTRUCTIONS_API_BASE_URL, stub)).toBe('');
+	});
+
+	it('reports every unreadable answer as null, never as an empty box', async () => {
+		// This is the guard, and it replaces a test that pinned the defect by
+		// asserting the opposite. Returning '' here meant the pane marked
+		// itself loaded and the person's next Save posted that empty string,
+		// which deletes the row: one 502 on load erased their instructions.
+		const unreadable: Array<[string, () => Promise<Response>]> = [
+			['a 404', async () => jsonResponse(404, { detail: 'not configured' })],
+			['a 502', async () => jsonResponse(502, { detail: 'bad gateway' })],
+			['a 503', async () => jsonResponse(503, { detail: 'unavailable' })],
+			['a 504', async () => jsonResponse(504, { detail: 'timed out' })],
+			[
+				'a network failure',
+				async () => {
+					throw new TypeError('Failed to fetch');
+				}
+			],
+			['a 200 carrying no JSON', async () => new Response('not json at all', { status: 200 })],
+			['a 200 with no content field', async () => jsonResponse(200, {})],
+			['a 200 whose content is not text', async () => jsonResponse(200, { content: { a: 1 } })]
 		];
-		for (const stub of cases) {
-			expect(await getCustomInstructions(DEFAULT_INSTRUCTIONS_API_BASE_URL, stub)).toBe('');
+		for (const [name, stub] of unreadable) {
+			const got = await getCustomInstructions(DEFAULT_INSTRUCTIONS_API_BASE_URL, stub);
+			expect(got, `${name} must read as unreadable, not as empty`).toBeNull();
 		}
-	});
-
-	it('survives a network failure without throwing at the settings pane', async () => {
-		const stub = async () => {
-			throw new TypeError('Failed to fetch');
-		};
-		expect(await getCustomInstructions(DEFAULT_INSTRUCTIONS_API_BASE_URL, stub)).toBe('');
-	});
-
-	it('ignores a non-string content field rather than rendering an object', async () => {
-		const stub = async () => jsonResponse(200, { content: { nested: true } });
-		expect(await getCustomInstructions(DEFAULT_INSTRUCTIONS_API_BASE_URL, stub)).toBe('');
 	});
 });
 
@@ -183,6 +189,25 @@ describe('the settings pane carries exactly one instructions control', () => {
 		const src = codeOnly('../components/chat/Chat.svelte');
 		expect(src).not.toContain('$settings.system');
 		expect(src).not.toContain('$settings?.system');
+	});
+
+	it('only marks the box loaded when the read actually succeeded', () => {
+		// The deletion this guards is one assignment away: `instructionsLoaded
+		// = true` unconditionally, which is what shipped in the first
+		// revision. The pane then saves an empty string over text it never
+		// read, and empty content deletes the row.
+		const src = codeOnly('../components/chat/Settings/General.svelte');
+		expect(src).toContain('instructionsLoaded = stored !== null');
+		expect(src).not.toContain('instructionsLoaded = true');
+		// The save is gated on the same flag, so an unreadable load skips the
+		// write entirely instead of posting over it.
+		expect(src).toContain('if (instructionsLoaded)');
+	});
+
+	it('tells the person their instructions could not be loaded', () => {
+		const src = component('../components/chat/Settings/General.svelte');
+		expect(src).toContain('instructionsUnreadable');
+		expect(src).toContain('could not be loaded');
 	});
 
 	it('keeps the client where the scratch-tree runner can load it', () => {

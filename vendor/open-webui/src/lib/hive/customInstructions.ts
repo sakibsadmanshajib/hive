@@ -43,18 +43,25 @@ export const MAX_INSTRUCTIONS_LENGTH = 4000;
 /**
  * Read the signed-in person's instructions.
  *
- * Returns the empty string both when they have written none and when the
- * surface is unavailable. Absence and unavailability collapse on purpose: the
- * caller renders an empty textarea either way, and the alternative is a
- * settings pane that shows an error banner to somebody who simply has not
- * written anything yet. A save failure is reported loudly, which is the half
- * that actually matters, because that is the one where the person believes
- * something was stored.
+ * `null` means UNREADABLE. A string, including the empty one, means read
+ * successfully, and empty means they have written none.
+ *
+ * These two must not collapse, and an earlier revision of this file collapsed
+ * them. Every failure returned `''`, the pane marked itself loaded, and the
+ * person's next Save posted that empty string over text they still had. Empty
+ * content deletes the row, so one 502 on load erased somebody's instructions
+ * the next time they opened Settings. The caller now refuses to save what it
+ * could not read.
+ *
+ * Same distinction `tolerateBoxed` draws in apps/web-console/lib/console/data.ts,
+ * with no box: that helper wraps because its own value is nullable and needs a
+ * third state. Here absence IS the empty string, so `string | null` already
+ * carries both meanings and a wrapper would add a layer over nothing.
  */
 export async function getCustomInstructions(
 	baseUrl: string = DEFAULT_INSTRUCTIONS_API_BASE_URL,
 	fetchImpl: typeof fetch = fetch
-): Promise<string> {
+): Promise<string | null> {
 	let response: Response;
 	try {
 		response = await fetchImpl(baseUrl, {
@@ -63,16 +70,20 @@ export async function getCustomInstructions(
 			credentials: 'include'
 		});
 	} catch {
-		return '';
+		return null;
 	}
-	if (!response.ok) return '';
+	if (!response.ok) return null;
 
 	try {
 		const body = await response.json();
 		const content = (body ?? {}).content;
-		return typeof content === 'string' ? content : '';
+		// A 200 whose body is not the shape this endpoint documents is not a
+		// read either. Answering '' here would be the same deletion by another
+		// route: a proxy returning an HTML error page with a 200 is exactly
+		// how that happens in practice.
+		return typeof content === 'string' ? content : null;
 	} catch {
-		return '';
+		return null;
 	}
 }
 

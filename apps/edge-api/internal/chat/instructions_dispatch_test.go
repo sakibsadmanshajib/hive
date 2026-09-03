@@ -110,15 +110,26 @@ func TestDispatchInjectsCustomInstructions(t *testing.T) {
 	require.Equal(t, "user", body.Messages[1].Role)
 }
 
-func TestDispatchPutsInstructionsAheadOfTheRecallBlock(t *testing.T) {
-	// The order is the assertion. Instructions are what the person asked for
-	// and recall is background the system supplied, so a model reading the
-	// system messages in order meets the request first. Swapping these two
-	// would leave both blocks present and every other test still green.
+func TestDispatchPutsInstructionsAfterTheSystemMessagesAlreadyPresent(t *testing.T) {
+	// The order is the assertion, and it is the opposite of what an earlier
+	// revision of this test pinned. The chat container splices the
+	// deployment's own prompt in before edge-api sees the body, and that
+	// prompt carries identity, citation and refusal guidance. A person's
+	// stylistic preference must not sit ahead of it, so the block goes after
+	// every leading system message, including the recall block.
 	srv, captured := captureUpstream(t)
 	accounting, billing := billedDeps(t)
 
-	rec := dispatchOnce(t, chat.Deps{
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"hive-fast","messages":[`+
+			`{"role":"system","content":"You are Hive. Refuse unsafe requests."},`+
+			`{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{
+		ID: uuid.New(), TenantID: uuid.New(), Role: "member",
+	}))
+	rec := httptest.NewRecorder()
+	chat.NewDispatch(chat.Deps{
 		Routing:      inference.NewRoutingClient(instructionsRouting(t).URL),
 		Accounting:   accounting,
 		Billing:      billing,
@@ -127,14 +138,42 @@ func TestDispatchPutsInstructionsAheadOfTheRecallBlock(t *testing.T) {
 		LiteLLMURL:   srv.URL,
 		DeploySHA:    "test",
 		Env:          "test",
+	}).ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	body := decodeWire(t, *captured)
+	require.Len(t, body.Messages, 4)
+	// Recall still prepends, which is #172's pre-existing behaviour and not
+	// this issue's to change.
+	require.Contains(t, body.Messages[0].Content, "Known about the user:")
+	require.Contains(t, body.Messages[1].Content, "Refuse unsafe requests")
+	require.Contains(t, body.Messages[2].Content, "Always answer in British English.")
+	require.Equal(t, "user", body.Messages[3].Role)
+}
+
+func TestDispatchWithNoLeadingSystemMessagePutsInstructionsFirst(t *testing.T) {
+	// "After zero leading system messages" is index 0. Without this the
+	// insertion point could be off by one on the commonest body shape of all,
+	// a bare user turn, and nothing above would notice.
+	srv, captured := captureUpstream(t)
+	accounting, billing := billedDeps(t)
+
+	rec := dispatchOnce(t, chat.Deps{
+		Routing:      inference.NewRoutingClient(instructionsRouting(t).URL),
+		Accounting:   accounting,
+		Billing:      billing,
+		Instructions: &fakeInstructions{text: "Always answer in British English."},
+		LiteLLMURL:   srv.URL,
+		DeploySHA:    "test",
+		Env:          "test",
 	}, uuid.New(), uuid.New())
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	body := decodeWire(t, *captured)
-	require.Len(t, body.Messages, 3)
+	require.Len(t, body.Messages, 2)
+	require.Equal(t, "system", body.Messages[0].Role)
 	require.Contains(t, body.Messages[0].Content, "Always answer in British English.")
-	require.Contains(t, body.Messages[1].Content, "Known about the user:")
-	require.Equal(t, "user", body.Messages[2].Role)
+	require.Equal(t, "user", body.Messages[1].Role)
 }
 
 func TestDispatchWithoutInstructionsAddsNoBlock(t *testing.T) {

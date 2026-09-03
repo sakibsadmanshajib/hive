@@ -54,11 +54,15 @@
 	let lang = $i18n.language;
 	let notificationEnabled = false;
 
-	// Custom instructions (#1363). `instructionsLoaded` gates the save: writing
-	// before the read has landed would post an empty box over text the person
-	// already had, which is silent data loss disguised as a save.
+	// Custom instructions (#1363). `instructionsLoaded` gates the save, and it
+	// is set only when the read actually SUCCEEDED, not merely when it
+	// finished. An unreadable load leaves it false, `saveHandler` skips the
+	// PUT entirely, and the box stays disabled, so a transient 502 on load can
+	// never post an empty string over text the person still has. Empty content
+	// deletes the row, so that mistake is not a stale render, it is deletion.
 	let customInstructions = '';
 	let instructionsLoaded = false;
+	let instructionsUnreadable = false;
 	let savingInstructions = false;
 
 	let showAdvanced = false;
@@ -183,10 +187,13 @@
 
 		notificationEnabled = $settings.notificationEnabled ?? false;
 
-		// Never throws: an unavailable surface reads as an empty box, and the
-		// loud half of this feature is the save, not the load.
-		customInstructions = await getCustomInstructions();
-		instructionsLoaded = true;
+		// Never throws. null means the read failed, which is NOT the same as an
+		// empty box: the box stays disabled and the save skips this field, so
+		// nothing overwrites what could not be read.
+		const stored = await getCustomInstructions();
+		instructionsUnreadable = stored === null;
+		customInstructions = stored ?? '';
+		instructionsLoaded = stored !== null;
 
 		params = { ...params, ...$settings.params };
 		params.stop = $settings?.params?.stop ? ($settings?.params?.stop ?? []).join(',') : null;
@@ -384,6 +391,18 @@
 			<div class=" mb-2 text-xs text-gray-500 dark:text-gray-400">
 				{$i18n.t('Applied to every conversation. Tell the assistant how you want it to respond.')}
 			</div>
+			{#if instructionsUnreadable}
+				<!--
+					Said out loud rather than rendered as an empty box. An empty box
+					would read as "you have written none", and the person's next Save
+					would have been asked to make that true.
+				-->
+				<div class=" mb-2 text-xs text-red-500" role="status">
+					{$i18n.t(
+						'Your custom instructions could not be loaded, so they are not editable right now. Anything you have saved before is unchanged. Reopen Settings to try again.'
+					)}
+				</div>
+			{/if}
 			<Textarea
 				bind:value={customInstructions}
 				disabled={!instructionsLoaded || savingInstructions}
