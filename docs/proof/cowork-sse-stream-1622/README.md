@@ -112,6 +112,15 @@ MODE=stream PORT=3423 OWUI_URL=http://127.0.0.1:3422 \
   node docs/proof/cowork-sse-stream-1622/agent-wire.mjs &
 APP_URL=http://127.0.0.1:3423 OUT_DIR=/tmp/proof-1622-sse LABEL=stream \
   PROOF_PASSWORD="$PW" node docs/proof/cowork-sse-stream-1622/capture.mjs
+
+# The control: the same run with the subscription answered 404, which is what a
+# deployment without this change does. Stop the wire above first. Both modes
+# listen on the same port, and a stale one still serving the stream would make
+# the control silently a second copy of the first run.
+MODE=poll PORT=3423 OWUI_URL=http://127.0.0.1:3422 \
+  node docs/proof/cowork-sse-stream-1622/agent-wire.mjs &
+APP_URL=http://127.0.0.1:3423 OUT_DIR=/tmp/proof-1622-sse LABEL=poll \
+  PROOF_PASSWORD="$PW" node docs/proof/cowork-sse-stream-1622/capture.mjs
 ```
 
 `@playwright/test` has to resolve for that last line. It is declared by

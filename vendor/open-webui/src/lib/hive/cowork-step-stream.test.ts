@@ -321,6 +321,20 @@ describe('the follower cannot spin or outlive its ceiling', () => {
 		expect(source).toMatch(/deadline - Date\.now\(\)/);
 	});
 
+	it('settles a run that hit the ceiling rather than leaving the turn mid-flight', () => {
+		// `live` false means "stop for good, the transcript is gone", and the
+		// caller returns on it without writing anything. A run that hit the
+		// ceiling is the opposite: it is still going, and the turn has to be
+		// settled as unknown the way the fallback loop settles it. So the
+		// ceiling aborts and does not touch `live`.
+		const source = chat();
+		const ceiling = source.slice(source.indexOf('const ceiling = setTimeout('));
+		expect(ceiling.slice(0, 160)).toContain('controller.abort()');
+		expect(ceiling.slice(0, 160)).not.toContain('live = false');
+		// And the loop still writes that settled status when its deadline passes.
+		expect(source).toMatch(/await applyCoworkRun\(_chatId, messageId, \{\s*status: 'unknown'/);
+	});
+
 	it('does not report its own abort as a broken connection', () => {
 		// Aborting makes the pending read reject rather than letting the
 		// stream resolve, so without this both deliberate stops arrive at the

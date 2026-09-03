@@ -2412,9 +2412,15 @@
 		// heartbeats never returns here on its own, and without this the
 		// constant that documents how long a tab keeps following a wedged run
 		// would not be enforced while it is actually following one.
+		// Deliberately does NOT clear `live`. `live` false means "stop for
+		// good, the transcript is gone", and the caller returns on it without
+		// settling the turn. A run that hit the ceiling is the opposite case:
+		// it is still going, nobody told it to stop, and the turn has to be
+		// settled as unknown the way the fallback loop settles it. Aborting
+		// alone returns the caller to its settle read and then out of the
+		// loop on its own deadline check, which is where that write lives.
 		const ceiling = setTimeout(
 			() => {
-				live = false;
 				controller.abort();
 			},
 			Math.max(0, deadline - Date.now())

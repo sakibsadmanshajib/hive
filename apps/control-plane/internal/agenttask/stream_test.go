@@ -33,12 +33,27 @@ type frame struct {
 // end", which is the defect.
 func readFrames(t *testing.T, body *bufio.Reader, n int, within time.Duration) []frame {
 	t.Helper()
+	// out is written by the reader goroutine and read by both branches of the
+	// select below, including the timeout branch, which runs while that
+	// goroutine is still going. Guarded rather than raced: a harness that only
+	// fails under -race is a worse report of a real defect than the defect.
+	var mu sync.Mutex
 	out := make([]frame, 0, n)
+	snapshot := func() []frame {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]frame(nil), out...)
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(out)
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		var current frame
-		for len(out) < n {
+		for count() < n {
 			line, err := body.ReadString('\n')
 			if err != nil {
 				return
@@ -53,7 +68,9 @@ func readFrames(t *testing.T, body *bufio.Reader, n int, within time.Duration) [
 				current.data = strings.TrimPrefix(line, "data: ")
 			case line == "":
 				if current.event != "" {
+					mu.Lock()
 					out = append(out, current)
+					mu.Unlock()
 					current = frame{}
 				}
 			}
@@ -65,13 +82,16 @@ func readFrames(t *testing.T, body *bufio.Reader, n int, within time.Duration) [
 		// has to be reported as one: reading the partial list would turn a
 		// stream that hung up early into an index panic, which is a worse
 		// report of the same defect.
-		if len(out) < n {
-			t.Fatalf("the stream ended after %d of %d frames: %v", len(out), n, out)
+		got := snapshot()
+		if len(got) < n {
+			t.Fatalf("the stream ended after %d of %d frames: %v", len(got), n, got)
 		}
+		return got
 	case <-time.After(within):
-		t.Fatalf("timed out after %s with %d of %d frames: %v", within, len(out), n, out)
+		got := snapshot()
+		t.Fatalf("timed out after %s with %d of %d frames: %v", within, len(got), n, got)
+		return nil
 	}
-	return out
 }
 
 // newStreamServer stands the internal mux up on a real listener, because a
