@@ -43,6 +43,7 @@ import (
 	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sovereign"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/userinstructions"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/webtools"
 	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
@@ -182,6 +183,11 @@ func main() {
 	// (#1326).
 	inference.RegisterZeroContentMetrics(promRegistry)
 	inferenceHandler := inference.NewHandler(orchestrator)
+	// One store, two readers: chat dispatch injects from it on every turn and
+	// the settings surface below reads and writes it. Sharing the value rather
+	// than constructing two is what makes "what I saved is what shapes my
+	// replies" true by construction instead of by convention.
+	userInstructionsStore := userinstructions.NewStore(dbPool)
 	chatDispatchHandler := chat.NewDispatch(chat.Deps{
 		Pool:    dbPool,
 		Routing: routingClient,
@@ -193,17 +199,29 @@ func main() {
 		Billing:    &metering.PGBillingAccountResolver{Pool: dbPool},
 		// Cross-chat recall (#172, D-020): reads public.user_memories under
 		// RLS. Injection degrades to no block until the migration is applied.
-		Memories:   chat.NewMemorySource(dbPool),
-		LiteLLMURL: resolveLiteLLMBaseURL(),
-		LiteLLMKey: resolveLiteLLMMasterKey(),
-		DeploySHA:  os.Getenv("DEPLOY_SHA"),
-		Env:        os.Getenv("HIVE_ENV"),
+		Memories: chat.NewMemorySource(dbPool),
+		// Custom instructions (#1363): the same store the user-facing
+		// /v1/user/instructions surface below reads and writes, so the text a
+		// person sees in their settings is byte for byte the text that shapes
+		// their turns. Degrades to no block until the migration is applied.
+		Instructions: userInstructionsStore,
+		LiteLLMURL:   resolveLiteLLMBaseURL(),
+		LiteLLMKey:   resolveLiteLLMMasterKey(),
+		DeploySHA:    os.Getenv("DEPLOY_SHA"),
+		Env:          os.Getenv("HIVE_ENV"),
 	})
 
 	openAIChatHandler := jwtAwareChatHandler(chatDispatchHandler, inferenceHandler)
 	mux.Handle("/v1/chat/completions", openAIChatHandler)
 	mux.Handle("/v1/completions", inferenceHandler)
 	mux.Handle("/v1/responses", inferenceHandler)
+
+	// The signed-in person's own custom instructions (#1363). Under /v1/ so it
+	// inherits the OWUI unwrap plus JWT selector every other route there runs
+	// behind, which is the whole reason this surface can resolve a person at
+	// all: the chat front end holds no credential addressed to control-plane's
+	// service-to-service memory API.
+	mux.Handle("/v1/user/instructions", userinstructions.NewHandler(userInstructionsStore))
 
 	// Embeddings are JWT-aware for the same reason chat completions are, and
 	// for one more (issue #1696). Open WebUI's Python retrieval path posts

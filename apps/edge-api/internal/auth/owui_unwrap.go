@@ -395,10 +395,21 @@ func hasShimAuthorization(header, shimKey string) bool {
 // so it stays reachable under the shim key alone, which is what lets the chat
 // container read the specifications once per process rather than once per
 // signed-in user.
+// Custom instructions (issue #1363) join for a fourth reason, not a billing
+// one: the row this surface reads and writes belongs to one named person, so
+// a call that arrives under the shim principal alone is asking to read or
+// overwrite whatever row the shim account resolves to. That is one shared
+// drawer standing in for every signed-in user, and the correct answer to it
+// is a refusal at this boundary rather than a decision further in. The
+// handler refuses a person-less principal on its own too; both exist because
+// a boundary that trusts its input because something downstream will check it
+// stops being safe the moment downstream moves. The path is decorated by
+// deploy/docker/owui-patches/hive_instructions.py.
 func requiresPerUserAuth(path string) bool {
 	return path == "/v1/chat/completions" ||
 		path == "/v1/embeddings" ||
 		path == "/v1/agent/tasks" ||
+		path == "/v1/user/instructions" ||
 		strings.HasPrefix(path, "/v1/agent/tasks/") ||
 		strings.HasPrefix(path, "/v1/tools/")
 }
