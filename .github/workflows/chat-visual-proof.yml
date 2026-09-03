@@ -698,8 +698,11 @@ jobs:
         if: github.event.inputs.scenario == 'voice'
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y espeak-ng
+          # Bounded. Neither call has a timeout of its own, so a stalled mirror
+          # would otherwise spend the whole job budget before the capture that
+          # this job exists for has started.
+          timeout 300 sudo apt-get update
+          timeout 300 sudo apt-get install -y espeak-ng
           espeak-ng --version
           echo "PROOF_SCENARIO=voice" >> "$GITHUB_ENV"
 

@@ -51,6 +51,10 @@ if (SCENARIO !== "chat" && SCENARIO !== "voice") {
   process.exit(2);
 }
 const VOICE = SCENARIO === "voice";
+// How long the transcription response is held open in the voice capture. Long
+// enough that the first two interruptions each complete an utterance and its
+// silence window while the upload is still in flight. See captureVoice.
+const TRANSCRIPTION_HOLD_MS = 6_000;
 // The prompt is deliberately one whose right answer is one word, so "the model
 // replied" is checkable rather than eyeballed. Same reasoning, and the same
 // question, as 01-chat-send-stream.spec.ts.
@@ -238,6 +242,32 @@ async function captureVoice(page, shots, fixture) {
   const startedAt = Date.now();
   const seen = watchTranscriptions(page, startedAt);
 
+  // The provider is held slow on purpose, and this is what makes the assertion
+  // below a real control rather than a lucky one.
+  //
+  // The window this fix closes is the transcription round trip. Left at its
+  // natural speed that window was about 1.3 seconds, and the first interruption
+  // begins 0.8 seconds after the opening utterance closes, so the overlap was
+  // real but thin: a faster provider would have closed the window before the
+  // interruption could open an utterance, the existing assistantSpeaking
+  // suppression would have carried the run on its own, and the capture would
+  // have reported one transcription whether or not this fix were present.
+  //
+  // Holding the response keeps the page's own fetch pending, which is exactly
+  // what a loaded provider does and exactly the condition the issue reports. It
+  // is not a fabricated state: it is the slow provider that produced the 429 in
+  // the first place, reproduced on demand. The hold covers the first two
+  // interruptions in full, so each of them has a complete utterance and a
+  // complete silence window inside the transcription interval. Without the fix
+  // each opens its own concurrent upload, and the peak concurrency this records
+  // goes above one.
+  await page.route("**/audio/transcriptions", async (route) => {
+    const response = await route.fetch();
+    record(`holding the transcription response for ${TRANSCRIPTION_HOLD_MS}ms, so the interruptions land inside the window this fix closes`);
+    await new Promise((resolve) => setTimeout(resolve, TRANSCRIPTION_HOLD_MS));
+    await route.fulfill({ response });
+  });
+
   const callButton = page.getByRole("button", { name: /voice mode/i });
   await callButton.waitFor({ state: "visible", timeout: 30_000 });
   await callButton.click();
@@ -297,6 +327,12 @@ async function captureVoice(page, shots, fixture) {
   if (transcript.length === 0) {
     throw new Error(
       "a transcription request was made but the conversation carries no turn, so nothing was transcribed into the chat",
+    );
+  }
+  if (seen.peakConcurrent > 1) {
+    throw new Error(
+      `${seen.peakConcurrent} transcriptions were open at once. That is the failure issue #1627 reports: ` +
+        "several uploads against one provider account until it answers 429.",
     );
   }
   if (calls.length > 1) {
