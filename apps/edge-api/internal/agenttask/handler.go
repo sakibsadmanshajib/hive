@@ -416,6 +416,14 @@ func writeTaskError(w http.ResponseWriter, err error) {
 		apierrors.Write(w, http.StatusConflict, apierrors.CodeInvalidRequest, "task already reached a terminal state")
 	case errors.Is(err, ErrCursor):
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, ErrCursor.Error())
+	case errors.Is(err, ErrTooManyStreams):
+		// A 429 with a sentence that says what to do, because this one is not
+		// a fault: the run is fine and still readable, and the front end drops
+		// back to its cursor read on anything that is not a refusal, so the
+		// person keeps seeing progress at the old cadence rather than a
+		// spinner or an error.
+		apierrors.Write(w, http.StatusTooManyRequests, apierrors.CodeInvalidRequest,
+			"this account already has as many live task streams open as it may; close a tab following a run, or reload to follow this one without a live stream")
 	default:
 		// Provider-blind: the underlying error (control-plane infra detail) is never echoed.
 		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "agent task request failed")

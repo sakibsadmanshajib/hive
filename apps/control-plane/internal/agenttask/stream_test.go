@@ -430,3 +430,43 @@ func TestHandler_EventStream_RefusesMoreStreamsThanOneUserMayHold(t *testing.T) 
 		t.Fatalf("a closed stream did not give its slot back: got %d", reopened.StatusCode)
 	}
 }
+
+// failingEventsRepo answers every status read and fails every event read,
+// which is the half-broken shape that used to be invisible: the stream stayed
+// open, kept reporting a healthy status, and silently stopped carrying steps.
+type failingEventsRepo struct {
+	*fakeRepository
+}
+
+func (f *failingEventsRepo) ListEvents(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, int64, int) ([]agenttask.TaskEvent, error) {
+	return nil, errors.New("event read failed")
+}
+
+// A stream whose EVENT reads keep failing ends too, not just one whose status
+// reads do.
+//
+// The event read is the one that carries the thing a person is waiting for, so
+// a stream that can read the status and nothing else is the worst of the two:
+// it looks alive, reports a healthy run, and shows no progress for the whole
+// ceiling. The failure counter has to cover both reads or it only covers the
+// half that already looked broken.
+func TestHandler_EventStream_EndsWhenOnlyItsEventReadsKeepFailing(t *testing.T) {
+	inner := newFakeRepository()
+	task := newActiveTask(inner, agenttask.StatusRunning, "session-stream")
+	srv := newStreamServer(t, &failingEventsRepo{fakeRepository: inner})
+
+	resp, err := http.Get(streamURL(srv, task))
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+
+	got := readFrames(t, reader, 2, 3*time.Second)
+	if got[0].event != "status" {
+		t.Fatalf("first frame is %q, want status", got[0].event)
+	}
+	if got[1].event != "end" {
+		t.Fatalf("second frame is %q, want end: the stream stayed open reporting a healthy run it could not read", got[1].event)
+	}
+}

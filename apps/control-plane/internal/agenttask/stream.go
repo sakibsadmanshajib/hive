@@ -66,6 +66,28 @@ const (
 	// no client has to know about it.
 	streamHeartbeat = 15 * time.Second
 
+	// streamWriteDeadline is the per-frame write deadline, reset before every
+	// write, and it is the reason this endpoint works at all.
+	//
+	// cmd/server sets WriteTimeout on the API server, and Go applies that as
+	// one absolute deadline for the whole response rather than per write. A
+	// streaming handler under it does not slow down, it dies: every stream was
+	// cut mid-frame at the WriteTimeout with "i/o timeout" on this side and an
+	// unexpected EOF on the client, and streamCeiling, streamHeartbeat and
+	// maxStreamReadFailures were all unreachable code behind it. edge-api
+	// already knows this and leaves its own timeouts at zero for exactly this
+	// reason (apps/edge-api/cmd/server/main.go); control-plane had never
+	// served a long-lived response before.
+	//
+	// Rolling rather than cleared. A zero deadline would also fix the cut and
+	// would hand a client that opens a stream and never reads one of this
+	// deployment's stream slots for as long as it likes, which is the ceiling
+	// above turned into a lifetime grant. Three heartbeats is the smallest
+	// value that cannot fire on a healthy stream: something is written at
+	// least every streamHeartbeat, so missing three in a row means the socket
+	// is not draining rather than that the run is quiet.
+	streamWriteDeadline = 3 * streamHeartbeat
+
 	// maxStreamPagesPerPass bounds one pass's catch-up. A conversation
 	// reopened onto a long run drains over several passes rather than
 	// holding the loop for an unbounded number of reads.
@@ -93,9 +115,12 @@ const (
 	//
 	// Six per user is several tabs on several runs, which is the honest upper
 	// end of watching your own work; a seventh is a client that has stopped
-	// closing connections. The total is D-049's ceiling on active agents,
-	// because a deployment cannot have more runs worth watching than it can
-	// have runs.
+	// closing connections. Two hundred is a process-wide backstop on
+	// goroutines and connections, picked as a round number well above any
+	// plausible concurrent audience for this deployment and well below what
+	// the process would notice. Deliberately NOT derived from D-049, which is
+	// the orchestrator's own fleet dispatch limit and says nothing about how
+	// many customers may watch a run.
 	maxStreamsPerUser = 6
 	maxStreamsTotal   = 200
 )
@@ -218,7 +243,7 @@ func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, tena
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	s := &streamWriter{w: w, flusher: flusher}
+	s := &streamWriter{w: w, flusher: flusher, rc: http.NewResponseController(w), taskID: taskID}
 	status := task.Status
 	if !s.send("status", newTaskWire(task)) {
 		return
@@ -231,7 +256,7 @@ func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, tena
 	// terminal status has necessarily issued its event read afterwards, and
 	// so after that flush. Reading the two concurrently reopens issue #1504
 	// with every server-side test still green.
-	cursor = h.drain(ctx, s, tenantID, userID, taskID, cursor)
+	cursor, _ = h.drain(ctx, s, tenantID, userID, taskID, cursor)
 	if s.failed {
 		return
 	}
@@ -274,7 +299,6 @@ func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, tena
 			s.send("end", endWire{Status: string(status)})
 			return
 		}
-		failures = 0
 		if task.Status != status {
 			status = task.Status
 			if !s.send("status", newTaskWire(task)) {
@@ -284,13 +308,29 @@ func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, tena
 		}
 
 		before := s.written
-		cursor = h.drain(ctx, s, tenantID, userID, taskID, cursor)
+		var drainErr error
+		cursor, drainErr = h.drain(ctx, s, tenantID, userID, taskID, cursor)
 		if s.failed {
 			return
 		}
 		if s.written != before {
 			lastWrite = time.Now()
 		}
+		if drainErr != nil {
+			failures++
+			if failures >= maxStreamReadFailures {
+				slog.Default().Warn("agent task stream ending on repeated event read failures",
+					"task_id", taskID, "failures", failures, "error", drainErr)
+				s.send("end", endWire{Status: string(status)})
+				return
+			}
+			continue
+		}
+
+		// Both reads in this pass worked, so whatever the last failure was, it
+		// was a blip. Reset AFTER the event read rather than after the status
+		// read: a pass where only one of the two works is a failing pass.
+		failures = 0
 
 		if status.Terminal() {
 			s.send("end", endWire{Status: string(status)})
@@ -306,28 +346,37 @@ func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, tena
 }
 
 // drain writes every event after cursor as its own frame and returns the new
-// cursor. A read failure leaves the cursor where it was and is retried on the
-// next pass: progress lines that pause are a worse-looking run, while a
-// cursor advanced past rows nobody received is a run missing its middle.
-func (h *Handler) drain(ctx context.Context, s *streamWriter, tenantID, userID, taskID uuid.UUID, cursor int64) int64 {
+// cursor plus whatever read error stopped it. A read failure leaves the cursor
+// where it was and is retried on the next pass: progress lines that pause are
+// a worse-looking run, while a cursor advanced past rows nobody received is a
+// run missing its middle.
+//
+// The error is returned rather than swallowed because the caller counts
+// consecutive failures. A status read that works while the event read fails is
+// exactly the silent-but-broken stream maxStreamReadFailures exists to end,
+// and it was invisible while this function absorbed its own errors.
+func (h *Handler) drain(ctx context.Context, s *streamWriter, tenantID, userID, taskID uuid.UUID, cursor int64) (int64, error) {
 	for page := 0; page < maxStreamPagesPerPass; page++ {
 		events, err := h.svc.Events(ctx, tenantID, userID, taskID, cursor, defaultEventsLimit)
-		if err != nil || len(events) == 0 {
-			return cursor
+		if err != nil {
+			return cursor, err
+		}
+		if len(events) == 0 {
+			return cursor, nil
 		}
 		for _, ev := range events {
 			if !s.send("step", ev) {
-				return cursor
+				return cursor, nil
 			}
 			if ev.Seq > cursor {
 				cursor = ev.Seq
 			}
 		}
 		if len(events) < defaultEventsLimit {
-			return cursor
+			return cursor, nil
 		}
 	}
-	return cursor
+	return cursor, nil
 }
 
 // endWire is the last frame of a stream: the status the run settled in, so a
@@ -343,8 +392,28 @@ type endWire struct {
 type streamWriter struct {
 	w       io.Writer
 	flusher http.Flusher
+	// rc extends the write deadline before every frame. See
+	// streamWriteDeadline: without it the server's WriteTimeout cuts every
+	// stream mid-response.
+	rc      *http.ResponseController
+	taskID  uuid.UUID
 	written int
 	failed  bool
+}
+
+// extend pushes the write deadline out ahead of the frame about to be
+// written. A deployment whose ResponseWriter cannot carry a deadline gets no
+// deadline at all, which is the behaviour it had before this endpoint existed,
+// so it is logged once and not treated as fatal.
+func (s *streamWriter) extend() {
+	if s.rc == nil {
+		return
+	}
+	if err := s.rc.SetWriteDeadline(time.Now().Add(streamWriteDeadline)); err != nil {
+		slog.Default().Warn("agent task stream cannot set a write deadline",
+			"task_id", s.taskID, "error", err)
+		s.rc = nil
+	}
 }
 
 // send writes one named frame carrying payload as JSON, and reports whether
@@ -361,9 +430,14 @@ func (s *streamWriter) send(event string, payload any) bool {
 	if err != nil {
 		// Nothing honest to put on the wire for this one. Skipping it keeps
 		// the rest of the run streaming, which is better than closing the
-		// connection over one unencodable row.
+		// connection over one unencodable row, but it is logged: the cursor
+		// moves past this row either way, so without a line here the gap in
+		// the customer's transcript is invisible forever.
+		slog.Default().Warn("agent task stream dropped an unencodable frame",
+			"task_id", s.taskID, "event", event, "error", err)
 		return true
 	}
+	s.extend()
 	if _, err := fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", event, body); err != nil {
 		s.failed = true
 		return false
@@ -380,6 +454,7 @@ func (s *streamWriter) comment(text string) bool {
 	if s.failed {
 		return false
 	}
+	s.extend()
 	if _, err := fmt.Fprintf(s.w, ": %s\n\n", text); err != nil {
 		s.failed = true
 		return false

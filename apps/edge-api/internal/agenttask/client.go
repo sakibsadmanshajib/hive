@@ -281,6 +281,8 @@ func statusErr(status int) error {
 		return ErrInvalidPack
 	case http.StatusConflict:
 		return ErrTerminalState
+	case http.StatusTooManyRequests:
+		return ErrTooManyStreams
 	default:
 		return ErrRequestFailed
 	}

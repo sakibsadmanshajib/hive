@@ -13,10 +13,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	AgentTaskError,
 	decodeStreamFrames,
+	describeRefusal,
 	parseSSEFrames,
 	streamTaskEvents,
 	type RunStreamUpdate
 } from './agentTasks';
+import { foldRunSteps, type RunStep } from './coworkMode';
 
 const taskRow = {
 	id: 'a0f0d4d2-0000-4000-8000-000000000001',
@@ -352,5 +354,53 @@ describe('the follower cannot spin or outlive its ceiling', () => {
 		for (const call of calls) {
 			expect(source.slice(call.index, call.index + call[0].length + 20)).toContain('.catch(');
 		}
+	});
+});
+
+
+describe('a reconnect does not duplicate what the chain already holds', () => {
+	const event = (seq: number, preview: string) => ({
+		seq,
+		kind: 'tool_call' as const,
+		payload: { tool_name: 'bash', tool_call_id: `c${seq}`, preview },
+		created_at: '2026-09-03T00:00:00Z'
+	});
+
+	it('skips an event whose seq is already on the chain', () => {
+		// The cursor read could not deliver the same event twice. A stream
+		// can: a reconnect resumes from the highest seq ON THE TURN, and a
+		// step that closed an earlier call in place rather than adding a line
+		// leaves no seq of its own behind, so the resumed cursor can sit
+		// before something already on screen. Folding it again puts a
+		// duplicate in the chain, which reads as the agent doing the same
+		// thing twice.
+		const first = foldRunSteps([], [event(1, 'list the workspace'), event(2, 'write a file')]);
+		const replayed = foldRunSteps(first, [event(2, 'write a file'), event(3, 'read it back')]);
+
+		expect(replayed.filter((step) => step.description.includes('write a file'))).toHaveLength(1);
+		expect(replayed.filter((step) => step.description.includes('read it back'))).toHaveLength(1);
+	});
+
+	it('still folds every event onto a chain that carries no seq yet', () => {
+		// The composer's own opening line has no seq. Treating its absence as
+		// a high-water mark would drop the run's whole first batch.
+		const opening: RunStep[] = [
+			{ action: 'hive_agent_step', description: 'Hive ran this as a coding task.', done: true }
+		];
+		const folded = foldRunSteps(opening, [event(1, 'list the workspace')]);
+		expect(folded).toHaveLength(2);
+	});
+});
+
+describe('a saturated stream ceiling is not a failed run', () => {
+	it('is not a refusal, so the follower falls back instead of settling the turn', () => {
+		// describeRefusal decides whether the transcript writes the run off.
+		// 401 and 403 are settled questions; a 429 is not one, because the run
+		// is fine and still readable on the cursor read the follower drops
+		// back to. Treating it as a refusal would replace a slower but working
+		// run with a failure the person cannot act on.
+		expect(describeRefusal(new AgentTaskError(429, 'too many open task streams'))).toBeNull();
+		expect(describeRefusal(new AgentTaskError(401, 'nope'))).not.toBeNull();
+		expect(describeRefusal(new AgentTaskError(403, 'nope'))).not.toBeNull();
 	});
 });

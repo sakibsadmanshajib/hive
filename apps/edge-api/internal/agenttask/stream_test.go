@@ -3,6 +3,7 @@ package agenttask
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -150,5 +151,46 @@ func TestExtractTaskPath_AdmitsTheStreamSuffix(t *testing.T) {
 	}
 	if _, _, ok := extractTaskPath("/v1/agent/tasks/" + id.String() + "/files/stream"); ok {
 		t.Error("an unserved three-segment path was admitted")
+	}
+}
+
+// A saturated stream ceiling reaches the customer as a 429, not a 500.
+//
+// The two mean different things and want different responses: a 500 says
+// something is broken, and an operator reading it cannot tell breakage from a
+// deployment that is simply busy. The front end also treats them differently,
+// because only one of them is worth dropping back to the cursor read for.
+func TestHandleEventStream_SaturationIsA429NotA500(t *testing.T) {
+	client := &streamingClient{
+		fakeClient: newFakeClient(),
+		err:        ErrTooManyStreams,
+		opened:     make(chan struct{}),
+	}
+	srv := serveStream(t, NewHandler(client), uuid.New())
+
+	resp, err := http.Get(srv.URL + "/v1/agent/tasks/" + uuid.New().String() + "/events/stream")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status %d, want 429", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	// The sentence has to tell the person what to do. "Request failed" is a
+	// status code with extra steps.
+	if !strings.Contains(string(body), "close a tab") {
+		t.Errorf("the refusal does not say what to do about it: %s", body)
+	}
+}
+
+// control-plane's 429 becomes that sentinel rather than the generic failure,
+// which is what keeps the two apart all the way to the customer.
+func TestStatusErr_MapsSaturationToItsOwnSentinel(t *testing.T) {
+	if err := statusErr(http.StatusTooManyRequests); !errors.Is(err, ErrTooManyStreams) {
+		t.Fatalf("statusErr(429) = %v, want ErrTooManyStreams", err)
+	}
+	if err := statusErr(http.StatusInternalServerError); errors.Is(err, ErrTooManyStreams) {
+		t.Fatal("a 500 was mapped to saturation")
 	}
 }

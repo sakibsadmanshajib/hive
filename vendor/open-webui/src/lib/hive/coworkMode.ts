@@ -423,7 +423,27 @@ export const describeEvent = (event: TaskEvent): string | null => {
 export const foldRunSteps = (previous: readonly RunStep[], events: readonly TaskEvent[]): RunStep[] => {
 	const steps = previous.map((step) => ({ ...step }));
 
+	/*
+	 * The highest seq this chain already holds.
+	 *
+	 * The cursor read could not deliver the same event twice, so this was
+	 * previously guaranteed by the caller. A live stream is not: a reconnect
+	 * resumes from the highest seq ON THE TURN, and a step whose event
+	 * rendered no line (or whose line closed an earlier call in place rather
+	 * than adding one) leaves no seq behind it, so the resumed cursor can sit
+	 * before an event that is already on screen. Folding it again would put a
+	 * duplicate line in the chain, which reads as the agent having done the
+	 * same thing twice.
+	 */
+	const highestSeq = steps.reduce(
+		(highest, step) => (typeof step.seq === 'number' && step.seq > highest ? step.seq : highest),
+		-1
+	);
+
 	for (const event of events) {
+		if (event.seq <= highestSeq) {
+			continue;
+		}
 		if (event.kind === 'tool_result') {
 			const callId = asString(event.payload, 'tool_call_id').trim();
 			if (callId !== '') {
