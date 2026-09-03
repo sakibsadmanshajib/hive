@@ -26,6 +26,7 @@
 // authority it did not earn.
 
 import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,7 +38,9 @@ const OWUI_URL = (process.env.OWUI_URL ?? "http://localhost:3003").replace(/\/$/
 const OUT_DIR = process.env.PROOF_OUT;
 const NOTE = process.env.PROOF_NOTE ?? "";
 const STATE = process.env.PROOF_STORAGE_STATE ?? join(HERE, ".auth", "owui-user.json");
-const SCENARIO = "chat";
+// Names the capture files, so two scenarios' images never collide in the
+// release the proof script uploads them to.
+const SCENARIO = (process.env.PROOF_SCENARIO ?? "chat").trim() || "chat";
 // The prompt is deliberately one whose right answer is one word, so "the model
 // replied" is checkable rather than eyeballed. Same reasoning, and the same
 // question, as 01-chat-send-stream.spec.ts.
@@ -64,6 +67,26 @@ const REPLY_PATTERN = new RegExp(process.env.PROOF_REPLY_PATTERN ?? "yellow", "i
 // is what separates "the tools are offered when the route can serve them" from
 // "the tools are offered unconditionally".
 const REQUIRE_SOURCES = process.env.PROOF_REQUIRE_SOURCES === "1";
+
+// The knowledge-work claim (issue #1505). Off by default, so every other chat
+// pull request's capture is unchanged by its existence.
+//
+// When on, the capture stops being a photograph of a chat that was already
+// possible and becomes a photograph of the whole journey the issue said an
+// ordinary customer could not start: create a knowledge base, put a document
+// in it, and get an answer that could only have come from that document. The
+// account is the same ordinary signed-in user every other scenario uses, with
+// no admin role and no hand-granted permission, which is the half that matters
+// here: the permission the fix grants reaches this run through the deployment's
+// own configuration or the New project button answers 401 in the frame.
+const CAPTURE_PROJECT = process.env.PROOF_CAPTURE_PROJECT === "1";
+// The document's single load-bearing fact. Invented rather than looked up, so
+// a model that answers it from memory is not possible and a correct answer is
+// evidence of retrieval rather than of recall.
+const PROJECT_DOC_TEXT =
+  process.env.PROOF_PROJECT_DOC_TEXT ??
+  "Hive demo field note KB-1505.\n\nBorehole KB-1505 measured 47 milligrams per litre of dissolved silica on 2026-09-01.\n";
+const PROJECT_DOC_NAME = process.env.PROOF_PROJECT_DOC_NAME ?? "kb-1505-field-note.txt";
 const CONTROL_MODEL = (process.env.PROOF_CONTROL_MODEL ?? "").trim();
 // Which alias the captured turn is allowed to run on.
 //
@@ -149,6 +172,73 @@ async function settledTurn(page) {
   return { turn, text };
 }
 
+/**
+ * Creates a knowledge base as the signed-in ordinary user, puts a document in
+ * it, and leaves the browser on a new chat bound to it (issue #1505).
+ *
+ * Every control it touches is addressed by the id the Hive-authored surface
+ * gives it (ProjectsList.svelte, ProjectDetail.svelte) rather than by visible
+ * text, so a copy change does not silently turn this into a capture of nothing.
+ *
+ * It throws rather than skipping at every step. The whole claim is that the
+ * journey is possible for this account, so a missing create control or a 401
+ * on create is the finding, not a reason to photograph the next screen.
+ */
+async function createProjectWithDocument(page, shots) {
+  const name = `KB-1505 proof ${new Date().toISOString().replace(/[:.]/g, "-")}`;
+
+  await page.goto(`${OWUI_URL}/projects`, { waitUntil: "domcontentloaded" });
+  const newProject = page.locator("#projects-new-button");
+  try {
+    await newProject.waitFor({ state: "visible", timeout: 30_000 });
+  } catch {
+    throw new Error(
+      "the Projects page offers no create control to this account, which is the state issue #1505 reported on /knowledge",
+    );
+  }
+  await newProject.click();
+  await page.locator("#projects-create-name").fill(name);
+  // The response, not the page, because a 401 from POST /api/v1/knowledge/create
+  // is exactly what the permission fix is about and the dialog reports it only
+  // as "Request failed (401)" in small red text a screenshot can miss.
+  const created = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/v1/knowledge/create") && response.request().method() === "POST",
+    { timeout: 60_000 },
+  );
+  await page.getByRole("button", { name: /^create$/i }).click();
+  const createResponse = await created;
+  record(`POST /api/v1/knowledge/create answered ${createResponse.status()}`);
+  if (!createResponse.ok()) {
+    throw new Error(
+      `creating a knowledge base answered ${createResponse.status()}, so an ordinary account still cannot author one (issue #1505)`,
+    );
+  }
+
+  await page.waitForURL(/\/projects\/[^/]+$/, { timeout: 30_000 });
+  const projectId = new URL(page.url()).pathname.split("/").pop();
+  record(`project created: ${name} (${projectId})`);
+  shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "01b-project-created", note: NOTE }));
+
+  const docPath = join(tmpdir(), PROJECT_DOC_NAME);
+  writeFileSync(docPath, PROJECT_DOC_TEXT);
+  await page.locator('input[type="file"]').first().setInputFiles(docPath);
+  // The file list is rendered from the collection's own files endpoint after
+  // the upload and the add both return, so the name appearing there means the
+  // document reached the store rather than merely the browser.
+  await page.getByText(PROJECT_DOC_NAME, { exact: false }).first().waitFor({
+    state: "visible",
+    timeout: 180_000,
+  });
+  record(`document added to the project: ${PROJECT_DOC_NAME}`);
+  shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "01c-document-added", note: NOTE }));
+
+  await page.locator("#project-new-chat-button").click();
+  await page.waitForURL(/[?&]project=/, { timeout: 30_000 });
+  await page.locator("#chat-input").waitFor({ state: "visible", timeout: 60_000 });
+  record(`new chat bound to the project: ${safeUrl(page.url())}?project=${projectId}`);
+}
+
 async function main() {
   mkdirSync(OUT_DIR, { recursive: true });
   const chromium = loadChromium();
@@ -196,6 +286,14 @@ async function main() {
     record("composer is present, so the session is live");
 
     shots.push(await shoot(page, { outDir: OUT_DIR, scenario: SCENARIO, name: "01-signed-in", note: NOTE }));
+
+    // The knowledge-work journey, before anything is asked. It ends on a new
+    // chat bound to the project it just created, so everything below (the alias
+    // guard, the untouched toggles, the turn itself and its source list) runs
+    // against that chat unchanged.
+    if (CAPTURE_PROJECT) {
+      await createProjectWithDocument(page, shots);
+    }
 
     // The model picker, because "which models does this tenant actually see"
     // is the question a catalog or visibility change is answered with, and it

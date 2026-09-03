@@ -78,13 +78,17 @@ on:
           #1718 instead: a question needing live data, sent with the globe
           untouched, answered with the model's own web_search or web_fetch call
           and a rendered source list, plus a control turn on an alias the
-          catalog reports as not tool capable.
+          catalog reports as not tool capable. projects photographs the claim
+          in issue #1505 instead: an ordinary signed-in user creates a
+          knowledge base, adds a document to it, and asks a question only that
+          document can answer, with the source shown on the turn.
         required: false
         default: chat
         type: choice
         options:
           - chat
           - webtools
+          - projects
   pull_request:
     branches: [main]
     # Deliberately the Hive-owned chat paths and not vendor/open-webui as a
@@ -676,6 +680,29 @@ jobs:
             exit 1
           fi
 
+      - name: Aim the capture at the knowledge work claim
+        # Only for the `projects` scenario. Every variable here defaults off in
+        # the capture script, so a `chat` or `webtools` run reaches it with the
+        # values it had before this step existed.
+        #
+        # The question is answerable only from the document the capture uploads
+        # a moment earlier, and the fact in that document is invented, so a
+        # model cannot answer it from memory. That is what makes a correct
+        # answer evidence of retrieval rather than of recall, and it is why the
+        # source list is required outright on top of it: an answer with no
+        # rendered source proves the document was read somewhere, not that the
+        # surface told the customer where from.
+        if: github.event.inputs.scenario == 'projects'
+        run: |
+          set -euo pipefail
+          {
+            echo "PROOF_SCENARIO=projects"
+            echo "PROOF_CAPTURE_PROJECT=1"
+            echo "PROOF_PROMPT=According to the document in this project, how many milligrams per litre of dissolved silica did borehole KB-1505 measure? Answer with the number only."
+            echo "PROOF_REPLY_PATTERN=47"
+            echo "PROOF_REQUIRE_SOURCES=1"
+          } >> "$GITHUB_ENV"
+
       - name: Aim the capture at the web tools claim
         # Only for the `webtools` scenario. Everything here is environment for
         # the capture script, which defaults every one of these off, so a `chat`
@@ -1237,6 +1264,9 @@ jobs:
             exit 1
           fi
           caption="Signed-in Hive chat, captured in CI against a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase, its own registered OAuth client and a real streamed completion. Run ${GITHUB_RUN_ID}."
+          if [ "${SCENARIO:-chat}" = "projects" ]; then
+            caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. An ordinary account, with no admin role and no hand-granted permission, creates a knowledge base on the Projects page, adds a document to it, and asks a question whose answer appears only in that document; the turn answers it and renders the document as its source. Run ${GITHUB_RUN_ID}."
+          fi
           if [ "${SCENARIO:-chat}" = "webtools" ]; then
             caption="Signed-in Hive chat on a stack booted from refs/pull/${PR}/merge on a hosted runner, with this run's own Supabase and its own registered OAuth client. A question needing live data, sent with the web search toggle off and features.web_search absent from the outgoing request, answered with the model's own tool call and a rendered source list; then the same question on ${PROOF_CONTROL_MODEL:-a non tool capable alias}, whose every enabled route reports tools_supported = false, settling with no source list. Run ${GITHUB_RUN_ID}."
           fi
