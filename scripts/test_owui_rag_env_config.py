@@ -510,14 +510,31 @@ def test_gateway_serves_the_voice_roster_the_ui_offers() -> None:
     fails. edge-api now serves that endpoint with the provider's real roster,
     so the Settings > Audio dropdowns can only offer voices hive-tts accepts.
     Asserted against main.go because a dropped registration line would send
-    every dropdown silently back to the alloy fallback."""
+    every dropdown silently back to the alloy fallback.
+
+    The path is matched through the constant rather than as a literal inside
+    the mux.Handle call. Issue #1377 gave it a name, audioVoicesPath, because
+    the same path is spelled twice, at registration and in the exemption in
+    authSelectorMiddleware, and two literals could drift apart and leave the
+    route registered and unreachable. Pinning the pre-#1377 literal here would
+    have made that fix look like a regression, so both halves are checked:
+    the constant carries the path, and the registration serves it with
+    VoicesHandler."""
     main_go = (
         Path(__file__).resolve().parents[1]
         / "apps" / "edge-api" / "cmd" / "server" / "main.go"
     ).read_text(encoding="utf-8")
-    assert 'mux.Handle("/v1/audio/voices", audio.VoicesHandler())' in main_go, (
+    assert 'audioVoicesPath = "/v1/audio/voices"' in main_go, (
         "edge-api must serve GET /v1/audio/voices or Open WebUI's voice "
         "dropdowns fall back to OpenAI's alloy-style list (#996)"
+    )
+    assert "mux.Handle(audioVoicesPath, audio.VoicesHandler())" in main_go, (
+        "the voice roster path must still be registered against VoicesHandler "
+        "or Open WebUI's dropdowns fall back to the alloy-style list (#996)"
+    )
+    assert "r.URL.Path == audioVoicesPath" in main_go, (
+        "the voice roster must stay exempt in authSelectorMiddleware or the "
+        "registration above is inert and the route answers 401 (#1377)"
     )
 
 
