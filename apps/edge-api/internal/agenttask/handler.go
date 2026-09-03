@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
@@ -502,6 +503,12 @@ func (h *Handler) handleEvents(w http.ResponseWriter, r *http.Request, taskID uu
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
+// streamRelayCeiling bounds one relayed connection. Deliberately above
+// control-plane's own streamCeiling (30 minutes) rather than equal to it: the
+// upstream close is the mechanism, and this is the backstop for the case where
+// it does not happen.
+const streamRelayCeiling = 31 * time.Minute
+
 // handleEventStream serves GET /v1/agent/tasks/{id}/events/stream: the
 // per-run subscription control-plane produces, relayed to the customer.
 //
@@ -535,9 +542,18 @@ func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, task
 		}
 	}
 
+	// A deadline of this hop's own, above control-plane's thirty minute
+	// ceiling rather than instead of it. The relay below exits when the body
+	// ends, which today depends entirely on control-plane closing its end,
+	// and streamClient deliberately carries no Timeout. Without this, a
+	// control-plane that ever stopped unwinding would hold this goroutine and
+	// this connection for as long as it held its own.
+	ctx, cancel := context.WithTimeout(r.Context(), streamRelayCeiling)
+	defer cancel()
+
 	// Opened before any header is written, so control-plane's refusal is
 	// still an HTTP status here rather than a 200 carrying an apology.
-	body, err := h.client.StreamEvents(r.Context(), user.TenantID, user.ID, taskID, afterSeq)
+	body, err := h.client.StreamEvents(ctx, user.TenantID, user.ID, taskID, afterSeq)
 	if err != nil {
 		writeTaskError(w, err)
 		return

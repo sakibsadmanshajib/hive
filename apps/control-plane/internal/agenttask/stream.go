@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -69,17 +70,89 @@ const (
 	// reopened onto a long run drains over several passes rather than
 	// holding the loop for an unbounded number of reads.
 	maxStreamPagesPerPass = 5
+
+	// maxStreamReadFailures ends a stream after this many consecutive failed
+	// passes.
+	//
+	// Without it a persistent read failure (a revoked grant, schema drift, a
+	// pool with nothing left) is invisible: the connection stays open and
+	// silent, and reads to a person as a slow run rather than a broken one,
+	// for the whole thirty minutes. Ending instead sends the client to its
+	// settle read, which fails loudly, and then to its fallback.
+	maxStreamReadFailures = 5
+
+	// maxStreamsPerUser and maxStreamsTotal bound how many of these
+	// connections exist at once.
+	//
+	// Every other read on this handler is one database round trip and then a
+	// released goroutine. This one holds a goroutine and issues two indexed
+	// reads every tick for as long as somebody watches, so it is the first
+	// thing here whose cost a caller controls by opening more of them. The
+	// launch quotas (HIVE_QUOTA_USER_CONCURRENCY and its tenant sibling) gate
+	// starting tasks, not reading them, so they do not cover this.
+	//
+	// Six per user is several tabs on several runs, which is the honest upper
+	// end of watching your own work; a seventh is a client that has stopped
+	// closing connections. The total is D-049's ceiling on active agents,
+	// because a deployment cannot have more runs worth watching than it can
+	// have runs.
+	maxStreamsPerUser = 6
+	maxStreamsTotal   = 200
 )
+
+// MaxStreamsPerUserForTest exposes the per-user ceiling to the package's
+// external test, which asserts the refusal at exactly that boundary. Exported
+// rather than duplicated as a literal in the test: a copy would go on passing
+// against whatever number it remembered after the real one moved.
+const MaxStreamsPerUserForTest = maxStreamsPerUser
 
 // WithStreamTick sets how often an open event stream re-reads its task and
 // returns the handler for chaining, matching the WithBilling shape used on
 // the edge-api handlers. Values below minStreamTick are clamped.
+//
+// Construction time only, before the handler serves anything. The field it
+// writes is read without synchronisation by every in-flight stream, which is
+// safe only because nothing calls this once ServeHTTP has started; a
+// hot-reload caller would make it a real data race.
 func (h *Handler) WithStreamTick(d time.Duration) *Handler {
 	if d < minStreamTick {
 		d = minStreamTick
 	}
 	h.streamTick = d
 	return h
+}
+
+// acquireStream takes one of this user's stream slots and one global slot,
+// and returns the release function. The second return is false when either
+// ceiling is already reached, which the caller answers 429 rather than
+// opening a connection it has no budget for.
+func (h *Handler) acquireStream(userID uuid.UUID) (func(), bool) {
+	h.streamMu.Lock()
+	defer h.streamMu.Unlock()
+	if h.streamsTotal >= maxStreamsTotal {
+		return nil, false
+	}
+	if h.streams == nil {
+		h.streams = make(map[uuid.UUID]int)
+	}
+	if h.streams[userID] >= maxStreamsPerUser {
+		return nil, false
+	}
+	h.streams[userID]++
+	h.streamsTotal++
+	return func() {
+		h.streamMu.Lock()
+		defer h.streamMu.Unlock()
+		h.streamsTotal--
+		if h.streams[userID] <= 1 {
+			// Deleted rather than left at zero: the map is keyed by user and
+			// would otherwise grow for the life of the process, one entry per
+			// person who ever opened a stream.
+			delete(h.streams, userID)
+			return
+		}
+		h.streams[userID]--
+	}, true
 }
 
 func (h *Handler) tick() time.Duration {
@@ -117,6 +190,16 @@ func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, tena
 		}
 		cursor = parsed
 	}
+
+	release, ok := h.acquireStream(userID)
+	if !ok {
+		// Refused before the first read, so it costs nothing, and refused with
+		// a status rather than a frame for the same reason every other refusal
+		// here is: after the 200 there is nothing left to say.
+		writeJSON(w, http.StatusTooManyRequests, errBody("too many open task streams"))
+		return
+	}
+	defer release()
 
 	ctx, cancel := context.WithTimeout(r.Context(), streamCeiling)
 	defer cancel()
@@ -160,6 +243,7 @@ func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, tena
 	ticker := time.NewTicker(h.tick())
 	defer ticker.Stop()
 	lastWrite := time.Now()
+	failures := 0
 
 	for {
 		select {
@@ -179,10 +263,18 @@ func (h *Handler) handleEventStream(w http.ResponseWriter, r *http.Request, tena
 				s.send("end", endWire{Status: string(status)})
 				return
 			}
-			// A blip. The next pass re-reads, and the ceiling bounds how long
-			// this can go on for.
-			continue
+			// A blip is worth another pass. A run of them is not: see
+			// maxStreamReadFailures.
+			failures++
+			if failures < maxStreamReadFailures {
+				continue
+			}
+			slog.Default().Warn("agent task stream ending on repeated read failures",
+				"task_id", taskID, "failures", failures, "error", err)
+			s.send("end", endWire{Status: string(status)})
+			return
 		}
+		failures = 0
 		if task.Status != status {
 			status = task.Status
 			if !s.send("status", newTaskWire(task)) {

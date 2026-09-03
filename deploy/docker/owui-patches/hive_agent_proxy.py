@@ -79,6 +79,10 @@ UPSTREAM_TIMEOUT_SECONDS = 30
 # quiet, and holding the worker open for it would be a leak.
 STREAM_READ_TIMEOUT_SECONDS = 60
 
+# The connect phase is a connect phase whether or not the body is a stream, so
+# it keeps a bound close to the buffered routes' own.
+STREAM_CONNECT_TIMEOUT_SECONDS = 10
+
 # Bodies here are a pack name, a goal, and since issue #1065 the text of the
 # documents the person attached in the composer.
 #
@@ -395,7 +399,16 @@ async def stream_task_events(
     # function, since the response body is consumed by the generator below
     # after the handler has returned. It is closed in that generator's finally,
     # which runs whether the run ended or the browser hung up.
-    timeout = aiohttp.ClientTimeout(total=None, sock_read=STREAM_READ_TIMEOUT_SECONDS)
+    # sock_connect as well as sock_read. With total unset, the connect phase
+    # would otherwise be bounded only by the operating system's SYN retry
+    # ceiling, which on Linux is around two minutes, so a control-plane host
+    # that is reachable but not answering would tie up one worker for that
+    # long per attempt rather than failing fast.
+    timeout = aiohttp.ClientTimeout(
+        total=None,
+        sock_connect=STREAM_CONNECT_TIMEOUT_SECONDS,
+        sock_read=STREAM_READ_TIMEOUT_SECONDS,
+    )
     session = aiohttp.ClientSession(timeout=timeout)
     try:
         response = await session.get(f'{base}{path}', headers=headers)

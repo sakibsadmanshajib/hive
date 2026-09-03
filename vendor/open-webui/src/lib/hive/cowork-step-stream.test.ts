@@ -259,3 +259,84 @@ describe('the transcript follows a run over the stream', () => {
 		expect(chat()).toMatch(/controller\.abort\(\)/);
 	});
 });
+
+describe('what review found', () => {
+	let fetchMock: ReturnType<typeof vi.fn>;
+
+	beforeEach(() => {
+		fetchMock = vi.fn();
+		vi.stubGlobal('fetch', fetchMock);
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('reads a block with data and no event name as `message` rather than dropping it', () => {
+		// The SSE default. Today's server always names its frames, so this
+		// changes nothing now; it is here so a server that later stops naming
+		// one does not have its frames silently dropped.
+		const parsed = parseSSEFrames('data: {"seq":4}\n\n');
+		expect(parsed.frames).toEqual([{ event: 'message', data: '{"seq":4}' }]);
+	});
+
+	it('still produces nothing for a block that is only a heartbeat', () => {
+		expect(parseSSEFrames(': ping\n\n').frames).toEqual([]);
+	});
+
+	it('gives up on a producer whose frame never ends, rather than growing forever', async () => {
+		// Without the bound the buffer grows for the life of the connection,
+		// in a browser tab, with no signal that it has stopped making
+		// progress. Throwing sends the caller to its fallback.
+		const chunk = 'data: ' + 'x'.repeat(200_000);
+		fetchMock.mockResolvedValue(streamResponse([chunk, chunk, chunk, chunk, chunk, chunk]));
+
+		await expect(streamTaskEvents('tok', taskRow.id, 0, () => {})).rejects.toThrow(
+			/never ended/
+		);
+	});
+});
+
+describe('the follower cannot spin or outlive its ceiling', () => {
+	it('waits before reconnecting, unconditionally', () => {
+		// A stream that opens and closes having sent nothing looks exactly
+		// like a clean end. Reconnecting straight away puts the follower into
+		// an open-close-open spin against the gateway for the rest of the
+		// ceiling.
+		const source = chat();
+		expect(source).toMatch(
+			/Wait before reconnecting[\s\S]{0,900}?setTimeout\(resolve, COWORK_POLL_INTERVAL_MS\)/
+		);
+	});
+
+	it('binds the follow ceiling to the open connection, not only to the gap between two', () => {
+		// A run that keeps its connection open and sends only heartbeats never
+		// returns to the loop on its own, so a deadline checked only between
+		// calls does not bound it at all.
+		const source = chat();
+		// The definition, not the call site: it is spelled
+		// `streamCoworkRun = async (`, so a pattern anchored on the bare name
+		// followed by a paren matches neither.
+		expect(source).toMatch(/streamCoworkRun = async \([\s\S]{0,200}deadline: number/);
+		expect(source).toMatch(/deadline - Date\.now\(\)/);
+	});
+
+	it('does not report its own abort as a broken connection', () => {
+		// Aborting makes the pending read reject rather than letting the
+		// stream resolve, so without this both deliberate stops arrive at the
+		// caller looking like transport failures.
+		expect(chat()).toMatch(/if \(!controller\.signal\.aborted\) \{\s*throw error;/);
+	});
+
+	it('does not discard a rejection at either call site', () => {
+		// The follower awaits saveChatHandler on several paths, and a
+		// discarded promise turns a throw there into an unhandled rejection
+		// with nothing on screen to show for it.
+		const source = chat();
+		const calls = [...source.matchAll(/void followCoworkRun\([^)]*\)/g)];
+		expect(calls.length).toBeGreaterThan(0);
+		for (const call of calls) {
+			expect(source.slice(call.index, call.index + call[0].length + 20)).toContain('.catch(');
+		}
+	});
+});

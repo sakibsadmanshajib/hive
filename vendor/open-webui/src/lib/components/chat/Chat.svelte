@@ -116,7 +116,8 @@
 		getTask,
 		getTaskEvents,
 		streamTaskEvents,
-		TERMINAL_STATUSES
+		TERMINAL_STATUSES,
+		type AgentTask
 	} from '$lib/hive/agentTasks';
 	import {
 		dropSummaryEcho,
@@ -2395,39 +2396,71 @@
 	 * actually is instead of replaying a run into a chain that already holds
 	 * it.
 	 */
-	const streamCoworkRun = async (_chatId, messageId: string, taskId: string) => {
+	const streamCoworkRun = async (
+		_chatId,
+		messageId: string,
+		taskId: string,
+		deadline: number
+	) => {
 		let steps = coworkSteps(messageId);
-		let task = null;
+		let task: AgentTask | null = null;
 		let live = true;
 		const controller = new AbortController();
 
-		await streamTaskEvents(
-			localStorage.token,
-			taskId,
-			latestStepSeq(steps),
-			async (update) => {
-				if (update.task) {
-					task = update.task;
-				}
-				if (update.events.length > 0) {
-					steps = foldRunSteps(steps, update.events);
-				}
-				if (!task) {
-					// Only step frames so far. There is nothing authoritative
-					// to write the turn from yet, and inventing a status to go
-					// with them would put a state on screen the run is not in.
-					return;
-				}
-				if (!(await applyCoworkRun(_chatId, messageId, task, steps))) {
-					// The conversation moved out from under us. Hang up rather
-					// than holding a connection for a transcript nobody is
-					// looking at.
-					live = false;
-					controller.abort();
-				}
+		// The follow ceiling has to bind this call, not only the gap between
+		// two of them. A run that keeps its connection open and sends only
+		// heartbeats never returns here on its own, and without this the
+		// constant that documents how long a tab keeps following a wedged run
+		// would not be enforced while it is actually following one.
+		const ceiling = setTimeout(
+			() => {
+				live = false;
+				controller.abort();
 			},
-			controller.signal
+			Math.max(0, deadline - Date.now())
 		);
+
+		try {
+			await streamTaskEvents(
+				localStorage.token,
+				taskId,
+				latestStepSeq(steps),
+				async (update) => {
+					if (update.task) {
+						task = update.task;
+					}
+					if (update.events.length > 0) {
+						steps = foldRunSteps(steps, update.events);
+					}
+					if (!task) {
+						// Only step frames so far. There is nothing
+						// authoritative to write the turn from yet, and
+						// inventing a status to go with them would put a state
+						// on screen the run is not in.
+						return;
+					}
+					if (!(await applyCoworkRun(_chatId, messageId, task, steps))) {
+						// The conversation moved out from under us. Hang up
+						// rather than holding a connection for a transcript
+						// nobody is looking at.
+						live = false;
+						controller.abort();
+					}
+				},
+				controller.signal
+			);
+		} catch (error) {
+			// An abort this function asked for is not a transport failure, and
+			// must not be reported as one: aborting makes the pending read
+			// reject rather than letting the stream resolve, so without this
+			// the two deliberate stops above would both arrive at the caller
+			// looking like a broken connection and send it to the fallback.
+			if (!controller.signal.aborted) {
+				throw error;
+			}
+		} finally {
+			clearTimeout(ceiling);
+		}
 		return live;
 	};
 
@@ -2458,7 +2491,7 @@
 			}
 
 			try {
-				if (!(await streamCoworkRun(_chatId, messageId, taskId))) {
+				if (!(await streamCoworkRun(_chatId, messageId, taskId, deadline))) {
 					return;
 				}
 			} catch (error) {
@@ -2497,8 +2530,19 @@
 			if (TERMINAL_STATUSES.has(reading.task.status) || reading.task.status === 'unknown') {
 				return;
 			}
+
 			// Still going, so the connection dropped rather than the run
-			// ending. Reconnect from where the transcript is.
+			// ending. Wait before reconnecting, and wait unconditionally.
+			//
+			// A stream that opens and closes again having sent nothing is not
+			// hypothetical: a load balancer cycling connections, or a proxy
+			// answering with an already-closed body, both look exactly like a
+			// clean end here, and reconnecting straight away would put this
+			// loop into an open-close-open spin against the gateway for the
+			// rest of the ceiling. One poll interval is the floor, which makes
+			// the worst case this loop can produce no worse than the timer it
+			// replaced.
+			await new Promise((resolve) => setTimeout(resolve, COWORK_POLL_INTERVAL_MS));
 		}
 
 		await applyCoworkRun(_chatId, messageId, {
@@ -2594,7 +2638,12 @@
 				!TERMINAL_STATUSES.has(reading.task.status) &&
 				reading.task.status !== 'unknown'
 			) {
-				void followCoworkRun(_chatId, pending.id, taskId);
+				// Caught here rather than left to `void`: the follower awaits
+				// saveChatHandler on several paths, which can throw, and a
+				// discarded promise turns that into an unhandled rejection
+				// with nothing on screen to show for it. Closes the same gap
+				// on the fallback loop, which had it first.
+				void followCoworkRun(_chatId, pending.id, taskId).catch(() => {});
 			}
 		}
 	};
@@ -2736,7 +2785,7 @@
 		history.messages[runMessageId].hive_agent_task_id = task.id;
 		await applyCoworkRun(_chatId, runMessageId, task);
 
-		void followCoworkRun(_chatId, runMessageId, task.id);
+		void followCoworkRun(_chatId, runMessageId, task.id).catch(() => {});
 	};
 
 	const submitHandler = async (userPrompt, { _raw = false } = {}) => {

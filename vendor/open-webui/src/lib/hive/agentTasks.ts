@@ -685,6 +685,15 @@ export const describeTask = (task: AgentTask, nowMs: number): TaskView => {
  * `authorization`.
  */
 
+/**
+ * The most unparsed stream bytes held at once.
+ *
+ * Generous against anything the server actually sends: one event's payload is
+ * capped at 64 KiB server side, and frames are written one at a time. It is a
+ * bound on a stuck producer, not on a busy one.
+ */
+const MAX_STREAM_BUFFER_CHARS = 1_000_000;
+
 /** One decoded server-sent event: its name and its data payload. */
 export interface SSEFrame {
 	event: string;
@@ -737,8 +746,16 @@ export const parseSSEFrames = (buffer: string): { frames: SSEFrame[]; rest: stri
 				data.push(value);
 			}
 		}
-		if (event !== '') {
-			frames.push({ event, data: data.join('\n') });
+		// A block carrying data but no `event:` field is event type `message`
+		// per the SSE specification, not a block to throw away. Today's server
+		// always names its frames, so this changes nothing now; it is here so
+		// that a server that later stops naming one does not have its frames
+		// silently dropped, which is invisible in exactly the surface this
+		// whole module exists to stop making invisible.
+		//
+		// A block with neither is a heartbeat, and produces nothing.
+		if (event !== '' || data.length > 0) {
+			frames.push({ event: event === '' ? 'message' : event, data: data.join('\n') });
 		}
 	}
 	return { frames, rest: normalised.slice(start) };
@@ -813,6 +830,14 @@ export const streamTaskEvents = async (
 				break;
 			}
 			buffer += decoder.decode(value, { stream: true });
+			if (buffer.length > MAX_STREAM_BUFFER_CHARS) {
+				// Something upstream is sending bytes that never close a
+				// frame. Growing the buffer for the life of the connection
+				// would be a browser tab quietly consuming memory with no
+				// signal that it has stopped making progress, so this stops
+				// and lets the caller fall back to the cursor read.
+				throw new Error('The task stream sent a frame that never ended');
+			}
 			const parsed = parseSSEFrames(buffer);
 			buffer = parsed.rest;
 			const update = decodeStreamFrames(parsed.frames);

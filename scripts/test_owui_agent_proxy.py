@@ -183,8 +183,9 @@ def install_stubs() -> None:
     aiohttp = types.ModuleType('aiohttp')
 
     class ClientTimeout:
-        def __init__(self, total=None, sock_read=None) -> None:
+        def __init__(self, total=None, sock_connect=None, sock_read=None) -> None:
             self.total = total
+            self.sock_connect = sock_connect
             self.sock_read = sock_read
 
     class ClientError(Exception):

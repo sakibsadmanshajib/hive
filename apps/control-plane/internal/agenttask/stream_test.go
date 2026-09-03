@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,7 +77,7 @@ func readFrames(t *testing.T, body *bufio.Reader, n int, within time.Duration) [
 // newStreamServer stands the internal mux up on a real listener, because a
 // ResponseRecorder buffers: only a real connection can show that a frame
 // reached the client before the handler returned.
-func newStreamServer(t *testing.T, repo *fakeRepository) *httptest.Server {
+func newStreamServer(t *testing.T, repo agenttask.Repository) *httptest.Server {
 	t.Helper()
 	svc := agenttask.NewService(repo, &fakeEngine{sessionRef: "session-stream"}, agenttask.WithTaskCredentials(newFakeCredentials()))
 	h := agenttask.NewHandler(svc).WithStreamTick(5 * time.Millisecond)
@@ -292,5 +294,119 @@ func TestHandler_EventStream_RefusesABadCursor(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400", resp.StatusCode)
+	}
+}
+
+// failAfterFirstGetRepo answers the first Get and fails every one after it,
+// which is the shape of a read that breaks while a connection is already open:
+// a revoked grant, schema drift, a pool with nothing left.
+type failAfterFirstGetRepo struct {
+	*fakeRepository
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *failAfterFirstGetRepo) Get(ctx context.Context, tenantID, userID, id uuid.UUID) (agenttask.Task, error) {
+	f.mu.Lock()
+	f.calls++
+	first := f.calls == 1
+	f.mu.Unlock()
+	if first {
+		return f.fakeRepository.Get(ctx, tenantID, userID, id)
+	}
+	return agenttask.Task{}, errors.New("read failed")
+}
+
+// A stream whose reads keep failing ends, rather than staying open and silent.
+//
+// Silence is the failure mode worth refusing here. The connection would stay
+// up for the whole thirty minute ceiling and read to a person as a slow run
+// rather than a broken one, and the client would never go looking. Ending
+// sends it to its settle read, which fails loudly, and then to its fallback.
+func TestHandler_EventStream_EndsWhenItsReadsKeepFailing(t *testing.T) {
+	inner := newFakeRepository()
+	task := newActiveTask(inner, agenttask.StatusRunning, "session-stream")
+	repo := &failAfterFirstGetRepo{fakeRepository: inner}
+	srv := newStreamServer(t, repo)
+
+	resp, err := http.Get(streamURL(srv, task))
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+
+	got := readFrames(t, reader, 2, 3*time.Second)
+	if got[0].event != "status" {
+		t.Fatalf("first frame is %q, want status", got[0].event)
+	}
+	if got[1].event != "end" {
+		t.Fatalf("second frame is %q, want end: the stream stayed open and silent", got[1].event)
+	}
+}
+
+// One user cannot hold more open streams than the ceiling, and a closed one
+// gives its slot back.
+//
+// Every other read on this handler is one round trip and a released goroutine.
+// This one holds a goroutine and two indexed reads per tick for as long as
+// somebody watches, so without a ceiling the cost is set by how many
+// connections a caller chooses to open.
+func TestHandler_EventStream_RefusesMoreStreamsThanOneUserMayHold(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-stream")
+	srv := newStreamServer(t, repo)
+
+	open := func() *http.Response {
+		t.Helper()
+		resp, err := http.Get(streamURL(srv, task))
+		if err != nil {
+			t.Fatalf("open stream: %v", err)
+		}
+		return resp
+	}
+
+	held := make([]*http.Response, 0, agenttask.MaxStreamsPerUserForTest)
+	for i := 0; i < agenttask.MaxStreamsPerUserForTest; i++ {
+		resp := open()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("stream %d refused with %d before the ceiling", i, resp.StatusCode)
+		}
+		// Read the opening frame so the handler is certainly past its
+		// acquire before the next connection is opened.
+		readFrames(t, bufio.NewReader(resp.Body), 1, 2*time.Second)
+		held = append(held, resp)
+	}
+	t.Cleanup(func() {
+		for _, resp := range held {
+			resp.Body.Close()
+		}
+	})
+
+	refused := open()
+	defer refused.Body.Close()
+	if refused.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("the stream past the ceiling got %d, want 429", refused.StatusCode)
+	}
+	if ct := refused.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("the refusal was sent as %q rather than JSON", ct)
+	}
+
+	// A slot comes back. Without this the ceiling would be a lifetime budget
+	// rather than a concurrency one, and a person who watched six runs today
+	// could never watch a seventh.
+	held[0].Body.Close()
+	var reopened *http.Response
+	for i := 0; i < 40; i++ {
+		reopened = open()
+		if reopened.StatusCode == http.StatusOK {
+			break
+		}
+		reopened.Body.Close()
+		time.Sleep(50 * time.Millisecond)
+	}
+	defer reopened.Body.Close()
+	if reopened.StatusCode != http.StatusOK {
+		t.Fatalf("a closed stream did not give its slot back: got %d", reopened.StatusCode)
 	}
 }

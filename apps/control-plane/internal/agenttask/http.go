@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,8 +30,15 @@ type Handler struct {
 	svc *Service
 
 	// streamTick is how often an open event stream re-reads its task; zero
-	// means defaultStreamTick. See stream.go.
+	// means defaultStreamTick. Written by WithStreamTick at construction time
+	// and read without synchronisation thereafter. See stream.go.
 	streamTick time.Duration
+
+	// streams counts open event streams per user, and streamsTotal counts
+	// them across the process. Guarded by streamMu. See acquireStream.
+	streamMu     sync.Mutex
+	streams      map[uuid.UUID]int
+	streamsTotal int
 }
 
 // NewHandler constructs the agenttask HTTP handler.
