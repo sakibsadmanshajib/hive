@@ -43,12 +43,11 @@ function railsPayload(overrides: Record<string, unknown> = {}) {
         enabled: true,
         min_credits: 10_000_000,
         max_credits: 100_000_000_000,
+        price_minor_numerator: 53,
+        price_credits_denominator: 500_000_000,
       },
     ],
     predefined_tiers: [],
-    price_per_block_minor: 100,
-    credit_block_size: 1_000_000_000,
-    currency: "USD",
     credit_increment: 10_000_000,
     min_credits: 10_000_000,
     max_credits: 100_000_000_000,
@@ -85,6 +84,38 @@ describe("getCheckoutRails purchase range guard", () => {
     expect(options.min_credits).toBe(10_000_000);
     expect(options.max_credits).toBe(100_000_000_000);
     expect(options.rails).toHaveLength(1);
+  });
+
+
+  // A rail carrying no price is dropped, exactly as one carrying no currency
+  // is: the modal cannot render an amount it was not sent, and a purchase with
+  // no visible price is the defect issue #1737 was filed about. Dropping the
+  // only rail leaves nothing selectable, which the modal explains.
+  for (const field of [
+    "price_minor_numerator",
+    "price_credits_denominator",
+  ]) {
+    it(`drops a rail with no ${field}`, async () => {
+      const payload = railsPayload();
+      const rails = payload.rails as Array<Record<string, unknown>>;
+      delete rails[0][field];
+      respondWith(payload);
+      const client = await import("../lib/control-plane/client");
+
+      const options = await client.getCheckoutRails();
+      expect(options.rails).toHaveLength(0);
+    });
+  }
+
+  it("drops a rail whose price denominator is zero", async () => {
+    const payload = railsPayload();
+    const rails = payload.rails as Array<Record<string, unknown>>;
+    rails[0].price_credits_denominator = 0;
+    respondWith(payload);
+    const client = await import("../lib/control-plane/client");
+
+    const options = await client.getCheckoutRails();
+    expect(options.rails).toHaveLength(0);
   });
 
   it("rejects a maximum below the minimum while a rail is selectable", async () => {

@@ -15,6 +15,18 @@ import type { CheckoutOptions } from "@/lib/control-plane/client";
 const RAILS_URL = "/api/v1/accounts/current/checkout/rails";
 const INITIATE_URL = "/api/v1/accounts/current/checkout/initiate";
 
+// The exact per-credit price the control plane publishes on each rail. Taka at
+// the D-066 worked example (a mid rate of 127, marked up 2.5 percent inside the
+// rate, so 130.175), dollars at the peg plus the 6 percent purchase markup.
+const BDT_PRICE = {
+  price_minor_numerator: 275_971,
+  price_credits_denominator: 20_000_000_000,
+};
+const USD_PRICE = {
+  price_minor_numerator: 53,
+  price_credits_denominator: 500_000_000,
+};
+
 function optionsFixture(overrides: Partial<CheckoutOptions> = {}): CheckoutOptions {
   return {
     rails: [
@@ -23,14 +35,12 @@ function optionsFixture(overrides: Partial<CheckoutOptions> = {}): CheckoutOptio
         currency: "BDT",
         label: "bKash",
         enabled: true,
+        ...BDT_PRICE,
       },
     ],
     credit_increment: 500,
     min_credits: 1000,
     max_credits: 3000,
-    price_per_block_minor: 11550,
-    credit_block_size: 1_000_000_000,
-    currency: "BDT",
     ...overrides,
   };
 }
@@ -79,13 +89,10 @@ function amountInput(): HTMLInputElement {
 }
 
 async function renderLoadedModal(props: {
-  accountCountryCode?: string;
   onClose?: () => void;
 } = {}) {
   const onClose = props.onClose ?? vi.fn();
-  render(
-    <CheckoutModal accountCountryCode={props.accountCountryCode ?? "US"} onClose={onClose} />,
-  );
+  render(<CheckoutModal onClose={onClose} />);
   // Wait past the mount-time rails fetch.
   await screen.findByText("Payment method");
   return { onClose };
@@ -105,14 +112,14 @@ describe("CheckoutModal behavior", () => {
   // amount input.
   const noRailFixture = () =>
     optionsFixture({
-      rails: [{ rail: "stripe", currency: "USD", label: "Card", enabled: false }],
+      rails: [{ rail: "stripe", currency: "USD", label: "Card", enabled: false, ...USD_PRICE }],
       min_credits: 10_000_000,
       max_credits: 0,
     });
 
   it("no selectable rail explains itself instead of offering a dead button", async () => {
     stubFetch({ rails: noRailFixture() });
-    render(<CheckoutModal accountCountryCode="US" onClose={vi.fn()} />);
+    render(<CheckoutModal onClose={vi.fn()} />);
 
     const status = await screen.findByRole("status");
     expect(status.textContent).toMatch(/no payment method is available/i);
@@ -132,12 +139,12 @@ describe("CheckoutModal behavior", () => {
   // Two payloads, so this cannot pass by the guard happening to accept one of
   // them: bounds missing entirely, and a bound present but not a number.
   for (const [name, payload] of [
-    ["bounds missing while a rail is selectable", { rails: [{ rail: "bkash", currency: "BDT", label: "bKash", enabled: true }] }],
+    ["bounds missing while a rail is selectable", { rails: [{ rail: "bkash", currency: "BDT", label: "bKash", enabled: true, ...BDT_PRICE }] }],
     ["a bound that is not a number", { ...optionsFixture(), max_credits: "lots" }],
   ] as const) {
     it(`says so instead of spinning forever: ${name}`, async () => {
       stubFetch({ rails: payload as unknown as CheckoutOptions });
-      render(<CheckoutModal accountCountryCode="BD" onClose={vi.fn()} />);
+      render(<CheckoutModal onClose={vi.fn()} />);
 
       const alert = await screen.findByRole("alert");
       expect(alert.textContent).toMatch(/came back unusable/i);
@@ -189,7 +196,7 @@ describe("CheckoutModal behavior", () => {
     for (const { name, rails, purchasable } of cases) {
       stubFetch({ rails });
       const { unmount } = render(
-        <CheckoutModal accountCountryCode="US" onClose={vi.fn()} />,
+        <CheckoutModal onClose={vi.fn()} />,
       );
       if (purchasable) {
         await screen.findByText("Payment method");
@@ -325,29 +332,60 @@ describe("CheckoutModal behavior", () => {
 
   it("rails load failure shows the refresh error instead of the form", async () => {
     stubFetch({ railsOk: false });
-    render(<CheckoutModal accountCountryCode="US" onClose={vi.fn()} />);
+    render(<CheckoutModal onClose={vi.fn()} />);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Unable to load payment options");
     expect(screen.queryByText(/continue to payment/i)).toBeNull();
   });
 
-  it("non-BD accounts see the computed local total; BD accounts never do", async () => {
-    stubFetch({});
-    const { unmount } = render(
-      <CheckoutModal accountCountryCode="US" onClose={vi.fn()} />,
-    );
-    await screen.findByText("Payment method");
-    expect(screen.getByText("Total")).toBeTruthy();
-    expect(document.querySelector("[data-numeric]")).toBeTruthy();
-    unmount();
-    cleanup();
+  // Issue #1737. A taka payer used to reach this box and be told only that the
+  // amount would be "shown on the bKash payment page", so the modal asked them
+  // to commit to a purchase without naming its price. Both rails now carry a
+  // figure, each in the currency that rail settles in.
+  it("shows a taka figure on a taka rail and a dollar figure on a dollar rail", async () => {
+    const oneBlock = 1_000_000_000;
+    const bothRails = optionsFixture({
+      rails: [
+        { rail: "bkash", currency: "BDT", label: "bKash", enabled: true, ...BDT_PRICE },
+        { rail: "stripe", currency: "USD", label: "Card", enabled: true, ...USD_PRICE },
+      ],
+      credit_increment: oneBlock,
+      min_credits: oneBlock,
+      max_credits: 20 * oneBlock,
+    });
 
-    stubFetch({});
-    render(<CheckoutModal accountCountryCode="BD" onClose={vi.fn()} />);
+    stubFetch({ rails: bothRails });
+    render(<CheckoutModal onClose={vi.fn()} />);
     await screen.findByText("Payment method");
-    expect(screen.getByText("Final amount")).toBeTruthy();
-    // Regulatory invariant: no numeric FX-style total on the BD surface.
-    expect(document.querySelector("[data-numeric]")).toBeNull();
-    expect(screen.getByText(/shown on the bKash payment page/i)).toBeTruthy();
+
+    // bKash is the first enabled rail, so it is selected on load. One block at
+    // an effective rate of 130.175 is 13798 paisa.
+    expect(screen.getByText("Total")).toBeTruthy();
+    const amount = document.querySelector("[data-numeric]");
+    expect(amount).toBeTruthy();
+    expect(amount?.textContent).toContain("137.98");
+    // The FX markup is inside the rate and is never itemised (D-066).
+    expect(screen.queryByText(/2\.5\s*%/)).toBeNull();
+    expect(screen.queryByText(/exchange rate/i)).toBeNull();
+    expect(screen.queryByText(/shown on the bKash payment page/i)).toBeNull();
+
+    // Twenty blocks is 275971 paisa. A per-block price truncated to whole
+    // paisa would have shown 2759.60 against a 2759.71 charge.
+    fireEvent.change(amountInput(), { target: { value: String(20 * oneBlock) } });
+    await waitFor(() => {
+      expect(document.querySelector("[data-numeric]")?.textContent).toContain(
+        "2,759.71",
+      );
+    });
+
+    // Switching to the dollar rail reprices in dollars rather than relabelling
+    // the taka figure. A BD account is offered both, and the control plane
+    // charges whichever one the payer picked.
+    fireEvent.click(screen.getByRole("radio", { name: /card/i }));
+    await waitFor(() => {
+      expect(document.querySelector("[data-numeric]")?.textContent).toContain(
+        "21.20",
+      );
+    });
   });
 });

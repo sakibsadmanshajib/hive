@@ -283,20 +283,32 @@ func (s *StubService) GetCheckoutOptions(
 		// Always enabled in stub mode: the stub grants credits through the
 		// ledger without calling any rail, so every rail the country permits is
 		// one it can actually complete.
-		railOptions = append(railOptions, payments.NewRailOption(rail, true))
+		opt, err := payments.NewRailOption(rail, true, stubEffectiveFXRate)
+		if err != nil {
+			return nil, fmt.Errorf("payments stub: price rail %s: %w", rail, err)
+		}
+		railOptions = append(railOptions, opt)
 	}
 
 	return &payments.CheckoutOptions{
-		Rails:              railOptions,
-		PredefinedTiers:    payments.PredefinedTiers,
-		PricePerBlockMinor: 100, // 100 minor units per CreditsPerUSD block (stub; no real FX); the block itself scales with CreditsPerUSD
-		CreditBlockSize:    payments.CreditsPerUSD,
-		Currency:           currencyForCountry(countryCode),
-		CreditIncrement:    payments.CreditIncrement,
-		MinCredits:         payments.MinPurchaseCredits,
-		MaxCredits:         payments.MostRestrictiveMaxCredits(railOptions),
+		Rails:           railOptions,
+		PredefinedTiers: payments.PredefinedTiers,
+		CreditIncrement: payments.CreditIncrement,
+		MinCredits:      payments.MinPurchaseCredits,
+		MaxCredits:      payments.MostRestrictiveMaxCredits(railOptions),
 	}, nil
 }
+
+// stubEffectiveFXRate is the rate the stub prices a local-currency rail at.
+//
+// There is no FX service in stub mode and nothing is ever charged: the stub
+// grants the credits straight through the ledger, so no rail sees a payment and
+// no conversion happens. Par is what this payload has always carried (it used
+// to publish 100 minor units per block under a BDT label), and it is picked
+// deliberately over a plausible-looking market rate: a demo box quoting a real
+// 130 taka figure for a purchase that costs nothing is a figure someone will
+// eventually screenshot as if it meant something.
+const stubEffectiveFXRate = "1.000000"
 
 // railAvailable reports whether the rail is permitted for the country, using
 // the production AvailableRails rule (never duplicated here).
@@ -312,15 +324,6 @@ func railAvailable(rail payments.Rail, countryCode string) bool {
 // The stub's own copy of the per-rail ceiling table is gone: payments.NewRailOption
 // now builds the whole rail option, ceiling included, so there is one table
 // rather than two that could drift.
-
-// currencyForCountry returns the display currency for the checkout options.
-// BD demo context uses BDT; everything else uses USD.
-func currencyForCountry(countryCode string) string {
-	if countryCode == "BD" {
-		return "BDT"
-	}
-	return "USD"
-}
 
 // localCurrencyForRail returns the ISO currency code for the rail.
 func localCurrencyForRail(r payments.Rail) string {

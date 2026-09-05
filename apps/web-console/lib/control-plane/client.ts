@@ -1524,6 +1524,19 @@ export interface CheckoutRail {
   currency: string;
   label: string;
   enabled: boolean;
+  // The exact price of one credit on THIS rail, in THIS rail's currency, as a
+  // fraction the console divides in BigInt:
+  //
+  //   amount_minor = floor(credits * price_minor_numerator / price_credits_denominator)
+  //
+  // Per rail rather than per account because that is how the charge works: a BD
+  // account is offered Stripe alongside bKash and SSLCommerz, and the control
+  // plane bills the currency the SELECTED rail settles in. A fraction rather
+  // than a scalar because a per-block price rounded to whole minor units cannot
+  // express a taka price exactly, and the console used to multiply that rounded
+  // figure by the block count (issue #1737).
+  price_minor_numerator: number;
+  price_credits_denominator: number;
 }
 
 export interface CheckoutOptions {
@@ -1531,14 +1544,6 @@ export interface CheckoutOptions {
   credit_increment: number;
   min_credits: number;
   max_credits: number;
-  // Per-country pricing primitive in minor units of the resolved currency
-  // (paisa for BDT, cents for USD), priced per `credit_block_size` credits.
-  // Mirrors the control-plane Go int64 wire field. Replaces the FX-leaking
-  // legacy primitive removed in Phase 17 / FX-17-03..04 (regulatory).
-  // Display total: floor(credits * price_per_block_minor / credit_block_size).
-  price_per_block_minor: number;
-  credit_block_size: number;
-  currency: string;
 }
 
 // CheckoutIntent is the customer-safe projection of one payment intent, used by
@@ -1721,12 +1726,40 @@ function decodeCheckoutRail(value: JsonValue): CheckoutRail | null {
   const currency = readStringField(value, "currency");
   const label = readStringField(value, "label");
   const enabled = readBooleanField(value, "enabled");
+  const numerator = readNumberField(value, "price_minor_numerator");
+  const denominator = readNumberField(value, "price_credits_denominator");
 
   if (!rail || !currency || !label || enabled === null) {
     return null;
   }
+  // A rail with no usable price is dropped for the same reason as one with no
+  // currency: the modal cannot render an amount it was not sent, and inventing
+  // one is how a purchase bound came to be displayed 100 times too low in issue
+  // #1386. Dropping the rail costs the payer that payment method and says so;
+  // keeping it would quote a price nothing stands behind.
+  //
+  // `readNumberField` accepts NaN and Infinity, and neither survives the
+  // comparisons below, so both are refused here rather than reaching BigInt,
+  // which throws on them.
+  if (
+    numerator === null ||
+    !Number.isInteger(numerator) ||
+    numerator <= 0 ||
+    denominator === null ||
+    !Number.isInteger(denominator) ||
+    denominator <= 0
+  ) {
+    return null;
+  }
 
-  return { rail, currency, label, enabled };
+  return {
+    rail,
+    currency,
+    label,
+    enabled,
+    price_minor_numerator: numerator,
+    price_credits_denominator: denominator,
+  };
 }
 
 function decodeApiKey(value: JsonValue): ApiKey | null {
@@ -2018,27 +2051,6 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   const rawCreditIncrement = readNumberField(payload, "credit_increment");
   const rawMinCredits = readNumberField(payload, "min_credits");
   const rawMaxCredits = readNumberField(payload, "max_credits");
-  // FX-17-04 regulatory: pricing primitive must be in minor units of a
-  // declared currency, priced per `credit_block_size` credits. Reject
-  // payload without these fields rather than defaulting to a USD
-  // assumption (mirrors the local_currency check in initiateCheckout).
-  const pricePerBlockMinor = readNumberField(payload, "price_per_block_minor");
-  const creditBlockSize = readNumberField(payload, "credit_block_size");
-  const currency = readStringField(payload, "currency");
-  // FX-17 review-pass: reject NaN / Infinity in addition to null / non-positive.
-  // `readNumberField` only checks `typeof === "number"`, which is true for NaN,
-  // and `creditBlockSize <= 0` is false for NaN — so without isFinite() a
-  // pathological payload could reach the modal and render as NaN currency.
-  if (
-    pricePerBlockMinor === null ||
-    !Number.isFinite(pricePerBlockMinor) ||
-    creditBlockSize === null ||
-    !Number.isFinite(creditBlockSize) ||
-    creditBlockSize <= 0 ||
-    !currency
-  ) {
-    throw new Error("Failed to parse checkout rails response");
-  }
   // A purchase range whose ceiling sits below its floor is not renderable: it
   // reached the live amount input as min="10000000" max="0", an invalid HTML5
   // number range, because the console wrote the server's value straight into
@@ -2077,9 +2089,6 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
     credit_increment: creditIncrement,
     min_credits: minCredits,
     max_credits: maxCredits,
-    price_per_block_minor: pricePerBlockMinor,
-    credit_block_size: creditBlockSize,
-    currency,
   };
 }
 

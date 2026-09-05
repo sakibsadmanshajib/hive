@@ -4,10 +4,6 @@ import { useRouter } from "next/navigation";
 
 import { CheckoutModal } from "@/components/billing/checkout-modal";
 
-interface CheckoutLauncherProps {
-  accountCountryCode: string;
-}
-
 /**
  * Mounts the checkout modal for `/console/billing?action=buy`.
  *
@@ -20,12 +16,11 @@ interface CheckoutLauncherProps {
  * so a customer who arrived by pasting the link, or who reloaded while the modal
  * was open, still lands on the billing page instead of leaving the console.
  */
-export function CheckoutLauncher({ accountCountryCode }: CheckoutLauncherProps) {
+export function CheckoutLauncher() {
   const router = useRouter();
 
   return (
     <CheckoutModal
-      accountCountryCode={accountCountryCode}
       onClose={() => {
         router.replace("/console/billing");
       }}

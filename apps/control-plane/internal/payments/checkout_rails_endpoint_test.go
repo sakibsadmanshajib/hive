@@ -68,19 +68,18 @@ func TestGetRailsEndpoint_AccountWithNoProfileRowAnswers200(t *testing.T) {
 	// result here means the modal has a rail to render.
 	var payload struct {
 		Rails []struct {
-			Rail       string `json:"rail"`
-			Label      string `json:"label"`
-			Currency   string `json:"currency"`
-			Enabled    *bool  `json:"enabled"`
-			MinCredits int64  `json:"min_credits"`
-			MaxCredits int64  `json:"max_credits"`
+			Rail                    string `json:"rail"`
+			Label                   string `json:"label"`
+			Currency                string `json:"currency"`
+			Enabled                 *bool  `json:"enabled"`
+			MinCredits              int64  `json:"min_credits"`
+			MaxCredits              int64  `json:"max_credits"`
+			PriceMinorNumerator     *int64 `json:"price_minor_numerator"`
+			PriceCreditsDenominator *int64 `json:"price_credits_denominator"`
 		} `json:"rails"`
-		PricePerBlockMinor *int64 `json:"price_per_block_minor"`
-		CreditBlockSize    *int64 `json:"credit_block_size"`
-		Currency           string `json:"currency"`
-		CreditIncrement    *int64 `json:"credit_increment"`
-		MinCredits         *int64 `json:"min_credits"`
-		MaxCredits         *int64 `json:"max_credits"`
+		CreditIncrement *int64 `json:"credit_increment"`
+		MinCredits      *int64 `json:"min_credits"`
+		MaxCredits      *int64 `json:"max_credits"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -93,14 +92,14 @@ func TestGetRailsEndpoint_AccountWithNoProfileRowAnswers200(t *testing.T) {
 	if rail.Rail != string(RailStripe) || rail.Label == "" || rail.Currency == "" || rail.Enabled == nil || !*rail.Enabled {
 		t.Errorf("the console decoder would drop this rail item: %+v", rail)
 	}
-	if payload.Currency != "USD" {
-		t.Errorf("expected USD for an unresolved country, got %q", payload.Currency)
+	if rail.Currency != "USD" {
+		t.Errorf("expected USD for an unresolved country, got %q", rail.Currency)
 	}
-	if payload.PricePerBlockMinor == nil || *payload.PricePerBlockMinor != 106 {
-		t.Errorf("expected 106 minor units per block, got %v", payload.PricePerBlockMinor)
+	if rail.PriceMinorNumerator == nil || rail.PriceCreditsDenominator == nil {
+		t.Fatalf("the rail carries no price, so the modal has no amount to render: %+v", rail)
 	}
-	if payload.CreditBlockSize == nil || *payload.CreditBlockSize != CreditsPerUSD {
-		t.Errorf("expected block size %d, got %v", CreditsPerUSD, payload.CreditBlockSize)
+	if got := (*rail.PriceMinorNumerator * CreditsPerUSD) / *rail.PriceCreditsDenominator; got != 106 {
+		t.Errorf("expected 106 cents for %d credits, got %d", CreditsPerUSD, got)
 	}
 	if payload.CreditIncrement == nil || *payload.CreditIncrement != CreditIncrement {
 		t.Errorf("expected increment %d, got %v", CreditIncrement, payload.CreditIncrement)

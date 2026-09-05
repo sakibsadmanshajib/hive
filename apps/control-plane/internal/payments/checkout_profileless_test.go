@@ -52,16 +52,15 @@ func TestGetCheckoutOptions_AccountWithNoProfileRowStillLists(t *testing.T) {
 		t.Errorf("expected stripe for an unresolved country, got %s", opts.Rails[0].Rail)
 	}
 
-	// Pricing bound: exactly 106 minor units per CreditsPerUSD credits, in USD,
-	// with no FX snapshot taken (the FX branch is BD-only).
-	if opts.Currency != "USD" {
-		t.Errorf("expected USD for an unresolved country, got %q", opts.Currency)
+	// Pricing bound: the only rail on offer settles in USD and takes no FX
+	// snapshot (the FX branch is BD-only), so CreditsPerUSD credits cost exactly
+	// 106 cents, which is 1 USD plus the 6 percent purchase markup of D-065.
+	rail := opts.Rails[0]
+	if rail.Currency != "USD" {
+		t.Errorf("expected USD for an unresolved country, got %q", rail.Currency)
 	}
-	if opts.PricePerBlockMinor != 106 {
-		t.Errorf("expected 106 minor units per block, got %d", opts.PricePerBlockMinor)
-	}
-	if opts.CreditBlockSize != CreditsPerUSD {
-		t.Errorf("expected block size %d, got %d", CreditsPerUSD, opts.CreditBlockSize)
+	if got := quoteMinor(CreditsPerUSD, rail); got != 106 {
+		t.Errorf("expected 106 cents for %d credits, got %d", CreditsPerUSD, got)
 	}
 }
 
